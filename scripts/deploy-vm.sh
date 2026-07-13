@@ -32,6 +32,10 @@ echo "==> Instalando dependências..."
 npm ci 2>/dev/null || npm install
 
 echo "==> Build de produção..."
+set -a
+# shellcheck disable=SC1091
+[ -f .env ] && . ./.env
+set +a
 export NODE_ENV=production
 npm run build
 
@@ -42,7 +46,11 @@ pm2 save
 
 echo ""
 echo "Deploy concluído!"
-echo "  App: http://$(hostname -I | awk '{print $1}'):$PORT"
+if [ -n "${NEXT_PUBLIC_APP_URL:-}" ]; then
+  echo "  App: $NEXT_PUBLIC_APP_URL"
+else
+  echo "  App: http://$(hostname -I | awk '{print $1}'):$PORT"
+fi
 echo "  Logs: pm2 logs insidesales"
 echo "  Status: pm2 status"
 echo ""

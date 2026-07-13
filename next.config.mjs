@@ -1,5 +1,8 @@
 /** @type {import('next').NextConfig} */
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH || ''
+
 const nextConfig = {
+  ...(basePath ? { basePath, assetPrefix: basePath } : {}),
   // Permite o Bitrix24 embutir o app em iframe (remove bloqueio padrão do Next.js)
   async headers() {
     return [
@@ -53,6 +56,7 @@ const nextConfig = {
     serverActions: {
       allowedOrigins: [
         'interatell.bitrix24.com.br',
+        'intc02.int.intcloud.com.br',
         '*.ngrok-free.app',
         '*.ngrok-free.dev',
         '*.ngrok.io',

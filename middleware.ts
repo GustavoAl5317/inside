@@ -31,8 +31,9 @@ export function middleware(request: NextRequest) {
   // ── Bypassa a tela de aviso do ngrok dentro do iframe do Bitrix24 ─────────
   // O ngrok exibe uma página HTML de aviso para requisições de browser sem
   // este cookie, causando "Unexpected token '<'" nos arquivos JS/CSS.
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH || ""
   res.cookies.set("ngrok-skip-browser-warning", "1", {
-    path: "/",
+    path: basePath || "/",
     sameSite: "none",
     secure: true,
     maxAge: 60 * 60 * 24, // 24h
