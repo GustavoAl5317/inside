@@ -1,0 +1,935 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Inside Sales | Interatell</title>
+
+  <!-- BX24 Library carregado dinamicamente via JS -->
+
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; }
+    body { background: #f1f5f9; min-height: 100vh; }
+
+    /* ---- Loading ---- */
+    #loading {
+      position: fixed; inset: 0; background: #fff; z-index: 9999;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .spinner {
+      width: 44px; height: 44px; border-radius: 50%;
+      border: 4px solid #dbeafe; border-top-color: #2563eb;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ---- Header gradient ---- */
+    .header-bg {
+      background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 60%, #2563eb 100%);
+    }
+
+    /* ---- Cards ---- */
+    .stat-card {
+      background: #fff; border-radius: 12px; padding: 16px 20px;
+      border: 1px solid #e2e8f0; transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .stat-card:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.08); }
+
+    /* ---- Table ---- */
+    .deals-table { border-collapse: collapse; width: 100%; }
+    .deals-table thead tr { background: #f8fafc; }
+    .deals-table th {
+      padding: 10px 16px; text-align: left;
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .06em; color: #64748b; border-bottom: 1px solid #e2e8f0;
+    }
+    .deals-table td {
+      padding: 12px 16px; font-size: 13px; color: #374151;
+      border-bottom: 1px solid #f1f5f9; vertical-align: middle;
+    }
+    .deals-table tbody tr:hover { background: #f8fafc; }
+    .deals-table tbody tr:last-child td { border-bottom: none; }
+
+    /* ---- Badge ---- */
+    .badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 3px 10px; border-radius: 20px;
+      font-size: 11.5px; font-weight: 600; white-space: nowrap;
+    }
+    .badge-approved  { background: #dcfce7; color: #15803d; }
+    .badge-pending   { background: #fef9c3; color: #a16207; }
+    .badge-stage     { background: #eff6ff; color: #1d4ed8; }
+
+    /* ---- Buttons ---- */
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 7px 14px; border-radius: 8px; font-size: 13px;
+      font-weight: 500; cursor: pointer; border: none; transition: all 0.15s;
+      text-decoration: none;
+    }
+    .btn-primary  { background: #2563eb; color: #fff; }
+    .btn-primary:hover  { background: #1d4ed8; }
+    .btn-outline  { background: #fff; color: #374151; border: 1px solid #d1d5db; }
+    .btn-outline:hover  { background: #f9fafb; }
+    .btn-ghost    { background: #eff6ff; color: #2563eb; }
+    .btn-ghost:hover    { background: #dbeafe; }
+    .btn-purple   { background: #f3e8ff; color: #7c3aed; }
+    .btn-purple:hover   { background: #ede9fe; }
+    .btn-danger   { background: #fef2f2; color: #dc2626; }
+    .btn-danger:hover   { background: #fee2e2; }
+    .btn-sm { padding: 5px 10px; font-size: 12px; border-radius: 6px; }
+
+    /* ---- Nav tabs ---- */
+    .nav-tab {
+      padding: 6px 16px; border-radius: 8px; font-size: 13px; font-weight: 500;
+      cursor: pointer; transition: all 0.15s; color: rgba(255,255,255,.65);
+      border: none; background: transparent;
+    }
+    .nav-tab.active { background: rgba(255,255,255,.18); color: #fff; }
+    .nav-tab:hover:not(.active) { background: rgba(255,255,255,.10); color: rgba(255,255,255,.9); }
+
+    /* ---- Modal ---- */
+    #modal-overlay {
+      position: fixed; inset: 0; background: rgba(15,23,42,.55);
+      backdrop-filter: blur(4px); z-index: 1000;
+      display: none; align-items: center; justify-content: center; padding: 16px;
+    }
+    #modal-overlay.open { display: flex; }
+    .modal-box {
+      background: #fff; border-radius: 16px; width: 100%;
+      max-width: 600px; max-height: 88vh; overflow-y: auto;
+      box-shadow: 0 24px 60px rgba(0,0,0,.18);
+      animation: fadeUp .2s ease;
+    }
+    @keyframes fadeUp {
+      from { transform: translateY(16px); opacity: 0; }
+      to   { transform: translateY(0);    opacity: 1; }
+    }
+
+    /* ---- Stage progress ---- */
+    .stage-item {
+      display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+      border-radius: 8px; border: 1px solid transparent;
+    }
+    .stage-item.current { background: #eff6ff; border-color: #bfdbfe; }
+    .stage-dot {
+      width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 700;
+    }
+    .stage-dot.current { background: #2563eb; color: #fff; }
+    .stage-dot.past    { background: #dcfce7; color: #15803d; }
+    .stage-dot.future  { background: #f1f5f9; color: #94a3b8; }
+
+    /* ---- Toast ---- */
+    #toast-container {
+      position: fixed; bottom: 24px; right: 24px; z-index: 9000;
+      display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
+    }
+    .toast-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 12px 18px; border-radius: 10px;
+      font-size: 13px; font-weight: 500;
+      box-shadow: 0 8px 24px rgba(0,0,0,.14);
+      animation: slideIn .25s ease;
+      max-width: 360px;
+    }
+    @keyframes slideIn {
+      from { transform: translateX(100%); opacity: 0; }
+      to   { transform: translateX(0);    opacity: 1; }
+    }
+    .toast-success { background: #166534; color: #fff; }
+    .toast-error   { background: #991b1b; color: #fff; }
+    .toast-warning { background: #92400e; color: #fff; }
+    .toast-info    { background: #1e40af; color: #fff; }
+
+    /* ---- Search input ---- */
+    .search-input {
+      padding: 8px 14px 8px 36px; border-radius: 8px;
+      border: 1px solid #d1d5db; font-size: 13px; width: 220px;
+      outline: none; transition: border-color .15s, box-shadow .15s;
+    }
+    .search-input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
+
+    /* ---- Misc ---- */
+    .empty-state { text-align: center; padding: 64px 24px; color: #94a3b8; }
+    .empty-state svg { margin: 0 auto 16px; }
+    .divider { border: none; border-top: 1px solid #e2e8f0; margin: 0; }
+    .text-muted { color: #94a3b8; font-size: 12px; }
+    .scroll-y { overflow-y: auto; }
+    .panel { background: #fff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; }
+  </style>
+</head>
+<body>
+
+<!-- ============================
+     LOADING SCREEN
+============================= -->
+<div id="loading">
+  <div style="text-align:center">
+    <div class="spinner" style="margin:0 auto 16px"></div>
+    <div style="font-size:15px;font-weight:600;color:#1e3a8a">Inside Sales</div>
+    <div style="font-size:12px;color:#94a3b8;margin-top:4px">Conectando ao Bitrix24…</div>
+  </div>
+</div>
+
+<!-- ============================
+     HEADER
+============================= -->
+<header class="header-bg" style="position:sticky;top:0;z-index:100;">
+  <div style="padding:16px 24px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;">
+      <!-- Brand -->
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div style="width:40px;height:40px;background:rgba(255,255,255,.18);border-radius:10px;display:flex;align-items:center;justify-content:center;">
+          <svg width="22" height="22" fill="none" stroke="white" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+          </svg>
+        </div>
+        <div>
+          <div style="font-size:16px;font-weight:700;color:#fff;line-height:1.2">Inside Sales</div>
+          <div style="font-size:11px;color:rgba(255,255,255,.6);margin-top:1px">Interatell · Gestão de Negócios</div>
+        </div>
+      </div>
+
+      <!-- User Info -->
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div id="user-info" style="text-align:right;display:none;">
+          <div id="user-name" style="font-size:13px;font-weight:600;color:#fff;"></div>
+          <div id="user-dept" style="font-size:11px;color:rgba(255,255,255,.55);"></div>
+        </div>
+        <div id="user-avatar" style="width:36px;height:36px;background:rgba(255,255,255,.18);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;">?</div>
+      </div>
+    </div>
+
+    <!-- Nav Tabs -->
+    <nav style="display:flex;gap:4px;margin-top:12px;">
+      <button class="nav-tab active" id="tab-all"      onclick="switchTab('all')">Todos</button>
+      <button class="nav-tab"        id="tab-pending"  onclick="switchTab('pending')">Pendentes</button>
+      <button class="nav-tab"        id="tab-approved" onclick="switchTab('approved')">Aprovados</button>
+      <button class="nav-tab"        id="tab-stages"   onclick="switchTab('stages')">Funil</button>
+    </nav>
+  </div>
+</header>
+
+<!-- ============================
+     MAIN
+============================= -->
+<main style="max-width:1280px;margin:0 auto;padding:24px 20px;">
+
+  <!-- Stats Row -->
+  <div id="stats-row" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;">
+    <div class="stat-card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div>
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;">Total</div>
+          <div id="stat-total" style="font-size:26px;font-weight:800;color:#0f172a;margin-top:4px;">—</div>
+        </div>
+        <div style="width:40px;height:40px;background:#eff6ff;border-radius:10px;display:flex;align-items:center;justify-content:center;">
+          <svg width="18" height="18" fill="none" stroke="#2563eb" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+          </svg>
+        </div>
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:6px;">Negócios no funil</div>
+    </div>
+    <div class="stat-card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div>
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;">Aprovados</div>
+          <div id="stat-approved" style="font-size:26px;font-weight:800;color:#15803d;margin-top:4px;">—</div>
+        </div>
+        <div style="width:40px;height:40px;background:#dcfce7;border-radius:10px;display:flex;align-items:center;justify-content:center;">
+          <svg width="18" height="18" fill="none" stroke="#16a34a" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        </div>
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:6px;">Passaram da etapa de aprovação</div>
+    </div>
+    <div class="stat-card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div>
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;">Pendentes</div>
+          <div id="stat-pending" style="font-size:26px;font-weight:800;color:#a16207;margin-top:4px;">—</div>
+        </div>
+        <div style="width:40px;height:40px;background:#fef9c3;border-radius:10px;display:flex;align-items:center;justify-content:center;">
+          <svg width="18" height="18" fill="none" stroke="#ca8a04" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        </div>
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:6px;">Aguardando aprovação</div>
+    </div>
+    <div class="stat-card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div>
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;">Etapas</div>
+          <div id="stat-stages" style="font-size:26px;font-weight:800;color:#6d28d9;margin-top:4px;">—</div>
+        </div>
+        <div style="width:40px;height:40px;background:#ede9fe;border-radius:10px;display:flex;align-items:center;justify-content:center;">
+          <svg width="18" height="18" fill="none" stroke="#7c3aed" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+          </svg>
+        </div>
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:6px;">Cadastradas no funil</div>
+    </div>
+  </div>
+
+  <!-- Deals Panel -->
+  <div class="panel" id="panel-deals">
+    <!-- Panel header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid #e2e8f0;">
+      <div style="font-size:15px;font-weight:700;color:#0f172a;">Negócios do Funil <span style="color:#94a3b8;font-weight:400;font-size:13px" id="deals-count"></span></div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div style="position:relative;">
+          <svg width="15" height="15" fill="none" stroke="#94a3b8" stroke-width="2" viewBox="0 0 24 24" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);pointer-events:none;">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+          </svg>
+          <input class="search-input" id="search-input" type="text" placeholder="Buscar negócio…" oninput="onSearch(this.value)">
+        </div>
+        <button class="btn btn-primary" onclick="refreshData()">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+          Atualizar
+        </button>
+      </div>
+    </div>
+    <!-- Table Container -->
+    <div id="deals-container">
+      <div class="empty-state">
+        <div class="spinner" style="margin:0 auto 16px;"></div>
+        <div style="font-size:14px;color:#64748b;font-weight:500;">Carregando negócios…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stages Panel (hidden by default) -->
+  <div class="panel" id="panel-stages" style="display:none;">
+    <div style="padding:14px 20px;border-bottom:1px solid #e2e8f0;">
+      <div style="font-size:15px;font-weight:700;color:#0f172a;">Etapas do Funil (Pipeline 13)</div>
+      <div style="font-size:12px;color:#94a3b8;margin-top:2px;">Entidade Dinâmica 129 · Categoria 13</div>
+    </div>
+    <div id="stages-list" style="padding:16px 20px;"></div>
+  </div>
+
+</main>
+
+<!-- ============================
+     MODAL
+============================= -->
+<div id="modal-overlay" onclick="if(event.target===this)closeModal()">
+  <div class="modal-box">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:20px 24px 0;">
+      <div>
+        <div id="modal-title" style="font-size:16px;font-weight:700;color:#0f172a;"></div>
+        <div id="modal-subtitle" style="font-size:12px;color:#94a3b8;margin-top:2px;"></div>
+      </div>
+      <button onclick="closeModal()" style="background:none;border:none;cursor:pointer;padding:4px;color:#94a3b8;" title="Fechar">
+        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <hr class="divider" style="margin:16px 0 0;">
+    <div id="modal-content" style="padding:20px 24px 24px;"></div>
+  </div>
+</div>
+
+<!-- ============================
+     TOAST CONTAINER
+============================= -->
+<div id="toast-container"></div>
+
+<!-- ============================
+     SCRIPT
+============================= -->
+<script>
+'use strict';
+
+// ==========================================
+// CONSTANTS
+// ==========================================
+const ENTITY_TYPE_ID   = 129;
+const CATEGORY_ID      = 13;
+const STAGE_ENTITY_ID  = `DYNAMIC_${ENTITY_TYPE_ID}_STAGE_${CATEGORY_ID}`;
+const APPROVAL_STAGE_ID = `DT${ENTITY_TYPE_ID}_${CATEGORY_ID}:UC_3YHNVC`;
+
+// ==========================================
+// STATE
+// ==========================================
+const App = {
+  deals:    [],        // raw deals (open only)
+  stages:   [],        // sorted stages
+  approvalIdx: -1,     // index of approval stage in stages array
+  view:     'all',     // current tab filter
+  filtered: [],        // currently rendered list
+};
+
+// ==========================================
+// BX24 PROMISE WRAPPER
+// ==========================================
+function bx24Call(method, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      BX24.callMethod(method, params || {}, (res) => {
+        if (res.error()) {
+          reject(res.error());
+        } else {
+          resolve(res.data());
+        }
+      });
+    } catch (e) {
+      reject({ error: 'BX24_NOT_LOADED', error_description: 'Biblioteca BX24 não disponível.' });
+    }
+  });
+}
+
+// Fetch all pages of a paginated method
+function bx24CallAll(method, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      BX24.callMethod(method, params || {}, (res) => {
+        if (res.error()) { reject(res.error()); return; }
+        const first = res.data();
+        const items = extractItems(method, first);
+        if (res.more()) {
+          res.next(); // fetch rest, but for simplicity we rely on start param
+          // For now just return what we got (max 50 by default)
+          resolve(items);
+        } else {
+          resolve(items);
+        }
+      });
+    } catch (e) {
+      reject({ error: 'BX24_NOT_LOADED', error_description: 'Biblioteca BX24 não disponível.' });
+    }
+  });
+}
+
+function extractItems(method, data) {
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.items)) return data.items;
+  if (data && Array.isArray(data.result)) return data.result;
+  if (data && data.result && Array.isArray(data.result.items)) return data.result.items;
+  return [];
+}
+
+// ==========================================
+// INIT
+// ==========================================
+function init() {
+  if (typeof BX24 === 'undefined') {
+    runDemo();
+    return;
+  }
+
+  // BX24.init só dispara o callback dentro do iframe do Bitrix24.
+  // Se não chamar em 2s, entramos em modo demo.
+  let initialized = false;
+  const demoTimer = setTimeout(() => {
+    if (!initialized) {
+      console.warn('BX24.init não respondeu — modo demo ativado');
+      runDemo();
+    }
+  }, 2000);
+
+  BX24.init(async () => {
+    initialized = true;
+    clearTimeout(demoTimer);
+    try {
+      await Promise.all([loadProfile(), loadStages()]);
+      await loadDeals();
+    } catch (err) {
+      console.error('Init error:', err);
+      showToast('Erro ao inicializar o app: ' + describeError(err), 'error');
+    } finally {
+      document.getElementById('loading').style.display = 'none';
+      try { BX24.fitWindow(); } catch(e) {}
+    }
+  });
+}
+
+// ==========================================
+// PROFILE
+// ==========================================
+async function loadProfile() {
+  try {
+    const p = await bx24Call('profile');
+    const name = [p.NAME, p.LAST_NAME].filter(Boolean).join(' ') || p.LOGIN || 'Usuário';
+    const dept  = p.UF_DEPARTMENT || '';
+    document.getElementById('user-name').textContent = name;
+    document.getElementById('user-dept').textContent = dept;
+    document.getElementById('user-avatar').textContent = name.charAt(0).toUpperCase();
+    document.getElementById('user-info').style.display = 'block';
+  } catch (e) {
+    console.warn('Profile error:', e);
+  }
+}
+
+// ==========================================
+// STAGES
+// ==========================================
+async function loadStages() {
+  try {
+    const data = await bx24Call('crm.status.entity.items', { ENTITY_ID: STAGE_ENTITY_ID });
+    const list = Array.isArray(data) ? data : extractItems('crm.status.entity.items', data);
+    App.stages = list.slice().sort((a, b) => (a.SORT || 0) - (b.SORT || 0));
+    App.approvalIdx = App.stages.findIndex(s => s.STATUS_ID === APPROVAL_STAGE_ID);
+    document.getElementById('stat-stages').textContent = App.stages.length;
+    renderStagesList();
+  } catch (e) {
+    console.error('Stages error:', e);
+    App.stages = [];
+  }
+}
+
+function renderStagesList() {
+  const container = document.getElementById('stages-list');
+  if (!App.stages.length) {
+    container.innerHTML = '<div class="empty-state">Nenhuma etapa encontrada.</div>';
+    return;
+  }
+  container.innerHTML = App.stages.map((s, idx) => {
+    const isApproval = s.STATUS_ID === APPROVAL_STAGE_ID;
+    return `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;margin-bottom:6px;${isApproval ? 'background:#fff7ed;border:1px solid #fed7aa;' : 'background:#f8fafc;border:1px solid #e2e8f0;'}">
+        <div style="width:28px;height:28px;border-radius:50%;background:${isApproval ? '#ea580c' : '#e2e8f0'};color:${isApproval ? '#fff' : '#64748b'};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;">${idx + 1}</div>
+        <div style="flex:1;">
+          <div style="font-size:13px;font-weight:${isApproval ? '700' : '500'};color:${isApproval ? '#9a3412' : '#374151'};">${escHtml(s.NAME)}</div>
+          <div style="font-size:11px;color:#94a3b8;margin-top:1px;">${escHtml(s.STATUS_ID)}</div>
+        </div>
+        ${isApproval ? '<span class="badge badge-stage" style="background:#fed7aa;color:#9a3412;">✦ Etapa de Aprovação</span>' : ''}
+      </div>`;
+  }).join('');
+}
+
+// ==========================================
+// DEALS
+// ==========================================
+async function loadDeals() {
+  setDealsLoading();
+  try {
+    // Load up to 50 open deals (add pagination if needed)
+    const data = await bx24Call('crm.item.list', {
+      entityTypeId: ENTITY_TYPE_ID,
+      filter: { categoryId: CATEGORY_ID },
+      select: ['id', 'title', 'xmlId', 'stageId', 'categoryId', 'createdTime', 'updatedTime', 'assignedById'],
+      order: { id: 'desc' },
+      start: 0
+    });
+
+    const items = extractItems('crm.item.list', data);
+
+    // Filter out closed stages
+    App.deals = items.filter(i => {
+      const s = String(i.stageId || '');
+      return !s.endsWith(':SUCCESS') && !s.endsWith(':FAIL');
+    });
+
+    updateStats();
+    applyFilter();
+  } catch (err) {
+    console.error('Deals error:', err);
+    document.getElementById('deals-container').innerHTML = `
+      <div class="empty-state">
+        <svg width="40" height="40" fill="none" stroke="#fca5a5" stroke-width="1.5" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+        </svg>
+        <div style="font-size:14px;font-weight:600;color:#374151;">Erro ao carregar negócios</div>
+        <div style="font-size:12px;margin-top:4px;">${escHtml(describeError(err))}</div>
+        <button class="btn btn-primary" onclick="refreshData()" style="margin-top:16px;">Tentar novamente</button>
+      </div>`;
+  }
+}
+
+function setDealsLoading() {
+  document.getElementById('deals-container').innerHTML = `
+    <div class="empty-state">
+      <div class="spinner" style="margin:0 auto 16px;"></div>
+      <div style="font-size:13px;color:#64748b;">Carregando negócios…</div>
+    </div>`;
+}
+
+function updateStats() {
+  let approved = 0, pending = 0;
+  App.deals.forEach(d => {
+    if (isDealApproved(d)) approved++; else pending++;
+  });
+  document.getElementById('stat-total').textContent    = App.deals.length;
+  document.getElementById('stat-approved').textContent = approved;
+  document.getElementById('stat-pending').textContent  = pending;
+}
+
+function isDealApproved(deal) {
+  if (App.approvalIdx < 0) return false;
+  const idx = App.stages.findIndex(s => s.STATUS_ID === deal.stageId);
+  return idx > App.approvalIdx;
+}
+
+function getStageName(stageId) {
+  const s = App.stages.find(s => s.STATUS_ID === stageId);
+  return s ? s.NAME : (stageId || '—');
+}
+
+// ==========================================
+// FILTER & RENDER
+// ==========================================
+function applyFilter() {
+  const q = (document.getElementById('search-input').value || '').trim().toLowerCase();
+  let list = App.deals;
+
+  if (App.view === 'approved') list = list.filter(isDealApproved);
+  if (App.view === 'pending')  list = list.filter(d => !isDealApproved(d));
+
+  if (q) {
+    list = list.filter(d =>
+      String(d.title  || '').toLowerCase().includes(q) ||
+      String(d.xmlId  || '').toLowerCase().includes(q) ||
+      String(d.id     || '').includes(q)
+    );
+  }
+
+  App.filtered = list;
+  document.getElementById('deals-count').textContent = `(${list.length})`;
+  renderDealsTable(list);
+}
+
+function renderDealsTable(deals) {
+  const container = document.getElementById('deals-container');
+  if (!deals.length) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <svg width="40" height="40" fill="none" stroke="#cbd5e1" stroke-width="1.5" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+        </svg>
+        <div style="font-size:14px;font-weight:500;color:#374151;">Nenhum negócio encontrado</div>
+        <div style="font-size:12px;margin-top:4px;">Tente ajustar o filtro ou atualizar a lista.</div>
+      </div>`;
+    return;
+  }
+
+  const rows = deals.map(deal => {
+    const approved  = isDealApproved(deal);
+    const stageName = getStageName(deal.stageId);
+    const badge     = approved
+      ? `<span class="badge badge-approved">✓ Aprovado</span>`
+      : `<span class="badge badge-pending">⏳ Pendente</span>`;
+
+    return `
+      <tr>
+        <td>
+          <div style="font-weight:600;color:#0f172a;">${escHtml(deal.title || '#' + deal.id)}</div>
+          ${deal.xmlId ? `<div class="text-muted">Cód: ${escHtml(String(deal.xmlId))}</div>` : ''}
+        </td>
+        <td><span class="badge badge-stage" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;">${escHtml(stageName)}</span></td>
+        <td>${badge}</td>
+        <td class="text-muted">${fmtDate(deal.createdTime)}</td>
+        <td>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="btn btn-ghost btn-sm" onclick="openDealModal(${deal.id})">
+              <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+              Detalhes
+            </button>
+            ${!approved ? `
+            <button class="btn btn-purple btn-sm" onclick="moveDealToFinancial(${deal.id})">
+              <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 9l3 3m0 0l-3 3m3-3H8m13 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              Mover
+            </button>` : ''}
+          </div>
+        </td>
+      </tr>`;
+  }).join('');
+
+  container.innerHTML = `
+    <div style="overflow-x:auto;">
+      <table class="deals-table">
+        <thead>
+          <tr>
+            <th>Negócio</th>
+            <th>Etapa</th>
+            <th>Status</th>
+            <th>Criado em</th>
+            <th>Ações</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+// ==========================================
+// MODAL
+// ==========================================
+async function openDealModal(dealId) {
+  const deal = App.deals.find(d => d.id === dealId);
+  if (!deal) return;
+
+  document.getElementById('modal-title').textContent    = deal.title || `Negócio #${dealId}`;
+  document.getElementById('modal-subtitle').textContent = deal.xmlId ? `Código: ${deal.xmlId}` : `ID: ${dealId}`;
+  document.getElementById('modal-content').innerHTML    = `<div class="empty-state" style="padding:32px 0;"><div class="spinner" style="margin:0 auto;"></div></div>`;
+  document.getElementById('modal-overlay').classList.add('open');
+
+  try {
+    let item = {};
+    try {
+      const data = await bx24Call('crm.item.get', { entityTypeId: ENTITY_TYPE_ID, id: dealId });
+      item = data?.item || data || {};
+    } catch (_) {
+      // modo demo: usa dados locais
+      item = { ...deal };
+    }
+    const stageId   = item.stageId   || deal.stageId;
+    const stageName = getStageName(stageId);
+    const approved  = isDealApproved({ ...deal, stageId });
+    const dealIdx   = App.stages.findIndex(s => s.STATUS_ID === stageId);
+
+    document.getElementById('modal-content').innerHTML = `
+      <!-- Info Grid -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
+        ${infoBox('ID interno',    '#' + (item.id || dealId))}
+        ${infoBox('Código XML',    item.xmlId || '—')}
+        ${infoBox('Etapa atual',   stageName)}
+        ${infoBox('Aprovação',     approved ? '<span class="badge badge-approved" style="font-size:12px">✓ Aprovado</span>' : '<span class="badge badge-pending" style="font-size:12px">⏳ Pendente</span>', true)}
+        ${infoBox('Criado em',     fmtDate(item.createdTime))}
+        ${infoBox('Atualizado em', fmtDate(item.updatedTime))}
+      </div>
+
+      <!-- Stage Progress -->
+      <div style="margin-bottom:16px;">
+        <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:8px;">Progresso no Funil</div>
+        <div style="max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;">
+          ${App.stages.map((s, idx) => {
+            const isCurrent  = s.STATUS_ID === stageId;
+            const isPast     = idx < dealIdx;
+            const isApproval = s.STATUS_ID === APPROVAL_STAGE_ID;
+            return `
+              <div class="stage-item ${isCurrent ? 'current' : ''}">
+                <div class="stage-dot ${isCurrent ? 'current' : isPast ? 'past' : 'future'}">${isPast ? '✓' : idx + 1}</div>
+                <div style="flex:1;font-size:13px;font-weight:${isCurrent ? '600' : '400'};color:${isCurrent ? '#1e40af' : '#374151'};">${escHtml(s.NAME)}</div>
+                ${isApproval ? '<span style="font-size:10px;color:#ea580c;font-weight:600;">✦ APROVAÇÃO</span>' : ''}
+                ${isCurrent ? '<span style="font-size:10px;color:#2563eb;font-weight:600;">◀ ATUAL</span>' : ''}
+              </div>`;
+          }).join('')}
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div style="display:flex;gap:8px;border-top:1px solid #e2e8f0;padding-top:14px;">
+        ${!approved ? `
+          <button class="btn btn-purple" onclick="moveDealToFinancial(${dealId}); closeModal();">
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 9l3 3m0 0l-3 3m3-3H8m13 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            Mover para Aprov. Financeiro
+          </button>` : ''}
+        <button class="btn btn-outline" onclick="openInBitrix(${dealId})">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+          Abrir no Bitrix
+        </button>
+        <button class="btn btn-outline" onclick="closeModal()" style="margin-left:auto;">Fechar</button>
+      </div>`;
+  } catch (err) {
+    document.getElementById('modal-content').innerHTML = `
+      <div class="empty-state" style="padding:32px 0;">
+        <div style="font-size:13px;color:#dc2626;">Erro ao carregar detalhes</div>
+        <div class="text-muted" style="margin-top:4px;">${escHtml(describeError(err))}</div>
+      </div>`;
+  }
+}
+
+function infoBox(label, value, raw = false) {
+  return `
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;">
+      <div style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${escHtml(label)}</div>
+      <div style="font-size:13px;font-weight:600;color:#0f172a;">${raw ? value : escHtml(String(value))}</div>
+    </div>`;
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('open');
+}
+
+// ==========================================
+// DEAL ACTIONS
+// ==========================================
+async function moveDealToFinancial(dealId) {
+  const financialStage = App.stages.find(s =>
+    s.NAME.toLowerCase().includes('financeiro') ||
+    s.NAME.toLowerCase().includes('ag. aprov. ger')
+  );
+
+  if (!financialStage) {
+    showToast('Etapa financeira não encontrada no funil', 'error');
+    return;
+  }
+
+  const deal = App.deals.find(d => d.id === dealId);
+  if (deal && deal.stageId === financialStage.STATUS_ID) {
+    showToast('Negócio já está nesta etapa', 'warning');
+    return;
+  }
+
+  showToast('Movendo negócio…', 'info');
+
+  try {
+    await bx24Call('crm.item.update', {
+      entityTypeId: ENTITY_TYPE_ID,
+      id: dealId,
+      fields: { stageId: financialStage.STATUS_ID }
+    });
+
+    // Update local state
+    if (deal) deal.stageId = financialStage.STATUS_ID;
+    updateStats();
+    applyFilter();
+    showToast('Negócio movido com sucesso! ✓', 'success');
+  } catch (err) {
+    console.error('moveDeal error:', err);
+    showToast('Erro ao mover: ' + describeError(err), 'error');
+  }
+}
+
+function openInBitrix(dealId) {
+  try {
+    const domain = BX24.getDomain ? BX24.getDomain() : location.hostname;
+    BX24.openLink(`https://${domain}/crm/type/${ENTITY_TYPE_ID}/item/${dealId}/`, '_blank');
+  } catch (e) {
+    showToast('Não foi possível abrir o link no Bitrix24', 'warning');
+  }
+}
+
+// ==========================================
+// NAVIGATION
+// ==========================================
+function switchTab(tab) {
+  App.view = tab;
+  document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + tab).classList.add('active');
+
+  const isStages = tab === 'stages';
+  document.getElementById('panel-deals').style.display  = isStages ? 'none' : '';
+  document.getElementById('panel-stages').style.display = isStages ? '' : 'none';
+
+  if (!isStages) applyFilter();
+}
+
+function onSearch(val) {
+  applyFilter();
+}
+
+async function refreshData() {
+  await Promise.all([loadStages(), loadDeals()]);
+  showToast('Dados atualizados ✓', 'success');
+}
+
+// ==========================================
+// TOAST
+// ==========================================
+function showToast(message, type = 'info') {
+  const container = document.getElementById('toast-container');
+  const el = document.createElement('div');
+  el.className = `toast-item toast-${type}`;
+  el.innerHTML = `
+    <span>${escHtml(message)}</span>
+    <button onclick="this.parentElement.remove()" style="background:none;border:none;cursor:pointer;color:inherit;opacity:.7;margin-left:4px;font-size:14px;">✕</button>`;
+  container.appendChild(el);
+  setTimeout(() => { if (el.parentElement) el.remove(); }, 4500);
+}
+
+// ==========================================
+// UTILS
+// ==========================================
+function fmtDate(dateStr) {
+  if (!dateStr) return '—';
+  try {
+    return new Date(dateStr).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  } catch { return dateStr; }
+}
+
+function escHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function describeError(err) {
+  if (!err) return 'Erro desconhecido';
+  if (typeof err === 'string') return err;
+  return err.error_description || err.error || err.message || JSON.stringify(err);
+}
+
+// ==========================================
+// DEMO MODE (preview sem Bitrix24)
+// ==========================================
+const DEMO_STAGES = [
+  { STATUS_ID: 'DT129_13:NEW',       NAME: '1 - Novo',                          SORT: 10 },
+  { STATUS_ID: 'DT129_13:UC_QUAL',   NAME: '2 - Qualificação',                  SORT: 20 },
+  { STATUS_ID: 'DT129_13:UC_PROP',   NAME: '3 - Proposta',                      SORT: 30 },
+  { STATUS_ID: 'DT129_13:UC_NEGOC',  NAME: '4 - Negociação',                    SORT: 40 },
+  { STATUS_ID: 'DT129_13:UC_3YHNVC', NAME: '5 - Ag. Aprovação Gerência',        SORT: 50 },
+  { STATUS_ID: 'DT129_13:UC_FIN',    NAME: '6 - Ag. Aprov. Ger. Financeiro',    SORT: 60 },
+  { STATUS_ID: 'DT129_13:UC_EXEC',   NAME: '7 - Em Execução',                   SORT: 70 },
+];
+const DEMO_DEALS = [
+  { id: 101, title: '2024.1082 - Contrato Empresa ABC', xmlId: '1082', stageId: 'DT129_13:UC_FIN',    categoryId: 13, createdTime: '2024-11-10T10:00:00', updatedTime: '2024-11-20T15:00:00' },
+  { id: 102, title: '2024.1075 - Projeto XYZ',          xmlId: '1075', stageId: 'DT129_13:UC_3YHNVC', categoryId: 13, createdTime: '2024-11-08T09:00:00', updatedTime: '2024-11-18T12:00:00' },
+  { id: 103, title: '2024.1068 - Fornecimento Industrial',xmlId:'1068', stageId: 'DT129_13:UC_NEGOC',  categoryId: 13, createdTime: '2024-11-05T14:00:00', updatedTime: '2024-11-15T16:00:00' },
+  { id: 104, title: '2024.1055 - Serviços Logísticos',  xmlId: '1055', stageId: 'DT129_13:UC_EXEC',   categoryId: 13, createdTime: '2024-10-28T11:00:00', updatedTime: '2024-11-12T10:00:00' },
+  { id: 105, title: '2024.1041 - Manutenção Preventiva',xmlId: '1041', stageId: 'DT129_13:UC_PROP',   categoryId: 13, createdTime: '2024-10-15T08:00:00', updatedTime: '2024-11-01T09:00:00' },
+];
+
+async function runDemo() {
+  App.stages = DEMO_STAGES;
+  App.approvalIdx = DEMO_STAGES.findIndex(s => s.STATUS_ID === APPROVAL_STAGE_ID);
+  App.deals = DEMO_DEALS;
+
+  document.getElementById('stat-stages').textContent = App.stages.length;
+  document.getElementById('user-name').textContent = 'Modo Demo';
+  document.getElementById('user-dept').textContent = '(sem Bitrix24)';
+  document.getElementById('user-avatar').textContent = 'D';
+  document.getElementById('user-info').style.display = 'block';
+
+  renderStagesList();
+  updateStats();
+  applyFilter();
+  document.getElementById('loading').style.display = 'none';
+  showToast('Modo demo ativo (app rodando fora do Bitrix24)', 'warning');
+}
+
+// ==========================================
+// START — carrega BX24.js dinamicamente
+// ==========================================
+document.addEventListener('DOMContentLoaded', () => {
+  const script = document.createElement('script');
+  script.src = '//api.bitrix24.com/api/v1/';
+  script.async = true;
+
+  // Fallback: se BX24 CDN não carregar em 4s, entra em modo demo
+  const fallbackTimer = setTimeout(() => {
+    console.warn('BX24 CDN não carregou — modo demo');
+    runDemo();
+  }, 4000);
+
+  script.onload = () => {
+    clearTimeout(fallbackTimer);
+    init();
+  };
+  script.onerror = () => {
+    clearTimeout(fallbackTimer);
+    runDemo();
+  };
+
+  document.head.appendChild(script);
+});
+</script>
+</body>
+</html>

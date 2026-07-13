@@ -1,0 +1,314 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 228 60% 98%;
+    --foreground: 230 45% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 230 45% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 230 45% 10%;
+
+    --primary: 235 85% 58%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 228 45% 95%;
+    --secondary-foreground: 230 45% 14%;
+
+    --muted: 228 45% 95%;
+    --muted-foreground: 230 15% 45%;
+
+    --accent: 190 95% 45%;
+    --accent-foreground: 230 45% 10%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 230 40% 90%;
+    --input: 230 40% 90%;
+    --ring: 235 85% 58%;
+
+    --radius: 0.75rem;
+
+    /* Paleta futurista */
+    --neon-cyan: 187 100% 45%;
+    --neon-violet: 258 90% 66%;
+    --deep-space: 232 47% 12%;
+  }
+
+  .dark {
+    --background: 232 47% 7%;
+    --foreground: 210 40% 98%;
+
+    --card: 232 40% 10%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 232 40% 10%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 235 90% 66%;
+    --primary-foreground: 232 47% 8%;
+
+    --secondary: 232 32% 16%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 232 32% 16%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --accent: 190 95% 50%;
+    --accent-foreground: 232 47% 8%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 232 32% 18%;
+    --input: 232 32% 18%;
+    --ring: 235 90% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    color-scheme: light;
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply text-foreground;
+    color: #0f172a;
+    background-color: #eef1fb;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 15% -10%, rgba(99, 102, 241, 0.14), transparent 60%),
+      radial-gradient(ellipse 60% 45% at 90% 5%, rgba(34, 211, 238, 0.12), transparent 55%),
+      radial-gradient(ellipse 70% 55% at 50% 110%, rgba(139, 92, 246, 0.10), transparent 60%);
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+}
+
+/* ═══ Identidade futurista — utilitários globais ═══════════════════════════════ */
+@layer components {
+
+  /* Malha de grade tecnológica (usar em heros/nav) */
+  .tech-grid {
+    background-image:
+      linear-gradient(rgba(99, 102, 241, 0.07) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(99, 102, 241, 0.07) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+  .tech-grid-light {
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+
+  /* Vidro (glassmorphism) */
+  .glass {
+    background: rgba(255, 255, 255, 0.72);
+    backdrop-filter: blur(16px) saturate(1.4);
+    -webkit-backdrop-filter: blur(16px) saturate(1.4);
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    box-shadow:
+      0 8px 32px rgba(30, 41, 99, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  }
+  .glass-dark {
+    background: rgba(15, 20, 45, 0.72);
+    backdrop-filter: blur(18px) saturate(1.4);
+    -webkit-backdrop-filter: blur(18px) saturate(1.4);
+    border: 1px solid rgba(99, 102, 241, 0.25);
+    box-shadow:
+      0 8px 32px rgba(2, 6, 23, 0.45),
+      inset 0 1px 0 rgba(148, 163, 255, 0.12);
+  }
+
+  /* Card 3D — inclina em direção ao cursor (efeito de perspectiva) */
+  .card-3d {
+    transform-style: preserve-3d;
+    transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.35s ease;
+    will-change: transform;
+  }
+  .card-3d:hover {
+    transform: perspective(900px) rotateX(4deg) rotateY(-4deg) translateY(-4px) scale(1.015);
+    box-shadow:
+      0 20px 40px -12px rgba(79, 70, 229, 0.25),
+      0 8px 16px -8px rgba(34, 211, 238, 0.18);
+  }
+  .card-3d-subtle {
+    transform-style: preserve-3d;
+    transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.3s ease;
+  }
+  .card-3d-subtle:hover {
+    transform: perspective(900px) rotateX(2deg) translateY(-3px);
+    box-shadow: 0 16px 32px -12px rgba(79, 70, 229, 0.20);
+  }
+
+  /* Botão 3D com profundidade */
+  .btn-3d {
+    transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.2s ease;
+    box-shadow: 0 4px 14px -4px rgba(79, 70, 229, 0.45);
+  }
+  .btn-3d:hover {
+    transform: translateY(-2px) scale(1.02);
+    box-shadow: 0 10px 24px -6px rgba(79, 70, 229, 0.55), 0 0 20px -4px rgba(34, 211, 238, 0.35);
+  }
+  .btn-3d:active {
+    transform: translateY(0) scale(0.99);
+  }
+
+  /* Borda com brilho neon animado */
+  .neon-border {
+    position: relative;
+    isolation: isolate;
+  }
+  .neon-border::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(120deg,
+      rgba(99, 102, 241, 0.65), rgba(34, 211, 238, 0.65), rgba(139, 92, 246, 0.65), rgba(99, 102, 241, 0.65));
+    background-size: 300% 300%;
+    animation: neon-flow 6s linear infinite;
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    z-index: -1;
+    pointer-events: none;
+  }
+
+  /* Texto com gradiente futurista */
+  .text-gradient {
+    background: linear-gradient(100deg, #4f46e5 0%, #06b6d4 50%, #8b5cf6 100%);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: gradient-pan 8s ease infinite;
+  }
+
+  /* Orbes flutuantes decorativos */
+  .orb {
+    position: absolute;
+    border-radius: 9999px;
+    filter: blur(40px);
+    opacity: 0.55;
+    pointer-events: none;
+    animation: orb-float 12s ease-in-out infinite;
+  }
+
+  /* Brilho pulsante (badges, indicadores) */
+  .pulse-glow {
+    animation: pulse-glow 2.4s ease-in-out infinite;
+  }
+
+  /* Entrada com profundidade 3D */
+  .animate-rise {
+    animation: rise-3d 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .animate-rise-1 { animation-delay: 0.05s; }
+  .animate-rise-2 { animation-delay: 0.12s; }
+  .animate-rise-3 { animation-delay: 0.19s; }
+  .animate-rise-4 { animation-delay: 0.26s; }
+
+  /* Linha de varredura holográfica */
+  .holo-scan {
+    position: relative;
+    overflow: hidden;
+  }
+  .holo-scan::after {
+    content: '';
+    position: absolute;
+    top: -120%;
+    left: -40%;
+    width: 40%;
+    height: 300%;
+    transform: rotate(20deg);
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
+    animation: holo-sweep 5s ease-in-out infinite;
+    pointer-events: none;
+  }
+}
+
+/* ═══ Keyframes ════════════════════════════════════════════════════════════════ */
+@keyframes neon-flow {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 300% 50%; }
+}
+@keyframes gradient-pan {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+@keyframes orb-float {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  33% { transform: translate3d(18px, -22px, 0) scale(1.08); }
+  66% { transform: translate3d(-14px, 12px, 0) scale(0.95); }
+}
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 6px 0 rgba(34, 211, 238, 0.45); }
+  50% { box-shadow: 0 0 18px 4px rgba(34, 211, 238, 0.65); }
+}
+@keyframes rise-3d {
+  from {
+    opacity: 0;
+    transform: perspective(900px) translateY(22px) rotateX(6deg);
+  }
+  to {
+    opacity: 1;
+    transform: perspective(900px) translateY(0) rotateX(0deg);
+  }
+}
+@keyframes holo-sweep {
+  0%, 60% { left: -45%; }
+  100% { left: 130%; }
+}
+
+/* ═══ Refinamentos globais (aplicam o estilo às páginas existentes) ═══════════ */
+@layer utilities {
+  /* Superfícies claras existentes ganham leve efeito de vidro */
+  .bg-gray-50 {
+    background-color: transparent;
+  }
+  .bg-white {
+    background-color: rgba(255, 255, 255, 0.82);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+}
+
+/* Scrollbar futurista */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(99, 102, 241, 0.06);
+}
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.45), rgba(34, 211, 238, 0.45));
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.7), rgba(34, 211, 238, 0.7));
+  background-clip: padding-box;
+}
+
+/* Reduz movimento para quem preferir */
+@media (prefers-reduced-motion: reduce) {
+  .card-3d, .card-3d-subtle, .btn-3d, .animate-rise,
+  .neon-border::before, .orb, .pulse-glow, .holo-scan::after, .text-gradient {
+    animation: none !important;
+    transition: none !important;
+  }
+}

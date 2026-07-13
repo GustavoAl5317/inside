@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Inside Sales — Bitrix App Local</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:0; padding:24px; background:#f7f7fb; }
+    .card { border:1px solid #e5e7eb; border-radius:10px; padding:16px; max-width:920px; margin:0 auto; background:#fff; }
+    .muted { color:#6b7280; }
+    pre { background:#0b1020; color:#a5ff90; padding:12px; border-radius:8px; overflow:auto; }
+    .ok { color:#166534; background:#ecfdf5; border:1px solid #bbf7d0; padding:6px 10px; border-radius:8px; display:inline-block; }
+    .err { color:#991b1b; background:#fef2f2; border:1px solid #fecaca; padding:6px 10px; border-radius:8px; display:inline-block; }
+    a.btn { display:inline-block; margin-top:10px; padding:8px 12px; border:1px solid #e5e7eb; border-radius:8px; text-decoration:none; color:#111827 }
+    a.btn:hover { background:#f3f4f6; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Inside Sales — Bitrix App Local</h1>
+    <p class="muted">Handler estático (iframe) para o Bitrix24.</p>
+    <div id="status">Carregando SDK…</div>
+    <div id="out" style="margin-top:12px;"></div>
+    <a class="btn" href="/">Abrir aplicação principal</a>
+  </div>
+
+  <script>
+    (function(){
+      function setStatus(ok, msg){
+        var el = document.getElementById('status');
+        if(!el) return;
+        el.innerHTML = ok ? '<span class="ok">Conectado ao Bitrix ✅</span>' : '<span class="err">Erro: ' + msg + '</span>';
+      }
+      function setOut(obj){
+        var el = document.getElementById('out');
+        if(!el) return;
+        el.innerHTML = '<pre>'+ (typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2)) +'</pre>';
+      }
+
+      var s = document.createElement('script');
+      s.src = 'https://api.bitrix24.com/api/v1/';
+      s.async = true;
+      s.onload = function(){
+        try {
+          if (!window.BX24 || typeof window.BX24.init !== 'function') {
+            setStatus(false, 'Abra este handler pelo Aplicativo Local dentro do Bitrix.');
+            return;
+          }
+          window.BX24.init(function(){
+            setStatus(true, 'ok');
+            // valida token/escopos
+            window.BX24.callMethod('user.current', {}, function(r){
+              if (r && typeof r.error === 'function' && r.error()) {
+                setStatus(false, r.error() + ': ' + (r.error_description ? r.error_description() : ''));
+              } else if (r && typeof r.data === 'function') {
+                setOut(r.data());
+              } else {
+                setOut('Resposta inesperada do Bitrix.');
+              }
+            });
+          });
+        } catch (e) {
+          setStatus(false, e && e.message ? e.message : String(e));
+        }
+      };
+      s.onerror = function(){ setStatus(false, 'Falha ao carregar o SDK do Bitrix.'); };
+      document.head.appendChild(s);
+    })();
+  </script>
+</body>
+</html>
