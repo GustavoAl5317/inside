@@ -105,6 +105,12 @@ export async function ensureCommissionSchema(): Promise<void> {
     )`
   await sql`CREATE INDEX IF NOT EXISTS idx_commission_audit_period ON commission_audit(period_id, created_at DESC)`
 
+  // Colunas adicionadas após a 1ª versão (idempotente)
+  await sql`ALTER TABLE commission_settings ADD COLUMN IF NOT EXISTS use_bitrix_margin BOOLEAN NOT NULL DEFAULT TRUE`
+  await sql`ALTER TABLE commission_settings ADD COLUMN IF NOT EXISTS ignore_unmapped BOOLEAN NOT NULL DEFAULT FALSE`
+  await sql`ALTER TABLE commission_receipts ADD COLUMN IF NOT EXISTS margin_source VARCHAR(16)`
+  await sql`ALTER TABLE commission_receipts ADD COLUMN IF NOT EXISTS num_ctr VARCHAR(40)`
+
   // Settings default (linha única)
   await sql`INSERT INTO commission_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`
 

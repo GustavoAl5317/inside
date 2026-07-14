@@ -4,16 +4,12 @@ import { ReactNode } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { MONTH_LABELS, type PeriodStatus } from '@/lib/commission/types'
 
-/** Fundo tecnológico escuro reaproveitado nas telas de comissão. */
+/** Casca escura das telas de comissão — sóbria, sem efeitos exagerados. */
 export function TechShell({ children }: { children: ReactNode }) {
   return (
-    <div className="relative min-h-[calc(100vh-8rem)] bg-[#0b1029] text-indigo-50 overflow-hidden">
-      <div className="absolute inset-0 tech-grid-light opacity-40 pointer-events-none" />
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{ background: 'radial-gradient(ellipse 60% 80% at 15% 0%, rgba(99,102,241,0.22), transparent 60%), radial-gradient(ellipse 50% 70% at 90% 10%, rgba(34,211,238,0.14), transparent 55%)' }}
-      />
-      <div className="relative max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">{children}</div>
+    <div className="min-h-[calc(100vh-8rem)] bg-[#0c1120] text-slate-100">
+      <div className="h-px w-full bg-gradient-to-r from-transparent via-cyan-500/30 to-transparent" />
+      <div className="max-w-6xl mx-auto px-3 sm:px-6 py-5 sm:py-8">{children}</div>
     </div>
   )
 }
@@ -22,62 +18,62 @@ export function PageHead({ icon, title, subtitle, right }: {
   icon: ReactNode; title: string; subtitle?: string; right?: ReactNode
 }) {
   return (
-    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 md:gap-4 mb-5 sm:mb-7">
       <div className="flex items-center gap-3 min-w-0">
-        <div className="w-11 h-11 rounded-2xl flex items-center justify-center bg-gradient-to-br from-indigo-500 to-cyan-400 shadow-[0_0_20px_rgba(34,211,238,0.4)] flex-shrink-0">
+        <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-white/[0.04] ring-1 ring-white/10 text-cyan-400 flex-shrink-0">
           {icon}
         </div>
         <div className="min-w-0">
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight font-[var(--font-display)] truncate">{title}</h1>
-          {subtitle && <p className="text-xs sm:text-sm text-indigo-300/80 truncate">{subtitle}</p>}
+          <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-white truncate">{title}</h1>
+          {subtitle && <p className="text-xs sm:text-[13px] text-slate-400 truncate">{subtitle}</p>}
         </div>
       </div>
-      {right}
+      {right && <div className="flex-shrink-0">{right}</div>}
     </div>
   )
 }
 
 export function GlassCard({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`rounded-2xl border border-indigo-400/15 bg-white/5 backdrop-blur-sm shadow-[0_8px_40px_rgba(2,6,23,0.5)] ${className}`}>
+    <div className={`rounded-xl border border-white/[0.07] bg-white/[0.02] ${className}`}>
       {children}
     </div>
   )
 }
 
-const ACCENTS: Record<string, string> = {
-  cyan:   'from-cyan-500/20 to-cyan-400/5 text-cyan-300 ring-cyan-400/30',
-  indigo: 'from-indigo-500/20 to-indigo-400/5 text-indigo-300 ring-indigo-400/30',
-  emerald:'from-emerald-500/20 to-emerald-400/5 text-emerald-300 ring-emerald-400/30',
-  amber:  'from-amber-500/20 to-amber-400/5 text-amber-300 ring-amber-400/30',
-  violet: 'from-violet-500/20 to-violet-400/5 text-violet-300 ring-violet-400/30',
+const ACCENT_TEXT: Record<string, string> = {
+  cyan: 'text-cyan-400',
+  indigo: 'text-indigo-400',
+  emerald: 'text-emerald-400',
+  amber: 'text-amber-400',
+  violet: 'text-violet-400',
 }
 
 export function Kpi({ label, value, hint, accent = 'indigo', icon }: {
-  label: string; value: string; hint?: string; accent?: keyof typeof ACCENTS; icon?: ReactNode
+  label: string; value: string; hint?: string; accent?: keyof typeof ACCENT_TEXT; icon?: ReactNode
 }) {
   return (
-    <div className={`relative rounded-2xl p-4 bg-gradient-to-br ring-1 ${ACCENTS[accent]} overflow-hidden`}>
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-indigo-200/70">{label}</span>
-        {icon && <span className="opacity-80">{icon}</span>}
+    <div className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-3.5 sm:p-4 min-w-0">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-slate-500 truncate">{label}</span>
+        {icon && <span className={`flex-shrink-0 ${ACCENT_TEXT[accent]}`}>{icon}</span>}
       </div>
-      <div className="mt-2 text-2xl font-bold text-white tabular-nums">{value}</div>
-      {hint && <div className="mt-0.5 text-[11px] text-indigo-300/70">{hint}</div>}
+      <div className="mt-1.5 text-lg sm:text-2xl font-semibold text-white tabular-nums truncate">{value}</div>
+      {hint && <div className="mt-0.5 text-[11px] text-slate-500 truncate">{hint}</div>}
     </div>
   )
 }
 
 const STATUS_STYLE: Record<PeriodStatus, { label: string; cls: string }> = {
-  open:     { label: 'Aberto',   cls: 'bg-cyan-500/15 text-cyan-300 ring-cyan-400/30' },
-  closed:   { label: 'Fechado',  cls: 'bg-amber-500/15 text-amber-300 ring-amber-400/30' },
-  approved: { label: 'Aprovado', cls: 'bg-emerald-500/15 text-emerald-300 ring-emerald-400/30' },
+  open:     { label: 'Aberto',   cls: 'border-cyan-400/30 text-cyan-300 bg-cyan-400/[0.06]' },
+  closed:   { label: 'Fechado',  cls: 'border-amber-400/30 text-amber-300 bg-amber-400/[0.06]' },
+  approved: { label: 'Aprovado', cls: 'border-emerald-400/30 text-emerald-300 bg-emerald-400/[0.06]' },
 }
 
 export function StatusPill({ status }: { status: PeriodStatus }) {
   const s = STATUS_STYLE[status] ?? STATUS_STYLE.open
   return (
-    <span className={`inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full ring-1 ${s.cls}`}>
+    <span className={`inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-md border ${s.cls}`}>
       <span className="w-1.5 h-1.5 rounded-full bg-current" />{s.label}
     </span>
   )
@@ -93,15 +89,15 @@ export function MonthNav({ year, month, onChange }: {
     onChange(y, m)
   }
   return (
-    <div className="flex items-center gap-1 rounded-xl bg-white/5 ring-1 ring-indigo-400/20 p-1">
-      <button onClick={() => step(-1)} className="p-1.5 rounded-lg hover:bg-white/10 text-indigo-200" aria-label="Mês anterior">
-        <ChevronLeft size={16} />
+    <div className="inline-flex items-center rounded-lg border border-white/10 bg-white/[0.03]">
+      <button onClick={() => step(-1)} className="p-2 text-slate-400 hover:text-white hover:bg-white/[0.05] rounded-l-lg" aria-label="Mês anterior">
+        <ChevronLeft size={15} />
       </button>
-      <span className="px-2 text-sm font-semibold text-white tabular-nums min-w-[130px] text-center">
+      <span className="px-2 text-sm font-medium text-white tabular-nums min-w-[118px] text-center select-none">
         {MONTH_LABELS[month - 1]} {year}
       </span>
-      <button onClick={() => step(1)} className="p-1.5 rounded-lg hover:bg-white/10 text-indigo-200" aria-label="Próximo mês">
-        <ChevronRight size={16} />
+      <button onClick={() => step(1)} className="p-2 text-slate-400 hover:text-white hover:bg-white/[0.05] rounded-r-lg" aria-label="Próximo mês">
+        <ChevronRight size={15} />
       </button>
     </div>
   )
@@ -112,16 +108,16 @@ export function TechButton({ children, onClick, disabled, variant = 'primary', t
   variant?: 'primary' | 'ghost' | 'success' | 'warning' | 'danger'
 }) {
   const styles: Record<string, string> = {
-    primary: 'bg-gradient-to-r from-indigo-600 to-cyan-500 text-white hover:shadow-[0_0_18px_rgba(34,211,238,0.5)]',
-    ghost:   'bg-white/5 text-indigo-100 ring-1 ring-indigo-400/25 hover:bg-white/10',
-    success: 'bg-gradient-to-r from-emerald-600 to-teal-500 text-white hover:shadow-[0_0_18px_rgba(16,185,129,0.5)]',
-    warning: 'bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:shadow-[0_0_18px_rgba(245,158,11,0.5)]',
-    danger:  'bg-red-500/90 text-white hover:bg-red-500',
+    primary: 'bg-cyan-500 hover:bg-cyan-400 text-slate-950',
+    ghost:   'border border-white/10 text-slate-200 hover:bg-white/[0.05]',
+    success: 'bg-emerald-500 hover:bg-emerald-400 text-slate-950',
+    warning: 'bg-amber-500 hover:bg-amber-400 text-slate-950',
+    danger:  'bg-red-500/90 hover:bg-red-500 text-white',
   }
   return (
     <button
       onClick={onClick} disabled={disabled} title={title}
-      className={`inline-flex items-center justify-center gap-1.5 text-sm font-semibold px-4 py-2 rounded-xl transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed ${styles[variant]}`}
+      className={`inline-flex items-center justify-center gap-1.5 text-[13px] font-semibold px-3.5 py-2 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap ${styles[variant]}`}
     >
       {children}
     </button>

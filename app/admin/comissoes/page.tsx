@@ -4,17 +4,18 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import {
   Loader2, Settings2, ShieldAlert, SlidersHorizontal, Layers, Users,
-  Plus, Trash2, Save, Download, Merge, Search, X, Check, Wand2,
+  Plus, Trash2, Save, Download, Merge, Search, X, Check, Wand2, ScrollText,
 } from 'lucide-react'
 import { useCurrentUser, canAccess } from '@/components/current-user-provider'
 import {
   getCommissionConfigAction, updateCommissionSettingsAction, upsertTierAction, deleteTierAction,
   listVendorsAction, importVendorsFromOmieAction, updateVendorAction, mergeVendorsAction, listAmCandidatesAction,
+  autoConsolidateVendorsAction, getConfigAuditAction,
 } from '@/lib/commission-actions'
-import { formatPct, type CommissionTier, type CommissionSettings, type CommissionVendor } from '@/lib/commission/types'
+import { type CommissionTier, type CommissionSettings, type CommissionVendor, type CommissionAudit } from '@/lib/commission/types'
 import { TechShell, PageHead, GlassCard, TechButton } from '@/components/commission/kit'
 
-type Tab = 'regras' | 'faixas' | 'vendedores'
+type Tab = 'regras' | 'faixas' | 'vendedores' | 'auditoria'
 type AmUser = { bitrix_user_id: string; name: string; role: string }
 
 export default function AdminComissoesPage() {
@@ -28,7 +29,7 @@ export default function AdminComissoesPage() {
         <div className="flex flex-col items-center justify-center py-24 text-center">
           <ShieldAlert className="w-12 h-12 text-amber-400 mb-4" />
           <h2 className="text-lg font-semibold">Acesso restrito</h2>
-          <p className="text-sm text-indigo-300/80 mt-1">Somente administradores configuram o comissionamento.</p>
+          <p className="text-sm text-slate-400 mt-1">Somente administradores configuram o comissionamento.</p>
         </div>
       </TechShell>
     )
@@ -38,6 +39,7 @@ export default function AdminComissoesPage() {
     { id: 'faixas', label: 'Faixas de margem', icon: Layers },
     { id: 'regras', label: 'Regras gerais', icon: SlidersHorizontal },
     { id: 'vendedores', label: 'Vendedores (de-para)', icon: Users },
+    { id: 'auditoria', label: 'Auditoria', icon: ScrollText },
   ]
 
   return (
@@ -45,13 +47,13 @@ export default function AdminComissoesPage() {
       <PageHead icon={<Settings2 className="w-5 h-5 text-white" />} title="Configuração de Comissões"
         subtitle="Regras avançadas · faixas de margem · mapeamento de vendedores" />
 
-      <div className="flex flex-wrap gap-1.5 mb-6 p-1 rounded-2xl bg-white/5 ring-1 ring-indigo-400/15 w-full sm:w-auto">
+      <div className="flex flex-wrap gap-1.5 mb-6 p-1 rounded-xl border border-white/10 bg-white/[0.02] w-full sm:w-auto">
         {TABS.map(t => {
           const Icon = t.icon
           return (
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-                tab === t.id ? 'bg-gradient-to-r from-indigo-600 to-cyan-500 text-white shadow-[0_0_16px_rgba(34,211,238,0.4)]' : 'text-indigo-200 hover:bg-white/10'
+                tab === t.id ? 'bg-cyan-500 text-slate-950' : 'text-slate-300 hover:bg-white/10'
               }`}>
               <Icon size={14} /><span className="hidden sm:inline">{t.label}</span>
             </button>
@@ -62,6 +64,7 @@ export default function AdminComissoesPage() {
       {tab === 'faixas' && <TiersTab />}
       {tab === 'regras' && <SettingsTab />}
       {tab === 'vendedores' && <VendorsTab />}
+      {tab === 'auditoria' && <AuditTab />}
     </TechShell>
   )
 }
@@ -102,26 +105,26 @@ function TiersTab() {
 
   return (
     <GlassCard className="p-0 overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-indigo-400/10">
-        <p className="text-xs text-indigo-300/70">Margem sobre a venda total → taxa aplicada ao recebido. Margem inclusiva nos limites.</p>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06]">
+        <p className="text-xs text-slate-400">Margem sobre a venda total → taxa aplicada ao recebido. Margem inclusiva nos limites.</p>
         <TechButton variant="ghost" onClick={addNew} disabled={busy === 'new'}><Plus size={14} /> Faixa</TechButton>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm whitespace-nowrap">
-          <thead><tr className="text-[11px] uppercase tracking-wider text-indigo-300/60 text-left">
+          <thead><tr className="text-[11px] uppercase tracking-wider text-slate-500 text-left">
             <th className="px-3 py-2">Descrição</th><th className="px-3 py-2">Margem mín. %</th><th className="px-3 py-2">Margem máx. %</th>
             <th className="px-3 py-2">Taxa (%)</th><th className="px-3 py-2">Ativa</th><th className="px-3 py-2"></th>
           </tr></thead>
-          <tbody className="divide-y divide-indigo-400/5">
+          <tbody className="divide-y divide-white/[0.05]">
             {tiers.map(t => (
-              <tr key={t.id} className="hover:bg-white/5">
-                <td className="px-3 py-2"><input value={t.label} onChange={e => patch(t.id, 'label', e.target.value)} className="w-40 bg-white/5 rounded-lg px-2 py-1.5 text-indigo-50 ring-1 ring-indigo-400/20 focus:ring-cyan-400/50 outline-none" /></td>
-                <td className="px-3 py-2"><input type="number" step="0.001" value={t.min_margin} onChange={e => patch(t.id, 'min_margin', e.target.value)} className="w-24 bg-white/5 rounded-lg px-2 py-1.5 text-indigo-50 ring-1 ring-indigo-400/20 outline-none tabular-nums" /></td>
-                <td className="px-3 py-2"><input type="number" step="0.001" placeholder="∞" value={t.max_margin ?? ''} onChange={e => patch(t.id, 'max_margin', e.target.value === '' ? null : e.target.value)} className="w-24 bg-white/5 rounded-lg px-2 py-1.5 text-indigo-50 ring-1 ring-indigo-400/20 outline-none tabular-nums" /></td>
+              <tr key={t.id} className="hover:bg-white/[0.04]">
+                <td className="px-3 py-2"><input value={t.label} onChange={e => patch(t.id, 'label', e.target.value)} className="w-40 bg-white/5 rounded-lg px-2 py-1.5 text-slate-100 ring-1 ring-white/10 focus:ring-cyan-400/50 outline-none" /></td>
+                <td className="px-3 py-2"><input type="number" step="0.001" value={t.min_margin} onChange={e => patch(t.id, 'min_margin', e.target.value)} className="w-24 bg-white/5 rounded-lg px-2 py-1.5 text-slate-100 ring-1 ring-white/10 outline-none tabular-nums" /></td>
+                <td className="px-3 py-2"><input type="number" step="0.001" placeholder="∞" value={t.max_margin ?? ''} onChange={e => patch(t.id, 'max_margin', e.target.value === '' ? null : e.target.value)} className="w-24 bg-white/5 rounded-lg px-2 py-1.5 text-slate-100 ring-1 ring-white/10 outline-none tabular-nums" /></td>
                 <td className="px-3 py-2">
                   <div className="flex items-center gap-1">
-                    <input type="number" step="0.001" value={Number(t.rate) * 100} onChange={e => patch(t.id, 'rate', Number(e.target.value) / 100)} className="w-20 bg-white/5 rounded-lg px-2 py-1.5 text-indigo-50 ring-1 ring-indigo-400/20 outline-none tabular-nums" />
-                    <span className="text-indigo-400/60 text-xs">%</span>
+                    <input type="number" step="0.001" value={Math.round(Number(t.rate) * 100000) / 1000} onChange={e => patch(t.id, 'rate', Number(e.target.value) / 100)} className="w-20 bg-white/5 rounded-lg px-2 py-1.5 text-slate-100 ring-1 ring-white/10 outline-none tabular-nums" />
+                    <span className="text-slate-500 text-xs">%</span>
                   </div>
                 </td>
                 <td className="px-3 py-2"><input type="checkbox" checked={t.active} onChange={e => patch(t.id, 'active', e.target.checked)} className="w-4 h-4 accent-cyan-500" /></td>
@@ -151,8 +154,14 @@ function SettingsTab() {
   const save = async () => {
     if (!s) return
     setSaving(true)
-    const r = await updateCommissionSettingsAction({ base_mode: s.base_mode, min_margin_gate: Number(s.min_margin_gate), default_margin: Number(s.default_margin) })
-    if (r.success) toast.success('Regras salvas.'); else toast.error(r.error)
+    const r = await updateCommissionSettingsAction({
+      base_mode: s.base_mode,
+      min_margin_gate: Number(s.min_margin_gate),
+      default_margin: Number(s.default_margin),
+      use_bitrix_margin: s.use_bitrix_margin !== false,
+      ignore_unmapped: s.ignore_unmapped === true,
+    })
+    if (r.success) toast.success('Regras salvas. Sincronize o mês para recalcular.'); else toast.error(r.error)
     setSaving(false)
   }
 
@@ -160,28 +169,56 @@ function SettingsTab() {
 
   return (
     <GlassCard className="p-5 max-w-2xl space-y-5">
+      <Toggle
+        label="Buscar margem no negócio do Bitrix (recomendado)"
+        hint="Usa o código do recebimento (ano.ID) para ler a margem que o processo bp-49 grava no card. É o que faz a comissão sair do zero."
+        checked={s.use_bitrix_margin !== false}
+        onChange={v => setS({ ...s, use_bitrix_margin: v })}
+      />
+      <Toggle
+        label="Ignorar recebimentos sem AM mapeado"
+        hint="Recebimentos de vendedor não mapeado ficam fora da apuração (não entram nos totais)."
+        checked={s.ignore_unmapped === true}
+        onChange={v => setS({ ...s, ignore_unmapped: v })}
+      />
       <Field label="Base de cálculo da comissão" hint="Sobre o que a taxa incide.">
-        <select value={s.base_mode} onChange={e => setS({ ...s, base_mode: e.target.value as any })} className="w-full bg-white/5 rounded-lg px-3 py-2 text-indigo-50 ring-1 ring-indigo-400/20 outline-none">
+        <select value={s.base_mode} onChange={e => setS({ ...s, base_mode: e.target.value as any })} className="w-full bg-white/5 rounded-lg px-3 py-2 text-slate-100 ring-1 ring-white/10 outline-none">
           <option value="received">Valor recebido no mês (caixa)</option>
           <option value="invoiced">Valor faturado (NF emitida)</option>
         </select>
       </Field>
       <Field label="Portão de margem mínima (%)" hint="Abaixo desta margem a comissão é zero (regra bp-49).">
-        <input type="number" step="0.001" value={s.min_margin_gate} onChange={e => setS({ ...s, min_margin_gate: Number(e.target.value) })} className="w-40 bg-white/5 rounded-lg px-3 py-2 text-indigo-50 ring-1 ring-indigo-400/20 outline-none tabular-nums" />
+        <input type="number" step="0.001" value={s.min_margin_gate} onChange={e => setS({ ...s, min_margin_gate: Number(e.target.value) })} className="w-40 bg-white/5 rounded-lg px-3 py-2 text-slate-100 ring-1 ring-white/10 outline-none tabular-nums" />
       </Field>
-      <Field label="Margem padrão (%)" hint="Usada quando o recebimento não é vinculado a um negócio com margem conhecida.">
-        <input type="number" step="0.001" value={s.default_margin} onChange={e => setS({ ...s, default_margin: Number(e.target.value) })} className="w-40 bg-white/5 rounded-lg px-3 py-2 text-indigo-50 ring-1 ring-indigo-400/20 outline-none tabular-nums" />
+      <Field label="Margem padrão (%)" hint="Último recurso: usada quando nem o Bitrix nem o negócio local têm a margem. Deixe 0 para não comissionar nesses casos.">
+        <input type="number" step="0.001" value={s.default_margin} onChange={e => setS({ ...s, default_margin: Number(e.target.value) })} className="w-40 bg-white/5 rounded-lg px-3 py-2 text-slate-100 ring-1 ring-white/10 outline-none tabular-nums" />
       </Field>
       <div className="pt-2"><TechButton variant="primary" onClick={save} disabled={saving}>{saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Salvar regras</TechButton></div>
     </GlassCard>
   )
 }
 
+function Toggle({ label, hint, checked, onChange }: {
+  label: string; hint?: string; checked: boolean; onChange: (v: boolean) => void
+}) {
+  return (
+    <button type="button" onClick={() => onChange(!checked)} className="w-full flex items-start gap-3 text-left group">
+      <span className={`mt-0.5 relative inline-flex h-5 w-9 flex-shrink-0 rounded-full transition-colors ${checked ? 'bg-cyan-500' : 'bg-white/10'}`}>
+        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${checked ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold text-slate-200 group-hover:text-white">{label}</span>
+        {hint && <span className="block text-[11px] text-slate-500 mt-0.5">{hint}</span>}
+      </span>
+    </button>
+  )
+}
+
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-sm font-semibold text-indigo-100 mb-1">{label}</label>
-      {hint && <p className="text-[11px] text-indigo-300/60 mb-2">{hint}</p>}
+      <label className="block text-sm font-semibold text-slate-200 mb-1">{label}</label>
+      {hint && <p className="text-[11px] text-slate-500 mb-2">{hint}</p>}
       {children}
     </div>
   )
@@ -230,6 +267,17 @@ function VendorsTab() {
     else toast.error(r.error)
   }
 
+  const autoGroup = async () => {
+    setBusy('auto')
+    const r = await autoConsolidateVendorsAction()
+    if (r.success) {
+      if (r.merged > 0) toast.success(`${r.merged} códigos agrupados em ${r.groups} pessoas.`)
+      else toast.info('Nenhum duplicado óbvio encontrado — use a seleção manual para os demais.')
+      await load()
+    } else toast.error(r.error)
+    setBusy(null)
+  }
+
   const doMerge = async (canonicalName: string, amId: string | null) => {
     const codes = [...sel]
     setBusy('merge')
@@ -264,22 +312,27 @@ function VendorsTab() {
   return (
     <>
     <GlassCard className="p-0 overflow-hidden">
-      <div className="flex flex-col gap-3 px-4 py-3 border-b border-indigo-400/10">
+      <div className="flex flex-col gap-3 px-4 py-3 border-b border-white/[0.06]">
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
           <div className="relative flex-1 max-w-xs">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-indigo-400/60 w-4 h-4" />
-            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar vendedor..." className="w-full text-sm pl-8 pr-3 py-1.5 rounded-lg bg-white/5 text-indigo-50 ring-1 ring-indigo-400/20 outline-none" />
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 w-4 h-4" />
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar vendedor..." className="w-full text-sm pl-8 pr-3 py-1.5 rounded-lg bg-white/5 text-slate-100 ring-1 ring-white/10 outline-none" />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {unmapped > 0 && <span className="text-[11px] px-2 py-1 rounded-full bg-amber-500/15 text-amber-300">{unmapped} sem AM</span>}
             {dupCount > 0 && (
               <TechButton variant="ghost" onClick={selectDuplicates} title="Selecionar prováveis duplicados"><Wand2 size={14} /> Duplicados ({dupCount})</TechButton>
             )}
+            {vendors.length > 0 && (
+              <TechButton variant="ghost" onClick={autoGroup} disabled={busy === 'auto'} title="Junta automaticamente nomes iguais e variações óbvias (ex.: ALINE → ALINE GOMES)">
+                {busy === 'auto' ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />} Auto-agrupar
+              </TechButton>
+            )}
             <TechButton variant="primary" onClick={doImport} disabled={importing}>{importing ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Importar do Omie</TechButton>
           </div>
         </div>
-        <p className="text-[11px] text-indigo-300/60 leading-relaxed">
-          Cada <strong className="text-indigo-200">vendedor do Omie</strong> (esquerda) liga a um <strong className="text-indigo-200">AM do sistema</strong> (direita) que recebe a comissão. O nome é <strong className="text-indigo-200">editável direto na linha</strong>. Para juntar duplicados, marque as linhas iguais e clique em <strong className="text-indigo-200">Consolidar</strong>.
+        <p className="text-[11px] text-slate-500 leading-relaxed">
+          Cada <strong className="text-slate-300">vendedor do Omie</strong> (esquerda) liga a um <strong className="text-slate-300">AM do sistema</strong> (direita) que recebe a comissão. O nome é <strong className="text-slate-300">editável direto na linha</strong>. Para juntar duplicados, marque as linhas iguais e clique em <strong className="text-slate-300">Consolidar</strong>.
         </p>
       </div>
 
@@ -287,7 +340,7 @@ function VendorsTab() {
         <div className="flex items-center justify-between gap-3 px-4 py-2 bg-cyan-500/5 border-b border-cyan-400/10">
           <span className="text-sm text-cyan-200">{sel.size} selecionado(s)</span>
           <div className="flex items-center gap-3">
-            <button onClick={() => setSel(new Set())} className="text-xs text-indigo-300 hover:text-white">Limpar</button>
+            <button onClick={() => setSel(new Set())} className="text-xs text-slate-400 hover:text-white">Limpar</button>
             <TechButton variant="primary" onClick={() => { if (sel.size < 2) { toast.error('Selecione ao menos 2 vendedores.'); return } setMergeOpen(true) }} disabled={sel.size < 2}>
               <Merge size={14} /> Consolidar {sel.size} em 1
             </TechButton>
@@ -296,20 +349,20 @@ function VendorsTab() {
       )}
 
       {!vendors.length ? (
-        <div className="p-10 text-center text-indigo-300/70">
-          <Users className="w-9 h-9 mx-auto text-indigo-400/50 mb-2" />
-          Nenhum vendedor ainda. Clique em <strong className="text-indigo-100">Importar do Omie</strong> para trazer o cadastro.
+        <div className="p-10 text-center text-slate-400">
+          <Users className="w-9 h-9 mx-auto text-slate-600 mb-2" />
+          Nenhum vendedor ainda. Clique em <strong className="text-slate-200">Importar do Omie</strong> para trazer o cadastro.
         </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm whitespace-nowrap">
-            <thead><tr className="text-[11px] uppercase tracking-wider text-indigo-300/60 text-left">
+            <thead><tr className="text-[11px] uppercase tracking-wider text-slate-500 text-left">
               <th className="px-3 py-2 w-8"></th><th className="px-3 py-2">Vendedor (nome — editável)</th><th className="px-3 py-2">Código Omie</th>
               <th className="px-3 py-2">Filial</th><th className="px-3 py-2">AM que recebe</th>
             </tr></thead>
-            <tbody className="divide-y divide-indigo-400/5">
+            <tbody className="divide-y divide-white/[0.05]">
               {filtered.map(v => (
-                <tr key={v.omie_vendor_code} className={`hover:bg-white/5 ${sel.has(v.omie_vendor_code) ? 'bg-cyan-500/5' : ''}`}>
+                <tr key={v.omie_vendor_code} className={`hover:bg-white/[0.04] ${sel.has(v.omie_vendor_code) ? 'bg-cyan-500/5' : ''}`}>
                   <td className="px-3 py-2">
                     <input type="checkbox" checked={sel.has(v.omie_vendor_code)} onChange={e => setSel(s => { const n = new Set(s); e.target.checked ? n.add(v.omie_vendor_code) : n.delete(v.omie_vendor_code); return n })} className="w-4 h-4 accent-cyan-500" />
                   </td>
@@ -320,20 +373,20 @@ function VendorsTab() {
                         onChange={e => setNameDraft(d => ({ ...d, [v.omie_vendor_code]: e.target.value }))}
                         onBlur={e => saveName(v.omie_vendor_code, e.target.value.trim())}
                         onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-                        className="w-44 bg-white/5 rounded-lg px-2 py-1.5 text-sm text-indigo-50 ring-1 ring-indigo-400/20 focus:ring-cyan-400/50 outline-none"
+                        className="w-44 bg-white/5 rounded-lg px-2 py-1.5 text-sm text-slate-100 ring-1 ring-white/10 focus:ring-cyan-400/50 outline-none"
                       />
                       {dup.is(v) && <span title="Possível duplicado" className="text-[9px] px-1.5 py-0.5 rounded bg-fuchsia-500/20 text-fuchsia-300">dup</span>}
                     </div>
                     {v.canonical_name && v.omie_vendor_name && v.canonical_name !== v.omie_vendor_name && (
-                      <div className="text-[10px] text-indigo-300/40 mt-0.5 pl-1">Omie: {v.omie_vendor_name}</div>
+                      <div className="text-[10px] text-slate-600 mt-0.5 pl-1">Omie: {v.omie_vendor_name}</div>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-indigo-300/70 tabular-nums text-xs">{v.omie_vendor_code}</td>
-                  <td className="px-3 py-2 text-indigo-300/70 text-xs">{v.branch ?? '—'}</td>
+                  <td className="px-3 py-2 text-slate-400 tabular-nums text-xs">{v.omie_vendor_code}</td>
+                  <td className="px-3 py-2 text-slate-400 text-xs">{v.branch ?? '—'}</td>
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-2">
                       <select value={v.app_user_bitrix_id ?? ''} onChange={e => setAm(v.omie_vendor_code, e.target.value)} disabled={busy === v.omie_vendor_code}
-                        className={`bg-white/5 rounded-lg px-2 py-1.5 text-sm ring-1 outline-none min-w-[180px] ${v.app_user_bitrix_id ? 'text-indigo-50 ring-indigo-400/20' : 'text-amber-300 ring-amber-400/30'}`}>
+                        className={`bg-white/5 rounded-lg px-2 py-1.5 text-sm ring-1 outline-none min-w-[180px] ${v.app_user_bitrix_id ? 'text-slate-100 ring-white/10' : 'text-amber-300 ring-amber-400/30'}`}>
                         <option value="">— sem AM —</option>
                         {ams.map(a => <option key={a.bitrix_user_id} value={a.bitrix_user_id}>{a.name}</option>)}
                       </select>
@@ -364,46 +417,46 @@ function MergeModal({ vendors, ams, busy, onClose, onConfirm }: {
   const [amId, setAmId] = useState(vendors.find(v => v.app_user_bitrix_id)?.app_user_bitrix_id ?? '')
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} className="w-full max-w-lg rounded-2xl bg-[#0d1330] ring-1 ring-indigo-400/25 shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-indigo-400/10">
+      <div onClick={e => e.stopPropagation()} className="w-full max-w-lg rounded-2xl bg-[#131a2b] ring-1 ring-white/10 shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/[0.06]">
           <div className="flex items-center gap-2"><Merge size={16} className="text-cyan-300" /><h3 className="font-semibold text-white">Consolidar vendedores</h3></div>
-          <button onClick={onClose} className="p-1 rounded-lg text-indigo-300 hover:bg-white/10"><X size={16} /></button>
+          <button onClick={onClose} className="p-1 rounded-lg text-slate-400 hover:bg-white/10"><X size={16} /></button>
         </div>
         <div className="p-5 space-y-4">
           <div>
-            <p className="text-[11px] uppercase tracking-wider text-indigo-300/60 mb-1.5">{vendors.length} códigos que viram 1 pessoa</p>
+            <p className="text-[11px] uppercase tracking-wider text-slate-500 mb-1.5">{vendors.length} códigos que viram 1 pessoa</p>
             <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
               {vendors.map(v => (
-                <span key={v.omie_vendor_code} className="text-[11px] px-2 py-1 rounded-lg bg-white/5 ring-1 ring-indigo-400/15 text-indigo-200">
-                  {v.canonical_name ?? v.omie_vendor_name} <span className="text-indigo-400/50">· {v.omie_vendor_code}</span>
+                <span key={v.omie_vendor_code} className="text-[11px] px-2 py-1 rounded-lg bg-white/5 ring-1 ring-white/10 text-slate-300">
+                  {v.canonical_name ?? v.omie_vendor_name} <span className="text-slate-600">· {v.omie_vendor_code}</span>
                 </span>
               ))}
             </div>
           </div>
           <div>
-            <label className="block text-sm font-semibold text-indigo-100 mb-1">Nome consolidado</label>
+            <label className="block text-sm font-semibold text-slate-200 mb-1">Nome consolidado</label>
             <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Nome do vendedor / AM"
-              className="w-full bg-white/5 rounded-lg px-3 py-2 text-indigo-50 ring-1 ring-indigo-400/20 focus:ring-cyan-400/50 outline-none" />
+              className="w-full bg-white/5 rounded-lg px-3 py-2 text-slate-100 ring-1 ring-white/10 focus:ring-cyan-400/50 outline-none" />
             {distinctNames.length > 1 && (
               <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                <span className="text-[10px] text-indigo-300/50">usar:</span>
+                <span className="text-[10px] text-slate-500">usar:</span>
                 {distinctNames.map(n => (
                   <button key={n} onClick={() => setName(n)}
-                    className={`text-[11px] px-2 py-1 rounded-lg ring-1 ${name === n ? 'bg-cyan-500/20 text-cyan-200 ring-cyan-400/40' : 'bg-white/5 text-indigo-300 ring-indigo-400/15 hover:bg-white/10'}`}>{n}</button>
+                    className={`text-[11px] px-2 py-1 rounded-lg ring-1 ${name === n ? 'bg-cyan-500/20 text-cyan-200 ring-cyan-400/40' : 'bg-white/5 text-slate-400 ring-white/10 hover:bg-white/10'}`}>{n}</button>
                 ))}
               </div>
             )}
           </div>
           <div>
-            <label className="block text-sm font-semibold text-indigo-100 mb-1">AM que recebe a comissão</label>
+            <label className="block text-sm font-semibold text-slate-200 mb-1">AM que recebe a comissão</label>
             <select value={amId} onChange={e => setAmId(e.target.value)}
-              className="w-full bg-white/5 rounded-lg px-3 py-2 text-indigo-50 ring-1 ring-indigo-400/20 outline-none">
+              className="w-full bg-white/5 rounded-lg px-3 py-2 text-slate-100 ring-1 ring-white/10 outline-none">
               <option value="">— definir depois —</option>
               {ams.map(a => <option key={a.bitrix_user_id} value={a.bitrix_user_id}>{a.name}</option>)}
             </select>
           </div>
         </div>
-        <div className="flex justify-end gap-2 px-5 py-3.5 border-t border-indigo-400/10">
+        <div className="flex justify-end gap-2 px-5 py-3.5 border-t border-white/[0.06]">
           <TechButton variant="ghost" onClick={onClose}>Cancelar</TechButton>
           <TechButton variant="primary" onClick={() => onConfirm(name.trim(), amId || null)} disabled={busy || !name.trim()}>
             {busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Consolidar
@@ -411,5 +464,42 @@ function MergeModal({ vendors, ams, busy, onClose, onConfirm }: {
         </div>
       </div>
     </div>
+  )
+}
+
+// ─── Auditoria de configuração ───────────────────────────────────────────────────
+function AuditTab() {
+  const [rows, setRows] = useState<CommissionAudit[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    (async () => {
+      const r = await getConfigAuditAction()
+      if (r.success) setRows(r.audit); else toast.error(r.error)
+      setLoading(false)
+    })()
+  }, [])
+
+  if (loading) return <div className="flex justify-center py-16"><Loader2 className="w-5 h-5 animate-spin text-cyan-400" /></div>
+
+  return (
+    <GlassCard className="p-0 overflow-hidden">
+      <div className="px-4 py-3 border-b border-white/[0.06]">
+        <p className="text-xs text-slate-400">Quem alterou o quê nas configurações de comissão (faixas, regras, de-para).</p>
+      </div>
+      {!rows.length ? (
+        <div className="p-10 text-center text-slate-500 text-sm">Nenhuma alteração registrada ainda.</div>
+      ) : (
+        <div className="divide-y divide-white/[0.05]">
+          {rows.map(a => (
+            <div key={a.id} className="px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
+              <span className="text-[11px] text-slate-500 tabular-nums sm:w-36 flex-shrink-0">{new Date(a.created_at).toLocaleString('pt-BR')}</span>
+              <span className="text-sm text-slate-200 sm:w-44 flex-shrink-0 truncate">{a.actor_name ?? a.actor ?? '—'}</span>
+              <span className="text-sm text-slate-400 min-w-0">{a.detail ?? 'Configuração alterada'}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </GlassCard>
   )
 }

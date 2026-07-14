@@ -46,6 +46,7 @@ export interface OmieReceipt {
   clientCnpj: string | null
   nf: string | null
   pedido: string | null    // nCodOS/nCodPedido do Omie (liga ao negócio local)
+  numCtr: string | null    // "ano.ID" do negócio Bitrix (gravado pelo bp-49) — fonte da margem
   parcela: string | null
   paidAt: string | null    // ISO yyyy-mm-dd
   paidValue: number
@@ -108,6 +109,7 @@ export async function fetchMonthReceipts(year: number, month: number): Promise<O
           clientCnpj: d?.cCPFCNPJCliente ? String(d.cCPFCNPJCliente) : null,
           nf: d?.cNumDocFiscal ? String(d.cNumDocFiscal) : null,
           pedido: d?.cNumOS ? String(d.cNumOS) : (d?.cNumTitulo ? String(d.cNumTitulo) : null),
+          numCtr: d?.cNumCtr ? String(d.cNumCtr).trim() : null,
           parcela,
           paidAt: isoFromBr(d?.dDtPagamento) ?? isoFromBr(d?.dDtBaixa),
           paidValue,

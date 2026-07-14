@@ -18,6 +18,8 @@ export interface CommissionSettings {
   base_mode: BaseMode
   min_margin_gate: number
   default_margin: number
+  use_bitrix_margin?: boolean   // busca a margem no negócio Bitrix via cNumCtr (bp-49)
+  ignore_unmapped?: boolean     // não apura recebimentos sem AM mapeado
   updated_at?: string
   updated_by?: string | null
 }
@@ -50,9 +52,17 @@ export interface CommissionReceipt {
   paid_at: string | null
   paid_value: number
   margin: number | null
+  margin_source?: string | null   // bitrix | deal | default | null
+  num_ctr?: string | null
   rate: number | null
   commission_value: number
   deal_id: number | null
+}
+
+export const MARGIN_SOURCE_LABEL: Record<string, string> = {
+  bitrix: 'Margem do negócio no Bitrix',
+  deal: 'Margem do negócio local',
+  default: 'Margem padrão (configuração)',
 }
 
 export interface CommissionPeriod {

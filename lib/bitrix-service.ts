@@ -1385,3 +1385,30 @@ export class BitrixService {
     }
   }
 }
+/**
+ * Margem do negócio no funil COMERCIAL (crm.deal), gravada pelo BP "bp-49":
+ *   UF_CRM_1652129369867 = Margem %  ·  UF_CRM_1652129349632 = Custo  ·  OPPORTUNITY = Venda
+ * O recebimento do Omie referencia o negócio via cNumCtr = "ano.ID" (UF_CRM_1654539371364).
+ * Se a margem gravada estiver vazia, recalcula pela fórmula do BP: ((venda−custo)×0,415)/venda×100.
+ */
+export async function getBitrixDealMarginById(dealId: number): Promise<number | null> {
+  try {
+    const j: any = await bGet(`/crm.deal.get.json?id=${dealId}`)
+    const d = j?.result
+    if (!d) return null
+    const direct = Number(String(d.UF_CRM_1652129369867 ?? '').replace(',', '.'))
+    if (Number.isFinite(direct) && direct !== 0) return direct
+    const opp = Number(String(d.OPPORTUNITY ?? '').split('|')[0])
+    const cost = Number(String(d.UF_CRM_1652129349632 ?? '').split('|')[0])
+    if (opp > 0 && Number.isFinite(cost)) return ((opp - cost) * 0.415) / opp * 100
+    return null
+  } catch {
+    return null
+  }
+}
+
+/** Extrai o ID do negócio Bitrix a partir do código "ano.ID" (ex.: "2024.7257" → 7257). */
+export function parseNumCtrDealId(numCtr: string | null | undefined): number | null {
+  const m = /^\s*\d{4}\.(\d+)\s*$/.exec(String(numCtr ?? ''))
+  return m ? Number(m[1]) : null
+}

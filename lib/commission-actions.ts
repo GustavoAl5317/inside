@@ -6,6 +6,7 @@ import type { SessionUser } from '@/lib/auth-types'
 import { ensureCommissionSchema } from '@/lib/commission/schema'
 import { fetchMonthReceipts, fetchOmieVendors } from '@/lib/commission/omie-financas'
 import { findDealMargin, resolveRate } from '@/lib/commission/margin'
+import { getBitrixDealMarginById, parseNumCtrDealId } from '@/lib/bitrix-service'
 import type {
   CommissionTier, CommissionSettings, CommissionVendor, CommissionReceipt,
   CommissionPeriod, AmCommissionSummary, CommissionAudit, PeriodTotals,
@@ -47,7 +48,7 @@ export async function getCommissionConfigAction(): Promise<Res<{ settings: Commi
   try {
     await ensureCommissionSchema()
     await requireView()
-    const [settings] = await sql`SELECT base_mode, min_margin_gate, default_margin, updated_at, updated_by FROM commission_settings WHERE id = 1`
+    const [settings] = await sql`SELECT * FROM commission_settings WHERE id = 1`
     const tiers = await sql`SELECT * FROM commission_tiers ORDER BY sort, min_margin`
     return ok({ settings: settings as CommissionSettings, tiers: tiers as CommissionTier[] })
   } catch (e) { return err(e) }
@@ -62,6 +63,8 @@ export async function updateCommissionSettingsAction(input: Partial<CommissionSe
         base_mode = COALESCE(${input.base_mode ?? null}, base_mode),
         min_margin_gate = COALESCE(${input.min_margin_gate ?? null}, min_margin_gate),
         default_margin = COALESCE(${input.default_margin ?? null}, default_margin),
+        use_bitrix_margin = COALESCE(${input.use_bitrix_margin ?? null}, use_bitrix_margin),
+        ignore_unmapped = COALESCE(${input.ignore_unmapped ?? null}, ignore_unmapped),
         updated_at = NOW(), updated_by = ${admin.bitrixUserId}
       WHERE id = 1`
     await audit(null, 'config', admin, 'Configurações gerais alteradas')
@@ -174,6 +177,78 @@ export async function mergeVendorsAction(input: {
   } catch (e) { return err(e) }
 }
 
+/**
+ * Auto-agrupa vendedores duplicados:
+ *  - nomes iguais após normalização (acentos/caixa/espaços) viram um só;
+ *  - nome de 1 palavra (ex.: "ALINE") entra no grupo de nome composto cujo
+ *    primeiro nome bate ("ALINE GOMES") quando há só 1 candidato (sem ambiguidade).
+ * O AM mapeado de qualquer código do grupo é propagado para os demais.
+ */
+export async function autoConsolidateVendorsAction(): Promise<Res<{ groups: number; merged: number }>> {
+  try {
+    await ensureCommissionSchema()
+    const admin = await requireAdmin()
+    const rows = await sql`SELECT omie_vendor_code, omie_vendor_name, canonical_name, app_user_bitrix_id FROM commission_vendors`
+    const norm = (s: unknown) => String(s ?? '')
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .toUpperCase().replace(/\s+/g, ' ').trim()
+
+    const groups = new Map<string, any[]>()
+    for (const v of rows) {
+      const key = norm(v.canonical_name ?? v.omie_vendor_name)
+      if (!key || /ENVIADO VIA API/.test(key)) continue // genérico não agrupa
+      if (!groups.has(key)) groups.set(key, [])
+      groups.get(key)!.push(v)
+    }
+
+    // nome de 1 palavra → único grupo composto com o mesmo primeiro nome
+    const multiKeys = [...groups.keys()].filter(k => k.includes(' '))
+    for (const key of [...groups.keys()]) {
+      if (key.includes(' ')) continue
+      const candidates = multiKeys.filter(mk => mk.split(' ')[0] === key)
+      if (candidates.length === 1) {
+        groups.get(candidates[0])!.push(...groups.get(key)!)
+        groups.delete(key)
+      }
+    }
+
+    let mergedGroups = 0, mergedRows = 0
+    for (const members of groups.values()) {
+      if (members.length < 2) continue
+      const withAm = members.find(m => m.app_user_bitrix_id)
+      const canonicalRow = withAm ?? members.reduce((a, b) =>
+        norm(b.canonical_name ?? b.omie_vendor_name).length > norm(a.canonical_name ?? a.omie_vendor_name).length ? b : a)
+      const name = String(canonicalRow.canonical_name ?? canonicalRow.omie_vendor_name ?? '').trim()
+      const amId = withAm?.app_user_bitrix_id ?? null
+      for (const m of members) {
+        await sql`
+          UPDATE commission_vendors SET
+            canonical_name = ${name},
+            app_user_bitrix_id = COALESCE(${amId}, app_user_bitrix_id),
+            updated_at = NOW()
+          WHERE omie_vendor_code = ${m.omie_vendor_code}`
+      }
+      mergedGroups++
+      mergedRows += members.length
+    }
+    await audit(null, 'config', admin, `Auto-agrupamento: ${mergedRows} códigos em ${mergedGroups} grupos`)
+    return ok({ groups: mergedGroups, merged: mergedRows })
+  } catch (e) { return err(e) }
+}
+
+/** Trilha de auditoria das ações de configuração (sem período). */
+export async function getConfigAuditAction(): Promise<Res<{ audit: CommissionAudit[] }>> {
+  try {
+    await ensureCommissionSchema()
+    await requireAdmin()
+    const rows = await sql`
+      SELECT * FROM commission_audit
+      WHERE action = 'config'
+      ORDER BY created_at DESC LIMIT 100`
+    return ok({ audit: rows as CommissionAudit[] })
+  } catch (e) { return err(e) }
+}
+
 /** AMs disponíveis para mapear (usuários ativos do app). */
 export async function listAmCandidatesAction(): Promise<Res<{ users: Array<{ bitrix_user_id: string; name: string; role: string }> }>> {
   try {
@@ -209,10 +284,12 @@ export async function syncPeriodAction(year: number, month: number): Promise<Res
     const period = await getOrCreatePeriod(year, month)
     if (period.status === 'approved') throw new Error('Período já aprovado — reabra antes de sincronizar novamente.')
 
-    const [settings] = await sql`SELECT base_mode, min_margin_gate, default_margin FROM commission_settings WHERE id = 1`
+    const [settings] = await sql`SELECT * FROM commission_settings WHERE id = 1`
     const tiers = (await sql`SELECT * FROM commission_tiers ORDER BY sort, min_margin`) as CommissionTier[]
     const gate = Number(settings?.min_margin_gate ?? 10)
     const defaultMargin = Number(settings?.default_margin ?? 0)
+    const useBitrixMargin = settings?.use_bitrix_margin !== false
+    const ignoreUnmapped = settings?.ignore_unmapped === true
 
     const vendorRows = await sql`SELECT omie_vendor_code, app_user_bitrix_id, canonical_name, omie_vendor_name FROM commission_vendors`
     const vmap = new Map<string, any>()
@@ -223,7 +300,8 @@ export async function syncPeriodAction(year: number, month: number): Promise<Res
     // refresh total do período
     await sql`DELETE FROM commission_receipts WHERE period_id = ${period.id}`
 
-    const marginCache = new Map<string, { margin: number | null; dealId: number | null }>()
+    const localCache = new Map<string, { margin: number | null; dealId: number | null }>()
+    const bitrixCache = new Map<number, number | null>()
     let paidTotal = 0, commissionTotal = 0, unmapped = 0
     const amSet = new Set<string>()
 
@@ -238,15 +316,29 @@ export async function syncPeriodAction(year: number, month: number): Promise<Res
         vmap.set(r.vendorCode, { app_user_bitrix_id: null, canonical_name: r.vendorName, omie_vendor_name: r.vendorName })
       }
       const amId: string | null = vendor?.app_user_bitrix_id ?? null
-      if (!amId) unmapped++
-      else amSet.add(amId)
+      if (!amId) {
+        unmapped++
+        if (ignoreUnmapped) continue
+      } else amSet.add(amId)
 
-      // margem do negócio vinculado (cache por pedido) → senão default
-      let marginInfo = { margin: null as number | null, dealId: null as number | null }
-      const cacheKey = r.pedido ?? ''
-      if (cacheKey && marginCache.has(cacheKey)) marginInfo = marginCache.get(cacheKey)!
-      else if (cacheKey) { marginInfo = await findDealMargin(r.pedido); marginCache.set(cacheKey, marginInfo) }
-      const margin = marginInfo.margin ?? (defaultMargin || null)
+      // Margem em 3 níveis: negócio Bitrix (cNumCtr, gravada pelo bp-49)
+      //   → negócio local (deals) → margem padrão da configuração
+      let margin: number | null = null
+      let marginSource: string | null = null
+      let localDealId: number | null = null
+
+      const bitrixDealId = useBitrixMargin ? parseNumCtrDealId(r.numCtr) : null
+      if (bitrixDealId) {
+        if (!bitrixCache.has(bitrixDealId)) bitrixCache.set(bitrixDealId, await getBitrixDealMarginById(bitrixDealId))
+        const m = bitrixCache.get(bitrixDealId)!
+        if (m != null) { margin = m; marginSource = 'bitrix' }
+      }
+      if (margin == null && r.pedido) {
+        if (!localCache.has(r.pedido)) localCache.set(r.pedido, await findDealMargin(r.pedido))
+        const info = localCache.get(r.pedido)!
+        if (info.margin != null) { margin = info.margin; marginSource = 'deal'; localDealId = info.dealId }
+      }
+      if (margin == null && defaultMargin > 0) { margin = defaultMargin; marginSource = 'default' }
 
       const rate = resolveRate(margin, tiers, gate)
       const commission = Math.round(r.paidValue * rate * 100) / 100
@@ -257,14 +349,16 @@ export async function syncPeriodAction(year: number, month: number): Promise<Res
       await sql`
         INSERT INTO commission_receipts (
           period_id, omie_key, branch, omie_vendor_code, omie_vendor_name, app_user_bitrix_id,
-          client_name, client_cnpj, nf, pedido, parcela, paid_at, paid_value, margin, rate, commission_value, deal_id
+          client_name, client_cnpj, nf, pedido, parcela, paid_at, paid_value,
+          margin, margin_source, num_ctr, rate, commission_value, deal_id
         ) VALUES (
           ${period.id}, ${r.omieKey}, ${r.branch}, ${r.vendorCode}, ${r.vendorName ?? vendor?.omie_vendor_name ?? null}, ${amId},
           ${r.clientName}, ${r.clientCnpj}, ${r.nf}, ${r.pedido}, ${r.parcela}, ${r.paidAt}, ${r.paidValue},
-          ${margin}, ${rate}, ${commission}, ${marginInfo.dealId}
+          ${margin}, ${marginSource}, ${r.numCtr}, ${rate}, ${commission}, ${localDealId}
         )
         ON CONFLICT (period_id, omie_key) DO UPDATE SET
           paid_value = EXCLUDED.paid_value, margin = EXCLUDED.margin,
+          margin_source = EXCLUDED.margin_source, num_ctr = EXCLUDED.num_ctr,
           rate = EXCLUDED.rate, commission_value = EXCLUDED.commission_value,
           app_user_bitrix_id = EXCLUDED.app_user_bitrix_id`
     }

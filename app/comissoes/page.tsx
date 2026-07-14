@@ -7,7 +7,7 @@ import {
 } from 'recharts'
 import {
   Loader2, RefreshCw, TrendingUp, Wallet, Users, AlertTriangle,
-  Lock, CheckCircle2, Unlock, ShieldAlert, Building2, Receipt,
+  Lock, CheckCircle2, Unlock, ShieldAlert, Building2, Receipt, FileDown,
 } from 'lucide-react'
 import { useCurrentUser, canAccess } from '@/components/current-user-provider'
 import {
@@ -15,7 +15,7 @@ import {
   approvePeriodAction, reopenPeriodAction,
 } from '@/lib/commission-actions'
 import {
-  formatBRL, formatPct, periodLabel,
+  formatBRL, formatPct, periodLabel, MARGIN_SOURCE_LABEL,
   type AmCommissionSummary, type CommissionReceipt, type CommissionPeriod,
 } from '@/lib/commission/types'
 import {
@@ -84,7 +84,7 @@ export default function ComissoesPage() {
         <div className="flex flex-col items-center justify-center py-24 text-center">
           <ShieldAlert className="w-12 h-12 text-amber-400 mb-4" />
           <h2 className="text-lg font-semibold">Acesso restrito</h2>
-          <p className="text-sm text-indigo-300/80 mt-1">Somente AM, Financeiro e Admin acessam as comissões.</p>
+          <p className="text-sm text-slate-400 mt-1">Somente AM, Financeiro e Admin acessam as comissões.</p>
         </div>
       </TechShell>
     )
@@ -103,8 +103,8 @@ export default function ComissoesPage() {
       <GlassCard className="p-4 mb-6">
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
           <div className="flex items-center gap-3">
-            {period ? <StatusPill status={period.status} /> : <span className="text-xs text-indigo-300/70">Nunca sincronizado</span>}
-            {period?.synced_at && <span className="text-[11px] text-indigo-300/60">Última sync: {new Date(period.synced_at).toLocaleString('pt-BR')}</span>}
+            {period ? <StatusPill status={period.status} /> : <span className="text-xs text-slate-400">Nunca sincronizado</span>}
+            {period?.synced_at && <span className="text-[11px] text-slate-500">Última sync: {new Date(period.synced_at).toLocaleString('pt-BR')}</span>}
           </div>
           {isManager && (
             <div className="flex flex-wrap items-center gap-2">
@@ -136,9 +136,9 @@ export default function ComissoesPage() {
         <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-cyan-400" /></div>
       ) : !period ? (
         <GlassCard className="p-10 text-center">
-          <Receipt className="w-10 h-10 mx-auto text-indigo-400/60 mb-3" />
-          <p className="text-indigo-200 font-medium">Nenhuma apuração para {periodLabel(year, month)}.</p>
-          {isManager && <p className="text-sm text-indigo-300/70 mt-1">Clique em “Sincronizar Omie” para puxar os recebimentos do mês.</p>}
+          <Receipt className="w-10 h-10 mx-auto text-slate-500 mb-3" />
+          <p className="text-slate-300 font-medium">Nenhuma apuração para {periodLabel(year, month)}.</p>
+          {isManager && <p className="text-sm text-slate-400 mt-1">Clique em “Sincronizar Omie” para puxar os recebimentos do mês.</p>}
         </GlassCard>
       ) : (
         <>
@@ -156,15 +156,15 @@ export default function ComissoesPage() {
           {isManager && (
             <div className="grid lg:grid-cols-5 gap-4 mb-6">
               <GlassCard className="lg:col-span-2 p-4">
-                <h3 className="text-sm font-semibold text-indigo-100 mb-3">Comissão por AM</h3>
+                <h3 className="text-sm font-semibold text-slate-200 mb-3">Comissão por AM</h3>
                 {chartData.length ? (
                   <ResponsiveContainer width="100%" height={220}>
                     <BarChart data={chartData} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
-                      <XAxis dataKey="name" tick={{ fill: '#a5b4fc', fontSize: 11 }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fill: '#a5b4fc', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
+                      <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
                       <Tooltip
                         cursor={{ fill: 'rgba(255,255,255,0.05)' }}
-                        contentStyle={{ background: '#0b1029', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 12, color: '#e0e7ff' }}
+                        contentStyle={{ background: '#111726', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, color: '#e2e8f0' }}
                         formatter={(v: any) => [formatBRL(v), 'Comissão']}
                       />
                       <Bar dataKey="value" radius={[6, 6, 0, 0]}>
@@ -172,35 +172,35 @@ export default function ComissoesPage() {
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
-                ) : <p className="text-sm text-indigo-300/60 py-16 text-center">Sem comissão calculada neste mês.</p>}
+                ) : <p className="text-sm text-slate-500 py-16 text-center">Sem comissão calculada neste mês.</p>}
               </GlassCard>
 
               <GlassCard className="lg:col-span-3 p-0 overflow-hidden">
-                <div className="px-4 py-3 border-b border-indigo-400/10"><h3 className="text-sm font-semibold text-indigo-100">Resumo por AM</h3></div>
+                <div className="px-4 py-3 border-b border-white/[0.06]"><h3 className="text-sm font-semibold text-slate-200">Resumo por AM</h3></div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="text-[11px] uppercase tracking-wider text-indigo-300/60 text-left">
+                      <tr className="text-[11px] uppercase tracking-wider text-slate-500 text-left">
                         <th className="px-4 py-2 font-semibold">AM</th>
                         <th className="px-4 py-2 font-semibold text-right">Recebido</th>
                         <th className="px-4 py-2 font-semibold text-right">Comissão</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-indigo-400/5">
+                    <tbody className="divide-y divide-white/[0.05]">
                       {summary.map(s => (
-                        <tr key={s.app_user_bitrix_id ?? 'none'} className="hover:bg-white/5">
+                        <tr key={s.app_user_bitrix_id ?? 'none'} className="hover:bg-white/[0.04]">
                           <td className="px-4 py-2.5">
                             <div className="flex items-center gap-2">
-                              <span className="font-medium text-indigo-50">{s.am_name}</span>
+                              <span className="font-medium text-slate-100">{s.am_name}</span>
                               {!s.mapped && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">sem AM</span>}
                             </div>
-                            {s.vendorNames.length > 0 && <div className="text-[10px] text-indigo-300/50 truncate max-w-[240px]">{s.vendorNames.join(' · ')}</div>}
+                            {s.vendorNames.length > 0 && <div className="text-[10px] text-slate-500 truncate max-w-[240px]">{s.vendorNames.join(' · ')}</div>}
                           </td>
-                          <td className="px-4 py-2.5 text-right tabular-nums text-indigo-200">{formatBRL(s.paidTotal)}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatBRL(s.paidTotal)}</td>
                           <td className="px-4 py-2.5 text-right tabular-nums font-semibold text-emerald-300">{formatBRL(s.commissionTotal)}</td>
                         </tr>
                       ))}
-                      {!summary.length && <tr><td colSpan={3} className="px-4 py-8 text-center text-indigo-300/60">Sem recebimentos.</td></tr>}
+                      {!summary.length && <tr><td colSpan={3} className="px-4 py-8 text-center text-slate-500">Sem recebimentos.</td></tr>}
                     </tbody>
                   </table>
                 </div>
@@ -210,15 +210,44 @@ export default function ComissoesPage() {
 
           {/* Detalhe dos recebimentos */}
           <GlassCard className="p-0 overflow-hidden">
-            <div className="px-4 py-3 border-b border-indigo-400/10 flex items-center gap-2">
+            <div className="px-4 py-3 border-b border-white/[0.06] flex items-center gap-2">
               <Receipt size={15} className="text-cyan-300" />
-              <h3 className="text-sm font-semibold text-indigo-100">Recebimentos do mês</h3>
-              <span className="text-[11px] text-indigo-300/60">({receipts.length})</span>
+              <h3 className="text-sm font-semibold text-slate-200">Recebimentos do mês</h3>
+              <span className="text-[11px] text-slate-500">({receipts.length})</span>
+              {receipts.length > 0 && (
+                <button onClick={() => exportCsv(receipts, year, month, isManager)}
+                  className="ml-auto inline-flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-white border border-white/10 rounded-lg px-2.5 py-1.5 hover:bg-white/[0.05]">
+                  <FileDown size={13} /> CSV
+                </button>
+              )}
             </div>
-            <div className="overflow-x-auto">
+
+            {/* Mobile: cards */}
+            <div className="md:hidden divide-y divide-white/[0.05]">
+              {receipts.map(r => (
+                <div key={r.id} className="px-4 py-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="text-sm font-medium text-slate-100 truncate">{r.client_name ?? r.client_cnpj ?? '—'}</span>
+                    <span className="text-sm font-semibold text-emerald-300 tabular-nums flex-shrink-0">{formatBRL(r.commission_value)}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-xs text-slate-400">
+                    <span>{r.paid_at ? new Date(r.paid_at).toLocaleDateString('pt-BR') : '—'}{r.nf ? ` · NF ${r.nf}` : ''}</span>
+                    <span className="tabular-nums">pago {formatBRL(r.paid_value)}</span>
+                  </div>
+                  <div className="mt-0.5 flex items-center justify-between text-[11px] text-slate-500">
+                    <span className="truncate">{isManager ? ((r as any).am_name ?? r.omie_vendor_name ?? 'sem AM') : (r.parcela ?? '')}</span>
+                    <span>margem {r.margin != null ? `${Number(r.margin).toFixed(1)}%` : '—'} · taxa {formatPct(r.rate)}</span>
+                  </div>
+                </div>
+              ))}
+              {!receipts.length && <div className="px-4 py-10 text-center text-slate-500 text-sm">Nenhum recebimento neste período.</div>}
+            </div>
+
+            {/* Desktop: tabela */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-sm whitespace-nowrap">
                 <thead>
-                  <tr className="text-[11px] uppercase tracking-wider text-indigo-300/60 text-left">
+                  <tr className="text-[11px] uppercase tracking-wider text-slate-500 text-left">
                     <th className="px-4 py-2 font-semibold">Pago em</th>
                     <th className="px-4 py-2 font-semibold">Cliente</th>
                     {isManager && <th className="px-4 py-2 font-semibold">AM</th>}
@@ -229,22 +258,25 @@ export default function ComissoesPage() {
                     <th className="px-4 py-2 font-semibold text-right">Comissão</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-indigo-400/5">
+                <tbody className="divide-y divide-white/[0.05]">
                   {receipts.map(r => (
-                    <tr key={r.id} className="hover:bg-white/5">
-                      <td className="px-4 py-2 text-indigo-200 tabular-nums">{r.paid_at ? new Date(r.paid_at).toLocaleDateString('pt-BR') : '—'}</td>
+                    <tr key={r.id} className="hover:bg-white/[0.04]">
+                      <td className="px-4 py-2 text-slate-300 tabular-nums">{r.paid_at ? new Date(r.paid_at).toLocaleDateString('pt-BR') : '—'}</td>
                       <td className="px-4 py-2">
-                        <div className="flex items-center gap-1.5 max-w-[220px]"><Building2 size={12} className="text-indigo-400/60 flex-shrink-0" /><span className="truncate text-indigo-50">{r.client_name ?? r.client_cnpj ?? '—'}</span></div>
+                        <div className="flex items-center gap-1.5 max-w-[220px]"><Building2 size={12} className="text-slate-500 flex-shrink-0" /><span className="truncate text-slate-100">{r.client_name ?? r.client_cnpj ?? '—'}</span></div>
                       </td>
-                      {isManager && <td className="px-4 py-2 text-indigo-200">{(r as any).am_name ?? <span className="text-amber-300/80">{r.omie_vendor_name ?? 'sem AM'}</span>}</td>}
-                      <td className="px-4 py-2 text-indigo-300/80 text-xs">{[r.nf && `NF ${r.nf}`, r.pedido && `#${r.pedido}`, r.parcela].filter(Boolean).join(' · ') || '—'}</td>
-                      <td className="px-4 py-2 text-right tabular-nums text-indigo-100">{formatBRL(r.paid_value)}</td>
-                      <td className="px-4 py-2 text-right tabular-nums text-indigo-300">{r.margin != null ? `${Number(r.margin).toFixed(1)}%` : '—'}</td>
-                      <td className="px-4 py-2 text-right tabular-nums text-indigo-300">{formatPct(r.rate)}</td>
+                      {isManager && <td className="px-4 py-2 text-slate-300">{(r as any).am_name ?? <span className="text-amber-300/80">{r.omie_vendor_name ?? 'sem AM'}</span>}</td>}
+                      <td className="px-4 py-2 text-slate-400 text-xs">{[r.nf && `NF ${r.nf}`, r.pedido && `#${r.pedido}`, r.parcela].filter(Boolean).join(' · ') || '—'}</td>
+                      <td className="px-4 py-2 text-right tabular-nums text-slate-200">{formatBRL(r.paid_value)}</td>
+                      <td className="px-4 py-2 text-right tabular-nums text-slate-400" title={r.margin_source ? (MARGIN_SOURCE_LABEL[r.margin_source] ?? '') : 'Sem fonte de margem — comissão zerada'}>
+                        {r.margin != null ? `${Number(r.margin).toFixed(1)}%` : '—'}
+                        {r.margin_source === 'bitrix' && <span className="ml-1 text-[9px] px-1 py-0.5 rounded bg-cyan-400/10 text-cyan-300 align-middle">B24</span>}
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums text-slate-400">{formatPct(r.rate)}</td>
                       <td className="px-4 py-2 text-right tabular-nums font-semibold text-emerald-300">{formatBRL(r.commission_value)}</td>
                     </tr>
                   ))}
-                  {!receipts.length && <tr><td colSpan={isManager ? 8 : 7} className="px-4 py-10 text-center text-indigo-300/60">Nenhum recebimento neste período.</td></tr>}
+                  {!receipts.length && <tr><td colSpan={isManager ? 8 : 7} className="px-4 py-10 text-center text-slate-500">Nenhum recebimento neste período.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -253,6 +285,28 @@ export default function ComissoesPage() {
       )}
     </TechShell>
   )
+}
+
+function exportCsv(receipts: CommissionReceipt[], year: number, month: number, isManager: boolean) {
+  const brNum = (v: unknown) => String(v ?? '').replace('.', ',')
+  const head = ['Pago em', 'Cliente', 'CNPJ', ...(isManager ? ['AM', 'Vendedor Omie'] : []), 'NF', 'Pedido', 'Parcela', 'Pago (R$)', 'Margem %', 'Taxa %', 'Comissão (R$)']
+  const lines = receipts.map(r => [
+    r.paid_at ? new Date(r.paid_at).toLocaleDateString('pt-BR') : '',
+    r.client_name ?? '', r.client_cnpj ?? '',
+    ...(isManager ? [(r as any).am_name ?? '', r.omie_vendor_name ?? ''] : []),
+    r.nf ?? '', r.pedido ?? '', r.parcela ?? '',
+    brNum(r.paid_value), r.margin != null ? brNum(Number(r.margin).toFixed(2)) : '',
+    r.rate != null ? brNum((Number(r.rate) * 100).toFixed(3)) : '', brNum(r.commission_value),
+  ])
+  const csv = [head, ...lines]
+    .map(cols => cols.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';'))
+    .join('\r\n')
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = `comissoes-${year}-${String(month).padStart(2, '0')}.csv`
+  a.click()
+  URL.revokeObjectURL(a.href)
 }
 
 function sumField(rows: CommissionReceipt[], field: 'paid_value' | 'commission_value'): number {
