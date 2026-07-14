@@ -36,13 +36,15 @@ export function useCurrentUser() {
 
 // Papéis que podem ver cada área
 export const ROLE_ACCESS: Record<string, Role[]> = {
-  home:         ['insidesales', 'financeiro', 'admin'],
-  atualizacao:  ['insidesales', 'admin'],
-  aprovacoes:   ['insidesales', 'financeiro', 'admin'],
-  historico:    ['insidesales', 'financeiro', 'admin'],
-  solicitacoes: ['financeiro', 'admin'],             // aprovação de atualização
-  cadastros:    ['insidesales', 'admin'],            // fornecedores, famílias, pagamentos
-  admin:        ['admin'],
+  home:            ['insidesales', 'financeiro', 'admin', 'am'],
+  atualizacao:     ['insidesales', 'admin'],
+  aprovacoes:      ['insidesales', 'financeiro', 'admin'],
+  historico:       ['insidesales', 'financeiro', 'admin'],
+  solicitacoes:    ['financeiro', 'admin'],             // aprovação de atualização
+  cadastros:       ['insidesales', 'admin'],            // fornecedores, famílias, pagamentos
+  comissoes:       ['am', 'financeiro', 'admin'],       // AM vê as suas; Financeiro/Admin veem todas
+  comissoes_admin: ['admin'],                           // config avançada (faixas, de-para, regras)
+  admin:           ['admin'],
 }
 
 export function canAccess(area: keyof typeof ROLE_ACCESS, role?: Role | null): boolean {

@@ -65,6 +65,15 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    label: 'Comissões',
+    emoji: '💰',
+    items: [
+      { href: '/comissoes',           label: 'Painel',     emoji: '📈', area: 'comissoes' },
+      { href: '/comissoes/historico', label: 'Histórico',  emoji: '🗓️', area: 'comissoes' },
+      { href: '/admin/comissoes',     label: 'Configuração', emoji: '⚙️', area: 'comissoes_admin' },
+    ],
+  },
+  {
     label: 'Cadastros',
     emoji: '🗂️',
     items: [
@@ -87,12 +96,14 @@ const ROLE_LABEL: Record<string, string> = {
   insidesales: 'Inside Sales',
   financeiro:  'Financeiro',
   admin:       'Administrador',
+  am:          'Account Manager',
 }
 
 const ROLE_COLOR: Record<string, string> = {
   insidesales: 'bg-blue-500',
   financeiro:  'bg-violet-500',
   admin:       'bg-emerald-500',
+  am:          'bg-amber-500',
 }
 
 function NavDropdown({ group, role, badgeCounts }: { group: NavGroup; role: string | null; badgeCounts?: Record<string, number> }) {

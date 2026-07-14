@@ -22,18 +22,21 @@ const ROLE_LABEL: Record<Role, string> = {
   insidesales: 'Inside Sales',
   financeiro:  'Financeiro',
   admin:       'Administrador',
+  am:          'Account Manager',
 }
 
 const ROLE_AVATAR: Record<Role, string> = {
   insidesales: 'bg-blue-600',
   financeiro:  'bg-violet-600',
   admin:       'bg-emerald-600',
+  am:          'bg-amber-600',
 }
 
 const ROLE_RING: Record<Role, string> = {
   insidesales: 'ring-blue-200',
   financeiro:  'ring-violet-200',
   admin:       'ring-emerald-200',
+  am:          'ring-amber-200',
 }
 
 function fmtRelative(s?: string) {

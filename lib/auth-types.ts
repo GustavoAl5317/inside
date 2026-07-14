@@ -1,4 +1,4 @@
-export type Role = 'insidesales' | 'financeiro' | 'admin'
+export type Role = 'insidesales' | 'financeiro' | 'admin' | 'am'
 
 export interface SessionUser {
   bitrixUserId: string

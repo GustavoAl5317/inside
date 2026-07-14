@@ -27,12 +27,14 @@ interface BitrixUser { id: number; fullName: string; email?: string }
 const ROLE_OPTIONS: Array<{ value: Role; label: string }> = [
   { value: 'insidesales', label: 'Inside Sales' },
   { value: 'financeiro',  label: 'Financeiro' },
+  { value: 'am',          label: 'Account Manager' },
   { value: 'admin',       label: 'Administrador' },
 ]
 
 const ROLE_BADGE: Record<Role, string> = {
   insidesales: 'bg-blue-50 text-blue-700 ring-blue-200',
   financeiro:  'bg-violet-50 text-violet-700 ring-violet-200',
+  am:          'bg-amber-50 text-amber-700 ring-amber-200',
   admin:       'bg-emerald-50 text-emerald-700 ring-emerald-200',
 }
 

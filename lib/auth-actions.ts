@@ -172,7 +172,7 @@ export async function upsertAppUserAction(input: {
     const admin = await requireAdmin()
     const bitrixUserId = String(input.bitrixUserId)
     const role: Role = input.role
-    if (!['insidesales', 'financeiro', 'admin'].includes(role)) {
+    if (!['insidesales', 'financeiro', 'admin', 'am'].includes(role)) {
       return { success: false as const, error: 'Papel inválido' }
     }
     await sql`
@@ -190,7 +190,7 @@ export async function upsertAppUserAction(input: {
 export async function setUserRoleAction(bitrixUserId: string, role: Role) {
   try {
     await requireAdmin()
-    if (!['insidesales', 'financeiro', 'admin'].includes(role)) {
+    if (!['insidesales', 'financeiro', 'admin', 'am'].includes(role)) {
       return { success: false as const, error: 'Papel inválido' }
     }
     await sql`UPDATE app_users SET role = ${role} WHERE bitrix_user_id = ${bitrixUserId}`
