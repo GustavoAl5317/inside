@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import {
   Loader2, Settings2, ShieldAlert, SlidersHorizontal, Layers, Users,
-  Plus, Trash2, Save, Download, Merge, Search,
+  Plus, Trash2, Save, Download, Merge, Search, X, Check, Wand2,
 } from 'lucide-react'
 import { useCurrentUser, canAccess } from '@/components/current-user-provider'
 import {
@@ -196,6 +196,8 @@ function VendorsTab() {
   const [q, setQ] = useState('')
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState<string | null>(null)
+  const [mergeOpen, setMergeOpen] = useState(false)
+  const [nameDraft, setNameDraft] = useState<Record<string, string>>({})
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -220,16 +222,20 @@ function VendorsTab() {
     setBusy(null)
   }
 
-  const consolidate = async () => {
-    if (sel.size < 2) { toast.error('Selecione ao menos 2 códigos para consolidar.'); return }
+  const saveName = async (code: string, name: string) => {
+    const v = vendors.find(x => x.omie_vendor_code === code)
+    if (!v || (v.canonical_name ?? '') === name) return
+    const r = await updateVendorAction({ code, canonicalName: name })
+    if (r.success) setVendors(vs => vs.map(x => x.omie_vendor_code === code ? { ...x, canonical_name: name } : x))
+    else toast.error(r.error)
+  }
+
+  const doMerge = async (canonicalName: string, amId: string | null) => {
     const codes = [...sel]
-    const first = vendors.find(v => v.omie_vendor_code === codes[0])
-    const canonical = prompt('Nome consolidado deste AM:', first?.canonical_name ?? first?.omie_vendor_name ?? '')
-    if (!canonical) return
-    const amId = first?.app_user_bitrix_id ?? null
     setBusy('merge')
-    const r = await mergeVendorsAction({ codes, appUserBitrixId: amId, canonicalName: canonical })
-    if (r.success) { toast.success(`${codes.length} códigos consolidados em "${canonical}".`); setSel(new Set()); await load() } else toast.error(r.error)
+    const r = await mergeVendorsAction({ codes, appUserBitrixId: amId, canonicalName })
+    if (r.success) { toast.success(`${codes.length} vendedores consolidados em "${canonicalName}".`); setSel(new Set()); setMergeOpen(false); await load() }
+    else toast.error(r.error)
     setBusy(null)
   }
 
@@ -241,23 +247,53 @@ function VendorsTab() {
       || v.omie_vendor_code.includes(term))
   }, [vendors, q])
 
+  const dup = useMemo(() => {
+    const norm = (s?: string | null) => (s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim()
+    const counts = new Map<string, number>()
+    for (const v of vendors) { const k = norm(v.canonical_name ?? v.omie_vendor_name); if (k) counts.set(k, (counts.get(k) ?? 0) + 1) }
+    return { is: (v: CommissionVendor) => (counts.get(norm(v.canonical_name ?? v.omie_vendor_name)) ?? 0) > 1 }
+  }, [vendors])
+
   const unmapped = vendors.filter(v => !v.app_user_bitrix_id).length
+  const dupCount = vendors.filter(v => dup.is(v)).length
+  const selectedVendors = vendors.filter(v => sel.has(v.omie_vendor_code))
+  const selectDuplicates = () => setSel(new Set(vendors.filter(v => dup.is(v)).map(v => v.omie_vendor_code)))
 
   if (loading) return <div className="flex justify-center py-16"><Loader2 className="w-5 h-5 animate-spin text-cyan-400" /></div>
 
   return (
+    <>
     <GlassCard className="p-0 overflow-hidden">
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3 justify-between px-4 py-3 border-b border-indigo-400/10">
-        <div className="relative flex-1 max-w-xs">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-indigo-400/60 w-4 h-4" />
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar vendedor..." className="w-full text-sm pl-8 pr-3 py-1.5 rounded-lg bg-white/5 text-indigo-50 ring-1 ring-indigo-400/20 outline-none" />
+      <div className="flex flex-col gap-3 px-4 py-3 border-b border-indigo-400/10">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
+          <div className="relative flex-1 max-w-xs">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-indigo-400/60 w-4 h-4" />
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar vendedor..." className="w-full text-sm pl-8 pr-3 py-1.5 rounded-lg bg-white/5 text-indigo-50 ring-1 ring-indigo-400/20 outline-none" />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {unmapped > 0 && <span className="text-[11px] px-2 py-1 rounded-full bg-amber-500/15 text-amber-300">{unmapped} sem AM</span>}
+            {dupCount > 0 && (
+              <TechButton variant="ghost" onClick={selectDuplicates} title="Selecionar prováveis duplicados"><Wand2 size={14} /> Duplicados ({dupCount})</TechButton>
+            )}
+            <TechButton variant="primary" onClick={doImport} disabled={importing}>{importing ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Importar do Omie</TechButton>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          {unmapped > 0 && <span className="text-[11px] px-2 py-1 rounded-full bg-amber-500/15 text-amber-300">{unmapped} sem AM</span>}
-          <TechButton variant="ghost" onClick={consolidate} disabled={busy === 'merge' || sel.size < 2}>{busy === 'merge' ? <Loader2 size={14} className="animate-spin" /> : <Merge size={14} />} Consolidar ({sel.size})</TechButton>
-          <TechButton variant="primary" onClick={doImport} disabled={importing}>{importing ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Importar do Omie</TechButton>
-        </div>
+        <p className="text-[11px] text-indigo-300/60 leading-relaxed">
+          Cada <strong className="text-indigo-200">vendedor do Omie</strong> (esquerda) liga a um <strong className="text-indigo-200">AM do sistema</strong> (direita) que recebe a comissão. O nome é <strong className="text-indigo-200">editável direto na linha</strong>. Para juntar duplicados, marque as linhas iguais e clique em <strong className="text-indigo-200">Consolidar</strong>.
+        </p>
       </div>
+
+      {sel.size > 0 && (
+        <div className="flex items-center justify-between gap-3 px-4 py-2 bg-cyan-500/5 border-b border-cyan-400/10">
+          <span className="text-sm text-cyan-200">{sel.size} selecionado(s)</span>
+          <div className="flex items-center gap-3">
+            <button onClick={() => setSel(new Set())} className="text-xs text-indigo-300 hover:text-white">Limpar</button>
+            <TechButton variant="primary" onClick={() => { if (sel.size < 2) { toast.error('Selecione ao menos 2 vendedores.'); return } setMergeOpen(true) }} disabled={sel.size < 2}>
+              <Merge size={14} /> Consolidar {sel.size} em 1
+            </TechButton>
+          </div>
+        </div>
+      )}
 
       {!vendors.length ? (
         <div className="p-10 text-center text-indigo-300/70">
@@ -268,8 +304,8 @@ function VendorsTab() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm whitespace-nowrap">
             <thead><tr className="text-[11px] uppercase tracking-wider text-indigo-300/60 text-left">
-              <th className="px-3 py-2 w-8"></th><th className="px-3 py-2">Vendedor no Omie</th><th className="px-3 py-2">Código</th>
-              <th className="px-3 py-2">Filial</th><th className="px-3 py-2">AM (recebe a comissão)</th>
+              <th className="px-3 py-2 w-8"></th><th className="px-3 py-2">Vendedor (nome — editável)</th><th className="px-3 py-2">Código Omie</th>
+              <th className="px-3 py-2">Filial</th><th className="px-3 py-2">AM que recebe</th>
             </tr></thead>
             <tbody className="divide-y divide-indigo-400/5">
               {filtered.map(v => (
@@ -277,7 +313,21 @@ function VendorsTab() {
                   <td className="px-3 py-2">
                     <input type="checkbox" checked={sel.has(v.omie_vendor_code)} onChange={e => setSel(s => { const n = new Set(s); e.target.checked ? n.add(v.omie_vendor_code) : n.delete(v.omie_vendor_code); return n })} className="w-4 h-4 accent-cyan-500" />
                   </td>
-                  <td className="px-3 py-2"><span className="text-indigo-50">{v.canonical_name ?? v.omie_vendor_name}</span>{v.canonical_name && v.canonical_name !== v.omie_vendor_name && <span className="text-[10px] text-indigo-300/50 ml-1.5">({v.omie_vendor_name})</span>}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        value={nameDraft[v.omie_vendor_code] ?? (v.canonical_name ?? v.omie_vendor_name ?? '')}
+                        onChange={e => setNameDraft(d => ({ ...d, [v.omie_vendor_code]: e.target.value }))}
+                        onBlur={e => saveName(v.omie_vendor_code, e.target.value.trim())}
+                        onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                        className="w-44 bg-white/5 rounded-lg px-2 py-1.5 text-sm text-indigo-50 ring-1 ring-indigo-400/20 focus:ring-cyan-400/50 outline-none"
+                      />
+                      {dup.is(v) && <span title="Possível duplicado" className="text-[9px] px-1.5 py-0.5 rounded bg-fuchsia-500/20 text-fuchsia-300">dup</span>}
+                    </div>
+                    {v.canonical_name && v.omie_vendor_name && v.canonical_name !== v.omie_vendor_name && (
+                      <div className="text-[10px] text-indigo-300/40 mt-0.5 pl-1">Omie: {v.omie_vendor_name}</div>
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-indigo-300/70 tabular-nums text-xs">{v.omie_vendor_code}</td>
                   <td className="px-3 py-2 text-indigo-300/70 text-xs">{v.branch ?? '—'}</td>
                   <td className="px-3 py-2">
@@ -297,5 +347,69 @@ function VendorsTab() {
         </div>
       )}
     </GlassCard>
+
+    {mergeOpen && (
+      <MergeModal vendors={selectedVendors} ams={ams} busy={busy === 'merge'} onClose={() => setMergeOpen(false)} onConfirm={doMerge} />
+    )}
+    </>
+  )
+}
+
+function MergeModal({ vendors, ams, busy, onClose, onConfirm }: {
+  vendors: CommissionVendor[]; ams: AmUser[]; busy: boolean
+  onClose: () => void; onConfirm: (name: string, amId: string | null) => void
+}) {
+  const distinctNames = [...new Set(vendors.map(v => (v.canonical_name ?? v.omie_vendor_name ?? '').trim()).filter(Boolean))]
+  const [name, setName] = useState(distinctNames[0] ?? '')
+  const [amId, setAmId] = useState(vendors.find(v => v.app_user_bitrix_id)?.app_user_bitrix_id ?? '')
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} className="w-full max-w-lg rounded-2xl bg-[#0d1330] ring-1 ring-indigo-400/25 shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-indigo-400/10">
+          <div className="flex items-center gap-2"><Merge size={16} className="text-cyan-300" /><h3 className="font-semibold text-white">Consolidar vendedores</h3></div>
+          <button onClick={onClose} className="p-1 rounded-lg text-indigo-300 hover:bg-white/10"><X size={16} /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <p className="text-[11px] uppercase tracking-wider text-indigo-300/60 mb-1.5">{vendors.length} códigos que viram 1 pessoa</p>
+            <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+              {vendors.map(v => (
+                <span key={v.omie_vendor_code} className="text-[11px] px-2 py-1 rounded-lg bg-white/5 ring-1 ring-indigo-400/15 text-indigo-200">
+                  {v.canonical_name ?? v.omie_vendor_name} <span className="text-indigo-400/50">· {v.omie_vendor_code}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-indigo-100 mb-1">Nome consolidado</label>
+            <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Nome do vendedor / AM"
+              className="w-full bg-white/5 rounded-lg px-3 py-2 text-indigo-50 ring-1 ring-indigo-400/20 focus:ring-cyan-400/50 outline-none" />
+            {distinctNames.length > 1 && (
+              <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                <span className="text-[10px] text-indigo-300/50">usar:</span>
+                {distinctNames.map(n => (
+                  <button key={n} onClick={() => setName(n)}
+                    className={`text-[11px] px-2 py-1 rounded-lg ring-1 ${name === n ? 'bg-cyan-500/20 text-cyan-200 ring-cyan-400/40' : 'bg-white/5 text-indigo-300 ring-indigo-400/15 hover:bg-white/10'}`}>{n}</button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-indigo-100 mb-1">AM que recebe a comissão</label>
+            <select value={amId} onChange={e => setAmId(e.target.value)}
+              className="w-full bg-white/5 rounded-lg px-3 py-2 text-indigo-50 ring-1 ring-indigo-400/20 outline-none">
+              <option value="">— definir depois —</option>
+              {ams.map(a => <option key={a.bitrix_user_id} value={a.bitrix_user_id}>{a.name}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 px-5 py-3.5 border-t border-indigo-400/10">
+          <TechButton variant="ghost" onClick={onClose}>Cancelar</TechButton>
+          <TechButton variant="primary" onClick={() => onConfirm(name.trim(), amId || null)} disabled={busy || !name.trim()}>
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Consolidar
+          </TechButton>
+        </div>
+      </div>
+    </div>
   )
 }
