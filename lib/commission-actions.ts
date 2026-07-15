@@ -4,9 +4,9 @@ import { sql } from '@/lib/db'
 import { getSessionUser } from '@/lib/auth-actions'
 import type { SessionUser } from '@/lib/auth-types'
 import { ensureCommissionSchema } from '@/lib/commission/schema'
-import { fetchMonthReceipts, fetchOmieVendors } from '@/lib/commission/omie-financas'
+import { fetchMonthReceipts, fetchOmieVendors, SALES_DOC_TYPES } from '@/lib/commission/omie-financas'
 import { findDealMargin, resolveRate } from '@/lib/commission/margin'
-import { getBitrixDealMarginById, parseNumCtrDealId } from '@/lib/bitrix-service'
+import { getBitrixDealInfoById, getBitrixUserName, parseNumCtrDealId } from '@/lib/bitrix-service'
 import type {
   CommissionTier, CommissionSettings, CommissionVendor, CommissionReceipt,
   CommissionPeriod, AmCommissionSummary, CommissionAudit, PeriodTotals,
@@ -295,19 +295,24 @@ export async function syncPeriodAction(year: number, month: number): Promise<Res
     const vmap = new Map<string, any>()
     for (const v of vendorRows) vmap.set(String(v.omie_vendor_code), v)
 
+    // Usuários do app (para saber quem já loga no sistema) — o AM vem do responsável do Bitrix
+    const appUserRows = await sql`SELECT bitrix_user_id, name FROM app_users`
+    const appUsers = new Map<string, string>()
+    for (const u of appUserRows) appUsers.set(String(u.bitrix_user_id), String(u.name))
+
     const receipts = await fetchMonthReceipts(year, month)
 
     // refresh total do período
     await sql`DELETE FROM commission_receipts WHERE period_id = ${period.id}`
 
     const localCache = new Map<string, { margin: number | null; dealId: number | null }>()
-    const bitrixCache = new Map<number, number | null>()
+    const dealCache = new Map<number, { margin: number | null; assignedById: string | null; title: string | null } | null>()
+    const userNameCache = new Map<string, string | null>()
     let paidTotal = 0, commissionTotal = 0, unmapped = 0
     const amSet = new Set<string>()
 
     for (const r of receipts) {
       const vendor = r.vendorCode ? vmap.get(r.vendorCode) : null
-      // auto-cadastra vendedor visto no recebimento (fica sem AM até o admin mapear)
       if (r.vendorCode && !vendor) {
         await sql`
           INSERT INTO commission_vendors (omie_vendor_code, omie_vendor_name, branch, canonical_name)
@@ -315,24 +320,39 @@ export async function syncPeriodAction(year: number, month: number): Promise<Res
           ON CONFLICT (omie_vendor_code) DO NOTHING`
         vmap.set(r.vendorCode, { app_user_bitrix_id: null, canonical_name: r.vendorName, omie_vendor_name: r.vendorName })
       }
-      const amId: string | null = vendor?.app_user_bitrix_id ?? null
-      if (!amId) {
-        unmapped++
-        if (ignoreUnmapped) continue
-      } else amSet.add(amId)
 
-      // Margem em 3 níveis: negócio Bitrix (cNumCtr, gravada pelo bp-49)
-      //   → negócio local (deals) → margem padrão da configuração
+      // Negócio do Bitrix (cNumCtr → crm.deal): responsável = AM, título = projeto, margem
+      const bitrixDealId = parseNumCtrDealId(r.numCtr)
+      let dealInfo = null as null | { margin: number | null; assignedById: string | null; title: string | null }
+      if (bitrixDealId) {
+        if (!dealCache.has(bitrixDealId)) dealCache.set(bitrixDealId, await getBitrixDealInfoById(bitrixDealId))
+        dealInfo = dealCache.get(bitrixDealId) ?? null
+      }
+
+      // ── AM: 1º responsável do Bitrix; 2º de-para do vendedor Omie ──
+      let amId: string | null = null
+      let amSource: string | null = null
+      let responsibleName: string | null = null
+      if (dealInfo?.assignedById) {
+        amId = dealInfo.assignedById
+        amSource = 'bitrix'
+        if (!userNameCache.has(amId)) userNameCache.set(amId, appUsers.get(amId) ?? await getBitrixUserName(amId))
+        responsibleName = userNameCache.get(amId) ?? null
+      } else if (vendor?.app_user_bitrix_id) {
+        amId = String(vendor.app_user_bitrix_id)
+        amSource = 'omie'
+        responsibleName = appUsers.get(amId) ?? null
+      }
+
+      const isSale = !r.docType || SALES_DOC_TYPES.has(r.docType)
+      if (!amId) { if (isSale) unmapped++ ; if (ignoreUnmapped) continue }
+      else amSet.add(amId)
+
+      // ── Margem: 1º negócio Bitrix; 2º negócio local; 3º padrão ──
       let margin: number | null = null
       let marginSource: string | null = null
       let localDealId: number | null = null
-
-      const bitrixDealId = useBitrixMargin ? parseNumCtrDealId(r.numCtr) : null
-      if (bitrixDealId) {
-        if (!bitrixCache.has(bitrixDealId)) bitrixCache.set(bitrixDealId, await getBitrixDealMarginById(bitrixDealId))
-        const m = bitrixCache.get(bitrixDealId)!
-        if (m != null) { margin = m; marginSource = 'bitrix' }
-      }
+      if (useBitrixMargin && dealInfo?.margin != null) { margin = dealInfo.margin; marginSource = 'bitrix' }
       if (margin == null && r.pedido) {
         if (!localCache.has(r.pedido)) localCache.set(r.pedido, await findDealMargin(r.pedido))
         const info = localCache.get(r.pedido)!
@@ -350,17 +370,21 @@ export async function syncPeriodAction(year: number, month: number): Promise<Res
         INSERT INTO commission_receipts (
           period_id, omie_key, branch, omie_vendor_code, omie_vendor_name, app_user_bitrix_id,
           client_name, client_cnpj, nf, pedido, parcela, paid_at, paid_value,
-          margin, margin_source, num_ctr, rate, commission_value, deal_id
+          margin, margin_source, num_ctr, project_name, bitrix_assigned_id, responsible_name,
+          doc_type, am_source, rate, commission_value, deal_id
         ) VALUES (
           ${period.id}, ${r.omieKey}, ${r.branch}, ${r.vendorCode}, ${r.vendorName ?? vendor?.omie_vendor_name ?? null}, ${amId},
           ${r.clientName}, ${r.clientCnpj}, ${r.nf}, ${r.pedido}, ${r.parcela}, ${r.paidAt}, ${r.paidValue},
-          ${margin}, ${marginSource}, ${r.numCtr}, ${rate}, ${commission}, ${localDealId}
+          ${margin}, ${marginSource}, ${r.numCtr}, ${dealInfo?.title ?? null}, ${dealInfo?.assignedById ?? null}, ${responsibleName},
+          ${r.docType}, ${amSource}, ${rate}, ${commission}, ${localDealId}
         )
         ON CONFLICT (period_id, omie_key) DO UPDATE SET
           paid_value = EXCLUDED.paid_value, margin = EXCLUDED.margin,
           margin_source = EXCLUDED.margin_source, num_ctr = EXCLUDED.num_ctr,
-          rate = EXCLUDED.rate, commission_value = EXCLUDED.commission_value,
-          app_user_bitrix_id = EXCLUDED.app_user_bitrix_id`
+          project_name = EXCLUDED.project_name, bitrix_assigned_id = EXCLUDED.bitrix_assigned_id,
+          responsible_name = EXCLUDED.responsible_name, doc_type = EXCLUDED.doc_type,
+          am_source = EXCLUDED.am_source, rate = EXCLUDED.rate,
+          commission_value = EXCLUDED.commission_value, app_user_bitrix_id = EXCLUDED.app_user_bitrix_id`
     }
 
     const totals: PeriodTotals = {
@@ -394,12 +418,12 @@ export async function getPeriodDetailAction(year: number, month: number): Promis
     const onlyMine = user.role === 'am'
     const receipts = onlyMine
       ? await sql`
-          SELECT r.*, u.name AS am_name FROM commission_receipts r
+          SELECT r.*, COALESCE(u.name, r.responsible_name) AS am_name FROM commission_receipts r
           LEFT JOIN app_users u ON u.bitrix_user_id = r.app_user_bitrix_id
           WHERE r.period_id = ${period.id} AND r.app_user_bitrix_id = ${user.bitrixUserId}
           ORDER BY r.paid_at DESC, r.commission_value DESC`
       : await sql`
-          SELECT r.*, u.name AS am_name FROM commission_receipts r
+          SELECT r.*, COALESCE(u.name, r.responsible_name) AS am_name FROM commission_receipts r
           LEFT JOIN app_users u ON u.bitrix_user_id = r.app_user_bitrix_id
           WHERE r.period_id = ${period.id}
           ORDER BY r.paid_at DESC, r.commission_value DESC`
@@ -408,7 +432,7 @@ export async function getPeriodDetailAction(year: number, month: number): Promis
     const map = new Map<string, AmCommissionSummary>()
     for (const r of receipts as CommissionReceipt[]) {
       const key = r.app_user_bitrix_id ?? '__none__'
-      const name = (r as any).am_name ?? (r.app_user_bitrix_id ? `AM ${r.app_user_bitrix_id}` : 'Sem AM mapeado')
+      const name = (r as any).am_name ?? r.responsible_name ?? (r.app_user_bitrix_id ? `AM ${r.app_user_bitrix_id}` : 'Sem AM')
       if (!map.has(key)) {
         map.set(key, {
           app_user_bitrix_id: r.app_user_bitrix_id, am_name: name, vendorNames: [],

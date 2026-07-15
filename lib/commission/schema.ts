@@ -110,6 +110,11 @@ export async function ensureCommissionSchema(): Promise<void> {
   await sql`ALTER TABLE commission_settings ADD COLUMN IF NOT EXISTS ignore_unmapped BOOLEAN NOT NULL DEFAULT FALSE`
   await sql`ALTER TABLE commission_receipts ADD COLUMN IF NOT EXISTS margin_source VARCHAR(16)`
   await sql`ALTER TABLE commission_receipts ADD COLUMN IF NOT EXISTS num_ctr VARCHAR(40)`
+  await sql`ALTER TABLE commission_receipts ADD COLUMN IF NOT EXISTS project_name VARCHAR(300)`
+  await sql`ALTER TABLE commission_receipts ADD COLUMN IF NOT EXISTS bitrix_assigned_id VARCHAR(50)`
+  await sql`ALTER TABLE commission_receipts ADD COLUMN IF NOT EXISTS responsible_name VARCHAR(255)`
+  await sql`ALTER TABLE commission_receipts ADD COLUMN IF NOT EXISTS doc_type VARCHAR(10)`
+  await sql`ALTER TABLE commission_receipts ADD COLUMN IF NOT EXISTS am_source VARCHAR(16)`
 
   // Settings default (linha única)
   await sql`INSERT INTO commission_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`

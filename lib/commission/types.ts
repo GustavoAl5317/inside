@@ -54,6 +54,11 @@ export interface CommissionReceipt {
   margin: number | null
   margin_source?: string | null   // bitrix | deal | default | null
   num_ctr?: string | null
+  project_name?: string | null
+  bitrix_assigned_id?: string | null
+  responsible_name?: string | null
+  doc_type?: string | null        // NFE | NFS | ...
+  am_source?: string | null       // bitrix | omie | null
   rate: number | null
   commission_value: number
   deal_id: number | null
@@ -63,6 +68,20 @@ export const MARGIN_SOURCE_LABEL: Record<string, string> = {
   bitrix: 'Margem do negócio no Bitrix',
   deal: 'Margem do negócio local',
   default: 'Margem padrão (configuração)',
+}
+
+export const AM_SOURCE_LABEL: Record<string, string> = {
+  bitrix: 'Responsável do negócio (Bitrix)',
+  omie: 'Vendedor do Omie (de-para)',
+}
+
+/** Classificação do recebimento por tipo de documento fiscal. */
+export function docKind(docType: string | null | undefined): { label: string; cls: string } {
+  const t = String(docType ?? '').toUpperCase()
+  if (t === 'NFS' || t === 'NFSE') return { label: 'Serviço', cls: 'bg-violet-400/10 text-violet-300 border-violet-400/25' }
+  if (t === 'NFE' || t === 'NFCE') return { label: 'Produto', cls: 'bg-sky-400/10 text-sky-300 border-sky-400/25' }
+  if (t === 'REC') return { label: 'Contrato', cls: 'bg-amber-400/10 text-amber-300 border-amber-400/25' }
+  return { label: t || '—', cls: 'bg-slate-400/10 text-slate-400 border-white/10' }
 }
 
 export interface CommissionPeriod {

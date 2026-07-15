@@ -1385,23 +1385,48 @@ export class BitrixService {
     }
   }
 }
+export interface BitrixDealInfo {
+  margin: number | null       // Margem % (UF_CRM_1652129369867) ou recalculada
+  assignedById: string | null // responsável do negócio = AM
+  title: string | null        // nome do projeto
+}
+
 /**
- * Margem do negócio no funil COMERCIAL (crm.deal), gravada pelo BP "bp-49":
- *   UF_CRM_1652129369867 = Margem %  ·  UF_CRM_1652129349632 = Custo  ·  OPPORTUNITY = Venda
- * O recebimento do Omie referencia o negócio via cNumCtr = "ano.ID" (UF_CRM_1654539371364).
- * Se a margem gravada estiver vazia, recalcula pela fórmula do BP: ((venda−custo)×0,415)/venda×100.
+ * Dados do negócio no funil COMERCIAL (crm.deal), a partir do ID em cNumCtr = "ano.ID".
+ * Margem gravada pelo BP "bp-49" (UF_CRM_1652129369867); se vazia, recalcula por
+ * ((venda−custo)×0,415)/venda×100. Responsável (ASSIGNED_BY_ID) é a fonte do AM.
  */
-export async function getBitrixDealMarginById(dealId: number): Promise<number | null> {
+export async function getBitrixDealInfoById(dealId: number): Promise<BitrixDealInfo | null> {
   try {
     const j: any = await bGet(`/crm.deal.get.json?id=${dealId}`)
     const d = j?.result
     if (!d) return null
+    let margin: number | null = null
     const direct = Number(String(d.UF_CRM_1652129369867 ?? '').replace(',', '.'))
-    if (Number.isFinite(direct) && direct !== 0) return direct
-    const opp = Number(String(d.OPPORTUNITY ?? '').split('|')[0])
-    const cost = Number(String(d.UF_CRM_1652129349632 ?? '').split('|')[0])
-    if (opp > 0 && Number.isFinite(cost)) return ((opp - cost) * 0.415) / opp * 100
+    if (Number.isFinite(direct) && direct !== 0) margin = direct
+    else {
+      const opp = Number(String(d.OPPORTUNITY ?? '').split('|')[0])
+      const cost = Number(String(d.UF_CRM_1652129349632 ?? '').split('|')[0])
+      if (opp > 0 && Number.isFinite(cost)) margin = ((opp - cost) * 0.415) / opp * 100
+    }
+    return {
+      margin,
+      assignedById: d.ASSIGNED_BY_ID ? String(d.ASSIGNED_BY_ID) : null,
+      title: d.TITLE ? String(d.TITLE) : null,
+    }
+  } catch {
     return null
+  }
+}
+
+/** Nome completo de um usuário Bitrix (para nomear o AM responsável). */
+export async function getBitrixUserName(userId: string | number): Promise<string | null> {
+  try {
+    const j: any = await bGet(`/user.get.json?ID=${encodeURIComponent(String(userId))}`)
+    const u = Array.isArray(j?.result) ? j.result[0] : j?.result
+    if (!u) return null
+    const name = [u.NAME, u.LAST_NAME].filter(Boolean).join(' ').trim()
+    return name || u.EMAIL || null
   } catch {
     return null
   }

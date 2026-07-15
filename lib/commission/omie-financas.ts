@@ -46,11 +46,15 @@ export interface OmieReceipt {
   clientCnpj: string | null
   nf: string | null
   pedido: string | null    // nCodOS/nCodPedido do Omie (liga ao negócio local)
-  numCtr: string | null    // "ano.ID" do negócio Bitrix (gravado pelo bp-49) — fonte da margem
+  numCtr: string | null    // "ano.ID" do negócio Bitrix (gravado pelo bp-49) — fonte da margem/AM
+  docType: string | null   // cTipo: NFE (venda) | NFS (serviço) | REC/RES/REND (financeiro)
   parcela: string | null
   paidAt: string | null    // ISO yyyy-mm-dd
   paidValue: number
 }
+
+/** Tipos de documento que representam venda (geram comissão). */
+export const SALES_DOC_TYPES = new Set(['NFE', 'NFS', 'NFSE', 'NFCE', 'REC'])
 
 function ddmmyyyy(d: Date): string {
   return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`
@@ -110,6 +114,7 @@ export async function fetchMonthReceipts(year: number, month: number): Promise<O
           nf: d?.cNumDocFiscal ? String(d.cNumDocFiscal) : null,
           pedido: d?.cNumOS ? String(d.cNumOS) : (d?.cNumTitulo ? String(d.cNumTitulo) : null),
           numCtr: d?.cNumCtr ? String(d.cNumCtr).trim() : null,
+          docType: d?.cTipo ? String(d.cTipo).toUpperCase().trim() : null,
           parcela,
           paidAt: isoFromBr(d?.dDtPagamento) ?? isoFromBr(d?.dDtBaixa),
           paidValue,
