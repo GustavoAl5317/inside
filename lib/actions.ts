@@ -1517,6 +1517,24 @@ async function ensureUpdateRequestColumns() {
   }
 }
 
+const MIN_CHANGE_DESCRIPTION_LENGTH = 10
+
+function validateChangeDescription(text: string | undefined): { ok: true; value: string } | { ok: false; error: string } {
+  const value = text?.trim() ?? ''
+  if (value.length < MIN_CHANGE_DESCRIPTION_LENGTH) {
+    return {
+      ok: false,
+      error: `Descreva o que está alterando (mínimo ${MIN_CHANGE_DESCRIPTION_LENGTH} caracteres).`,
+    }
+  }
+  return { ok: true, value }
+}
+
+function buildUpdateRequestReason(changeDescription: string, contextSummary?: string): string {
+  const context = contextSummary?.trim()
+  return context ? `${changeDescription} · ${context}` : changeDescription
+}
+
 /** Notifica financeiro/admin no Bitrix24 sobre uma nova solicitação (best-effort). */
 async function notifyFinanceirosNewRequest(requesterId: string, requesterName: string, title: string) {
   try {
@@ -1544,12 +1562,17 @@ async function notifyFinanceirosNewRequest(requesterId: string, requesterName: s
  */
 export async function requestOrderUpdateApprovalAction(
   order: { orderKind: string; numero: string; branch: 'barueri' | 'es'; dealId?: number },
-  reason?: string,
+  changeDescription: string,
+  contextSummary?: string,
   pendingPatch?: unknown,
 ) {
   try {
     const user = await getSessionUser()
     if (!user || !user.active) return { success: false as const, error: "Sessão inválida. Recarregue a página." }
+
+    const desc = validateChangeDescription(changeDescription)
+    if (!desc.ok) return { success: false as const, error: desc.error }
+    const reason = buildUpdateRequestReason(desc.value, contextSummary)
 
     await ensureUpdateRequestColumns()
     const patchJson = pendingPatch ? JSON.stringify(pendingPatch) : null
@@ -1641,10 +1664,19 @@ export async function getMyPendingOrderApprovalsAction() {
  * Cria (ou reaproveita) uma solicitação pendente para o deal.
  * `pendingPatch` guarda o rascunho da edição parcial (Pedido Omie) para retomar após a aprovação.
  */
-export async function requestUpdateApprovalAction(dealId: number, reason?: string, pendingPatch?: unknown) {
+export async function requestUpdateApprovalAction(
+  dealId: number,
+  changeDescription: string,
+  contextSummary?: string,
+  pendingPatch?: unknown,
+) {
   try {
     const user = await getSessionUser()
     if (!user || !user.active) return { success: false as const, error: "Sessão inválida. Recarregue a página." }
+
+    const desc = validateChangeDescription(changeDescription)
+    if (!desc.ok) return { success: false as const, error: desc.error }
+    const reason = buildUpdateRequestReason(desc.value, contextSummary)
 
     await ensureUpdateRequestColumns()
     const patchJson = pendingPatch ? JSON.stringify(pendingPatch) : null

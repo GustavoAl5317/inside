@@ -259,7 +259,7 @@ export default function SolicitacoesPage() {
                           className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"
                         >
                           <ChevronDown size={12} className={`transition-transform ${expandedReason === req.id ? 'rotate-180' : ''}`} />
-                          {expandedReason === req.id ? 'Ocultar detalhes' : 'Ver detalhes do deal'}
+                          {expandedReason === req.id ? 'Ocultar detalhes' : 'Ver descrição da alteração'}
                         </button>
                         {expandedReason === req.id && (
                           <div className="mt-1.5 text-xs text-gray-700 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 leading-relaxed">

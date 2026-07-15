@@ -7,6 +7,8 @@ import * as z from "zod"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Form } from "@/components/ui/form"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import { BusinessTab } from "./form-tabs/business-tab"
 import { NotesTab } from "./form-tabs/notes-tab"
 import { SupplierGroupsTab } from "./form-tabs/supplier-groups-tab"
@@ -548,6 +550,7 @@ export function MultiStepForm({
   const { user } = useCurrentUser()
   const [approval, setApproval] = useState<{ status?: string; review_note?: string; reviewed_by_name?: string } | null>(null)
   const [requestingApproval, setRequestingApproval] = useState(false)
+  const [changeDescription, setChangeDescription] = useState('')
   const [justApproved, setJustApproved] = useState(false)
 
   const isUpdate = mode === 'update'
@@ -587,16 +590,21 @@ export function MultiStepForm({
 
   const handleRequestApproval = async () => {
     if (!existingDeal?.id) { toast.error('Nenhum deal selecionado.'); return }
+    const desc = changeDescription.trim()
+    if (desc.length < 10) {
+      toast.error('Descreva o que está alterando (mínimo 10 caracteres).')
+      return
+    }
     setRequestingApproval(true)
     try {
       const vals = form.getValues()
-      const reason = [
+      const context = [
         vals.business?.commercialProposal ? `Proposta: ${vals.business.commercialProposal}` : '',
         vals.business?.name               ? `Negócio: ${vals.business.name}`               : '',
         (vals.customers?.[0] as any)?.customer?.name ? `Cliente: ${(vals.customers[0] as any).customer.name}` : '',
       ].filter(Boolean).join(' · ') || undefined
 
-      const r = await requestUpdateApprovalAction(existingDeal.id, reason)
+      const r = await requestUpdateApprovalAction(existingDeal.id, desc, context)
       if (r.success) {
         toast.success(r.status === 'approved' ? 'Já existe uma aprovação vigente.' : 'Solicitação enviada ao financeiro!')
         await loadApproval(existingDeal.id)
@@ -1024,9 +1032,25 @@ export function MultiStepForm({
               <span className="ml-auto text-[10px] text-amber-500 font-medium">verificando automaticamente</span>
             </div>
           ) : (
-            <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-xl text-blue-700 text-sm">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              Para atualizar um pedido já gerado, solicite a aprovação do financeiro.
+            <div className="space-y-2 p-3 bg-blue-50 border border-blue-200 rounded-xl text-blue-700 text-sm">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>Para atualizar um pedido já gerado, descreva a alteração e solicite a aprovação do financeiro.</span>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="deal-change-description" className="text-xs font-semibold text-blue-800">
+                  O que está alterando? <span className="text-red-500">*</span>
+                </Label>
+                <Textarea
+                  id="deal-change-description"
+                  value={changeDescription}
+                  onChange={e => setChangeDescription(e.target.value)}
+                  placeholder="Ex.: Troquei fornecedor, ajustei quantidade do produto X, alterei condição de pagamento."
+                  rows={3}
+                  className="text-sm bg-white border-blue-200 focus-visible:ring-blue-300"
+                />
+                <p className="text-[10px] text-blue-600/80">Este texto vai junto com a solicitação para o financeiro.</p>
+              </div>
             </div>
           )
         )}
@@ -1070,7 +1094,7 @@ export function MultiStepForm({
                   <Button
                     type="button"
                     onClick={handleRequestApproval}
-                    disabled={requestingApproval}
+                    disabled={requestingApproval || changeDescription.trim().length < 10}
                     className="gap-1.5 bg-amber-600 hover:bg-amber-700"
                   >
                     {requestingApproval

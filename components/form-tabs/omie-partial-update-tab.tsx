@@ -595,6 +595,7 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
     pending_patch?: PendingPatchDraft | null
   } | null>(null)
   const [requestingApproval, setRequestingApproval] = useState(false)
+  const [changeDescription, setChangeDescription] = useState('')
   const [justApproved, setJustApproved] = useState(false)
   const [resuming, setResuming] = useState(false)
   const [resumedKey, setResumedKey] = useState('')
@@ -632,7 +633,6 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerInitialMode, setPickerInitialMode] = useState<'list' | 'manual'>('list')
   const [cnpjLoading, setCnpjLoading] = useState(false)
-  const [changeNote, setChangeNote] = useState('')
   const lastPrefillKey = useRef('')
 
   const openPicker = (mode: 'list' | 'manual') => {
@@ -877,30 +877,29 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
       toast.error('Busque um pedido pelo número antes de solicitar aprovação.')
       return
     }
-    const note = changeNote.trim()
-    if (!note) {
-      toast.error('Descreva o que você está alterando antes de solicitar aprovação.')
-      return
-    }
     const draft = buildPendingDraft()
     if (!draft) {
       toast.error('Faça a alteração desejada (ex.: trocar fornecedor) antes de solicitar aprovação.')
       return
     }
+    const desc = changeDescription.trim()
+    if (desc.length < 10) {
+      toast.error('Descreva o que está alterando (mínimo 10 caracteres).')
+      return
+    }
     setRequestingApproval(true)
     try {
-      // A observação do Inside Sales vai junto com a solicitação, seguida do resumo técnico.
-      const reason = `${note} — [${buildApprovalReason()}]`
       const r = await requestOrderUpdateApprovalAction(
         { orderKind: order.orderKind, numero: String(order.numero), branch: order.branch, dealId: dealId ?? undefined },
-        reason,
+        desc,
+        buildApprovalReason(),
         draft,
       )
       if (r.success) {
         toast.success(r.status === 'approved'
           ? 'Já existe uma aprovação vigente.'
           : 'Solicitação enviada ao financeiro! Sua edição foi salva — você pode fechar esta tela e voltar depois.')
-        setChangeNote('')
+        setChangeDescription('')
         await loadOrderApproval(order)
         await loadMyPending()
       } else {
@@ -1622,7 +1621,7 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
                   Aguardando aprovação do financeiro…
                 </div>
               ) : (
-                <div className="w-full flex flex-col gap-2.5 p-3 bg-blue-50 border border-blue-200 rounded-xl text-blue-700 text-sm mb-1">
+                <div className="w-full space-y-2 p-3 bg-blue-50 border border-blue-200 rounded-xl text-blue-700 text-sm mb-1">
                   <div className="flex items-center gap-2">
                     <AlertCircle className="w-4 h-4 shrink-0" />
                     <span>
@@ -1632,32 +1631,31 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
                     </span>
                   </div>
                   <div className="space-y-1">
-                    <Label className="text-xs font-semibold text-blue-800">
-                      O que você está alterando? <span className="text-red-600">*</span>
+                    <Label htmlFor="change-description" className="text-xs font-semibold text-blue-800">
+                      O que está alterando? <span className="text-red-500">*</span>
                     </Label>
                     <Textarea
-                      value={changeNote}
-                      onChange={e => setChangeNote(e.target.value)}
-                      placeholder="Ex.: troquei os 3 produtos por 4 novos a pedido do cliente; ajustei o prazo de entrega…"
-                      rows={2}
-                      className="bg-white text-gray-800 text-sm resize-none"
+                      id="change-description"
+                      value={changeDescription}
+                      onChange={e => setChangeDescription(e.target.value)}
+                      placeholder="Ex.: Removi o item X e incluí o item Y; ajustei quantidade e valor unitário."
+                      rows={3}
+                      className="text-sm bg-white border-blue-200 focus-visible:ring-blue-300"
                     />
-                    <p className="text-[11px] text-blue-600/80">
-                      Obrigatório — essa observação vai junto com a solicitação para o financeiro.
-                    </p>
+                    <p className="text-[10px] text-blue-600/80">Este texto vai junto com a solicitação para o financeiro.</p>
                   </div>
                   <div className="flex justify-end">
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => void handleRequestApproval()}
-                    disabled={requestingApproval || !hasChanges || !changeNote.trim()}
-                    className="bg-amber-600 hover:bg-amber-700 shrink-0"
-                  >
-                    {requestingApproval
-                      ? <><Loader2 className="w-4 h-4 animate-spin mr-1" /> Enviando…</>
-                      : <><Send className="w-4 h-4 mr-1" /> Solicitar aprovação</>}
-                  </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => void handleRequestApproval()}
+                      disabled={requestingApproval || !hasChanges || changeDescription.trim().length < 10}
+                      className="bg-amber-600 hover:bg-amber-700 shrink-0"
+                    >
+                      {requestingApproval
+                        ? <><Loader2 className="w-4 h-4 animate-spin mr-1" /> Enviando…</>
+                        : <><Send className="w-4 h-4 mr-1" /> Solicitar aprovação</>}
+                    </Button>
                   </div>
                 </div>
               )
