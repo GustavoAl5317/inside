@@ -72,6 +72,8 @@ export type OmieOrderPatch = {
     cliente?: Partial<OmieClienteView>
     fornecedor?: Partial<OmieClienteView>
     items?: Array<Partial<OmieOrderItemView> & { key: string }>
+    /** Lista completa de itens — usada ao adicionar/remover linhas (substitui o pedido no Omie). */
+    itemsReplace?: OmieOrderItemView[]
   }
 }
 
@@ -120,6 +122,101 @@ function normalizeNcm(ncm: unknown) {
 function normalizeCfop(cfop: unknown) {
   const d = String(cfop ?? '').replace(/\D/g, '')
   return d || String(cfop ?? '')
+}
+
+function parseOmieProductCode(codigo: unknown): number | null {
+  const n = Number(String(codigo ?? '').replace(/\D/g, ''))
+  if (!Number.isFinite(n) || n <= 0) return null
+  return n
+}
+
+function buildOCProdutosFromItems(items: OmieOrderItemView[], currentProdutos: any[]) {
+  return items.map((item, i) => {
+    const intItem = String(i + 1)
+    const existing = currentProdutos.find(p =>
+      String(p.cCodIntItem ?? p.nCodItem ?? '') === item.key
+      || String(p.cCodIntProd ?? p.cProduto ?? '') === item.codigo,
+    )
+    const codigoNum = parseOmieProductCode(item.codigo)
+    return {
+      cCodIntItem: intItem,
+      ...(existing?.nCodProd
+        ? { nCodProd: existing.nCodProd }
+        : codigoNum && codigoNum > 100
+          ? { nCodProd: codigoNum }
+          : item.codigo
+            ? { cCodIntProd: String(item.codigo) }
+            : {}),
+      cDescricao: item.descricao,
+      cNCM: normalizeNcm(item.ncm ?? existing?.cNCM ?? ''),
+      cUnidade: existing?.cUnidade ?? 'UN',
+      nQtde: Number(item.quantidade ?? 1),
+      nValUnit: Number(item.valorUnitario ?? 0),
+      nPesoLiq: existing?.nPesoLiq ?? 0,
+      nPesoBruto: existing?.nPesoBruto ?? 0,
+    }
+  })
+}
+
+function buildOVDetFromItems(items: OmieOrderItemView[], currentDet: any[]) {
+  return items.map((item, i) => {
+    const intKey = String(i + 1)
+    const existing = currentDet.find(d =>
+      String(d.ide?.codigo_item_integracao ?? '') === item.key
+      || String(d.ide?.codigo_item ?? '') === item.key,
+    )
+    const codigoNum = parseOmieProductCode(item.codigo)
+    const produto: Record<string, unknown> = {
+      cfop: normalizeCfop(item.cfop ?? existing?.produto?.cfop ?? ''),
+      ncm: normalizeNcm(item.ncm ?? existing?.produto?.ncm ?? ''),
+      descricao: item.descricao,
+      quantidade: Number(item.quantidade ?? 1),
+      unidade: existing?.produto?.unidade ?? 'UN',
+      valor_unitario: Number(item.valorUnitario ?? 0),
+      tipo_desconto: 'V',
+      valor_desconto: 0,
+    }
+    if (existing?.produto?.codigo_produto) {
+      produto.codigo_produto = existing.produto.codigo_produto
+    } else if (codigoNum && codigoNum > 100) {
+      produto.codigo_produto = codigoNum
+    } else if (item.codigo) {
+      produto.codigo_produto_integracao = String(item.codigo)
+    }
+    return {
+      ide: {
+        codigo_item_integracao: intKey,
+        ...(existing?.ide?.codigo_item ? { codigo_item: existing.ide.codigo_item } : {}),
+      },
+      produto,
+    }
+  })
+}
+
+function buildOSServicosFromItems(items: OmieOrderItemView[], currentServicos: any[]) {
+  return items.map((item, i) => {
+    const seq = i + 1
+    const existing = currentServicos.find(s =>
+      String(s.nSeqItem ?? s.cCodIntServ ?? '') === item.key,
+    )
+    const codigoNum = parseOmieProductCode(item.codigo)
+    const row: Record<string, unknown> = {
+      nSeqItem: Number(existing?.nSeqItem ?? seq),
+      cAcaoItem: existing ? 'A' : 'I',
+      ...(existing?.nIdItem ? { nIdItem: existing.nIdItem } : {}),
+      nCodServico: existing?.nCodServico ?? codigoNum ?? undefined,
+      cCodServLC116: existing?.cCodServLC116,
+      cCodServMun: existing?.cCodServMun,
+      cDescServ: item.descricao,
+      cDadosAdicItem: item.descricao,
+      nQtde: Number(item.quantidade ?? 1),
+      nValUnit: Number(item.valorUnitario ?? 0),
+      cRetemISS: existing?.cRetemISS ?? 'N',
+      cTribServ: existing?.cTribServ ?? '01',
+    }
+    if (existing?.impostos) row.impostos = existing.impostos
+    return row
+  })
 }
 
 function numeroMatches(a: unknown, b: unknown) {
@@ -689,26 +786,29 @@ export async function patchOmieOrder(input: OmieOrderPatch) {
       cab.nCodFor = nCodFor
     }
 
-    const produtos = (current.produtos ?? []).map((p: any) => {
-      const key = String(p.cCodIntItem ?? p.nCodItem ?? '')
-      const ch = input.patch.items?.find(i => i.key === key)
-      return {
-        cCodIntItem: String(p.cCodIntItem ?? key),
-        nCodProd: p.nCodProd,
-        cCodIntProd: p.cCodIntProd,
-        cDescricao: ch?.descricao ?? p.cDescricao,
-        cNCM: ch?.ncm !== undefined ? ch.ncm : p.cNCM,
-        cUnidade: p.cUnidade ?? 'UN',
-        nQtde: ch?.quantidade !== undefined ? Number(ch.quantidade) : Number(p.nQtde ?? 1),
-        nValUnit: ch?.valorUnitario !== undefined ? Number(ch.valorUnitario) : Number(p.nValUnit ?? 0),
-        nPesoLiq: p.nPesoLiq ?? 0,
-        nPesoBruto: p.nPesoBruto ?? 0,
-      }
-    })
+    const produtos = input.patch.itemsReplace?.length
+      ? buildOCProdutosFromItems(input.patch.itemsReplace, current.produtos ?? [])
+      : (current.produtos ?? []).map((p: any) => {
+        const key = String(p.cCodIntItem ?? p.nCodItem ?? '')
+        const ch = input.patch.items?.find(i => i.key === key)
+        return {
+          cCodIntItem: String(p.cCodIntItem ?? key),
+          nCodProd: p.nCodProd,
+          cCodIntProd: p.cCodIntProd,
+          cDescricao: ch?.descricao ?? p.cDescricao,
+          cNCM: ch?.ncm !== undefined ? ch.ncm : p.cNCM,
+          cUnidade: p.cUnidade ?? 'UN',
+          nQtde: ch?.quantidade !== undefined ? Number(ch.quantidade) : Number(p.nQtde ?? 1),
+          nValUnit: ch?.valorUnitario !== undefined ? Number(ch.valorUnitario) : Number(p.nValUnit ?? 0),
+          nPesoLiq: p.nPesoLiq ?? 0,
+          nPesoBruto: p.nPesoBruto ?? 0,
+        }
+      })
 
     const hasOrderChanges = hasFornecedorPatch
       || !!(input.patch.header && Object.keys(input.patch.header).length)
       || !!(input.patch.items?.length)
+      || !!(input.patch.itemsReplace?.length)
     if (!hasOrderChanges) {
       return {
         success: true as const,
@@ -727,7 +827,7 @@ export async function patchOmieOrder(input: OmieOrderPatch) {
         cObsInt: cab.cObsInt ?? '',
       },
     }
-    if (input.patch.items?.length) upsertBody.produtos_upsert = produtos
+    if (input.patch.items?.length || input.patch.itemsReplace?.length) upsertBody.produtos_upsert = produtos
 
     const res = await omieRequest(cnpj, OMIE_URL.PEDIDOS_COMPRA, 'UpsertPedCompra', upsertBody, input.dealId, 'createOCResult')
 
@@ -760,6 +860,7 @@ export async function patchOmieOrder(input: OmieOrderPatch) {
     const hasOrderChanges = hasClientePatch
       || !!(input.patch.header && Object.keys(input.patch.header).length)
       || !!(input.patch.items?.length)
+      || !!(input.patch.itemsReplace?.length)
     if (!hasOrderChanges) {
       return {
         success: true as const,
@@ -774,27 +875,29 @@ export async function patchOmieOrder(input: OmieOrderPatch) {
     if (input.patch.header?.dataPrevisao) cab.data_previsao = toOmieDate(input.patch.header.dataPrevisao)
     if (input.patch.header?.condicaoPagamento) cab.codigo_parcela = onlyCode(input.patch.header.condicaoPagamento)
 
-    const det = (current.det ?? []).map((d: any, i: number) => {
-      const key = String(d.ide?.codigo_item_integracao ?? d.ide?.codigo_item ?? i + 1)
-      const ch = input.patch.items?.find(x => x.key === key)
-      return {
-        ide: {
-          codigo_item_integracao: key,
-          ...(d.ide?.codigo_item ? { codigo_item: d.ide.codigo_item } : {}),
-        },
-        produto: {
-          codigo_produto: d.produto?.codigo_produto,
-          cfop: normalizeCfop(ch?.cfop ?? d.produto?.cfop),
-          ncm: normalizeNcm(ch?.ncm ?? d.produto?.ncm),
-          descricao: ch?.descricao ?? d.produto?.descricao,
-          quantidade: ch?.quantidade !== undefined ? Number(ch.quantidade) : Number(d.produto?.quantidade ?? 1),
-          unidade: d.produto?.unidade ?? 'UN',
-          valor_unitario: ch?.valorUnitario !== undefined ? Number(ch.valorUnitario) : Number(d.produto?.valor_unitario ?? 0),
-          tipo_desconto: 'V',
-          valor_desconto: 0,
-        },
-      }
-    })
+    const det = input.patch.itemsReplace?.length
+      ? buildOVDetFromItems(input.patch.itemsReplace, current.det ?? [])
+      : (current.det ?? []).map((d: any, i: number) => {
+        const key = String(d.ide?.codigo_item_integracao ?? d.ide?.codigo_item ?? i + 1)
+        const ch = input.patch.items?.find(x => x.key === key)
+        return {
+          ide: {
+            codigo_item_integracao: key,
+            ...(d.ide?.codigo_item ? { codigo_item: d.ide.codigo_item } : {}),
+          },
+          produto: {
+            codigo_produto: d.produto?.codigo_produto,
+            cfop: normalizeCfop(ch?.cfop ?? d.produto?.cfop),
+            ncm: normalizeNcm(ch?.ncm ?? d.produto?.ncm),
+            descricao: ch?.descricao ?? d.produto?.descricao,
+            quantidade: ch?.quantidade !== undefined ? Number(ch.quantidade) : Number(d.produto?.quantidade ?? 1),
+            unidade: d.produto?.unidade ?? 'UN',
+            valor_unitario: ch?.valorUnitario !== undefined ? Number(ch.valorUnitario) : Number(d.produto?.valor_unitario ?? 0),
+            tipo_desconto: 'V',
+            valor_desconto: 0,
+          },
+        }
+      })
 
     const informacoes_adicionais = {
       ...(current.informacoes_adicionais ?? {}),
@@ -841,6 +944,7 @@ export async function patchOmieOrder(input: OmieOrderPatch) {
   const hasOrderChangesOS = hasClientePatchOS
     || !!(input.patch.header && Object.keys(input.patch.header).length)
     || !!(input.patch.items?.length)
+    || !!(input.patch.itemsReplace?.length)
   if (!hasOrderChangesOS) {
     return {
       success: true as const,
@@ -853,7 +957,9 @@ export async function patchOmieOrder(input: OmieOrderPatch) {
   if (input.patch.header?.dataPrevisao) cab.dDtPrevisao = toOmieDate(input.patch.header.dataPrevisao)
   if (input.patch.header?.condicaoPagamento) cab.cCodParc = onlyCode(input.patch.header.condicaoPagamento)
 
-  const servicos = (currentOS.servicos ?? []).map((s: any, i: number) => {
+  const servicos = input.patch.itemsReplace?.length
+    ? buildOSServicosFromItems(input.patch.itemsReplace, currentOS.servicos ?? [])
+    : (currentOS.servicos ?? []).map((s: any, i: number) => {
     const key = String(s.nSeqItem ?? s.cCodIntServ ?? i + 1)
     const ch = input.patch.items?.find(x => x.key === key)
     const item: Record<string, unknown> = {

@@ -1,40 +1,43 @@
-# Inside Sales — HTTPS na 443 (Apache + `/inside/`)
+# Inside Sales — HTTPS na 443 (somente este app)
 
-O serviço que **já usa a 443 continua igual**. O Inside Sales fica em:
+O Inside Sales passa a ser **o único serviço** em:
 
-**https://intc02.int.intcloud.com.br/inside/**
+**https://intc02.int.intcloud.com.br/**
 
 ---
 
-## 1. Apache — adicionar proxy (na VM)
+## 1. Apache — substituir o site na 443
 
 ```bash
 sudo a2enmod proxy proxy_http ssl headers
-```
 
-Abra o site HTTPS que já existe:
+cd ~/inside
+git pull
 
-```bash
+# Copiar vhost
+sudo cp scripts/apache-insidesales-443.conf /etc/apache2/sites-available/insidesales-443.conf
+
+# Ver sites ativos hoje
 ls /etc/apache2/sites-enabled/
-sudo nano /etc/apache2/sites-enabled/SEU-SITE-443.conf
-```
 
-Dentro do bloco `<VirtualHost *:443>`, **antes** de `</VirtualHost>`, cole o conteúdo de `scripts/apache-inside-443.conf`.
+# Desativar o site ANTIGO (troque pelo nome real do arquivo)
+sudo a2dissite 000-default-le-ssl.conf
+# ou: sudo a2dissite default-ssl.conf
+# ou o arquivo que aparecer em sites-enabled
 
-Teste e recarregue:
+# Ativar Inside Sales
+sudo a2ensite insidesales-443
 
-```bash
 sudo apache2ctl configtest
 sudo systemctl reload apache2
 ```
 
 ---
 
-## 2. App — `.env` na VM (`~/inside/.env`)
+## 2. `.env` na VM
 
 ```env
-NEXT_PUBLIC_BASE_PATH=/inside
-NEXT_PUBLIC_APP_URL=https://intc02.int.intcloud.com.br/inside
+NEXT_PUBLIC_APP_URL=https://intc02.int.intcloud.com.br
 
 NODE_ENV=production
 DATABASE_URL=...
@@ -47,15 +50,16 @@ BITRIX_LIST_PAYMENT_ID=67
 APP_SESSION_SECRET=...
 ```
 
+**Não** use `NEXT_PUBLIC_BASE_PATH` (deixe vazio ou remova).
+
 ---
 
-## 3. Atualizar código e rebuild
+## 3. Rebuild
 
 ```bash
 cd ~/inside
-git pull
-chmod +x scripts/deploy-vm.sh
 ./scripts/deploy-vm.sh ~/inside
+pm2 stop ngrok-bitrix   # opcional
 ```
 
 ---
@@ -63,18 +67,8 @@ chmod +x scripts/deploy-vm.sh
 ## 4. Testar
 
 ```bash
-curl -I https://intc02.int.intcloud.com.br/inside/
+curl -I https://intc02.int.intcloud.com.br/
 pm2 logs insidesales --lines 20
 ```
 
-Navegador: **https://intc02.int.intcloud.com.br/inside/**
-
-Bitrix (iframe): mesma URL.
-
----
-
-## Observações
-
-- O app continua na porta **3000** (PM2); só o Apache expõe **HTTPS na 443**.
-- Não use `https://...:3000` — use sempre `/inside/` na 443.
-- Pare o ngrok na 3000 se não precisar mais: `pm2 stop ngrok-bitrix`
+Bitrix (iframe): `https://intc02.int.intcloud.com.br/`

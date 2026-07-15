@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
     if (!body.meta?.internalId) {
       return NextResponse.json({ success: false, error: 'Busque o pedido antes de atualizar' }, { status: 400 })
     }
-    if (!body.patch || (!body.patch.header && !body.patch.items?.length && !body.patch.cliente && !body.patch.fornecedor)) {
+    if (!body.patch || (!body.patch.header && !body.patch.items?.length && !body.patch.itemsReplace?.length && !body.patch.cliente && !body.patch.fornecedor)) {
       return NextResponse.json({ success: false, error: 'Nenhum campo para atualizar' }, { status: 400 })
     }
 

@@ -7,7 +7,7 @@ import { CurrencyInput } from '@/components/ui/currency-input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Loader2, Search, Save, RotateCcw, Building2, Plus, CheckCircle, AlertCircle, Send } from 'lucide-react'
+import { Loader2, Search, Save, RotateCcw, Building2, Plus, CheckCircle, AlertCircle, Send, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { getBitrixClientsAction, getBitrixSuppliersAction, lookupCnpjAction, getActiveOrderUpdateApprovalAction, requestOrderUpdateApprovalAction, getMyPendingOrderApprovalsAction } from '@/lib/actions'
 import { formatCNPJ, isCNPJComplete } from '@/lib/utils'
@@ -69,6 +69,7 @@ type OrderPatch = {
   cliente?: Partial<ParceiroView>
   fornecedor?: Partial<ParceiroView>
   items?: Array<Partial<OrderItem> & { key: string }>
+  itemsReplace?: OrderItem[]
 }
 
 type PendingPatchDraft = {
@@ -145,7 +146,9 @@ function applyPatchToForm(form: FormState, patch: OrderPatch): FormState {
   }
 
   let items = form.items
-  if (patch.items?.length) {
+  if (patch.itemsReplace?.length) {
+    items = patch.itemsReplace.map(i => ({ ...i }))
+  } else if (patch.items?.length) {
     items = form.items.map(it => {
       const ch = patch.items!.find(p => p.key === it.key)
       return ch ? { ...it, ...ch } : it
@@ -153,6 +156,12 @@ function applyPatchToForm(form: FormState, patch: OrderPatch): FormState {
   }
 
   return { header, parceiro, items }
+}
+
+function itemsStructureChanged(baseline: OrderItem[], current: OrderItem[]): boolean {
+  if (baseline.length !== current.length) return true
+  const baseKeys = new Set(baseline.map(i => i.key))
+  return current.some(i => !baseKeys.has(i.key))
 }
 
 function companyToParceiro(company: Record<string, string | undefined>): ParceiroView {
@@ -808,20 +817,25 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
       }
     }
 
-    const itemPatches: Array<Partial<OrderItem> & { key: string }> = []
-    for (const item of form.items) {
-      const base = baseline.items.find(b => b.key === item.key)
-      if (!base) continue
-      const diff: Partial<OrderItem> & { key: string } = { key: item.key }
-      let changed = false
-      if (item.descricao !== base.descricao) { diff.descricao = item.descricao; changed = true }
-      if (item.quantidade !== base.quantidade) { diff.quantidade = item.quantidade; changed = true }
-      if (item.valorUnitario !== base.valorUnitario) { diff.valorUnitario = item.valorUnitario; changed = true }
-      if (item.ncm !== base.ncm) { diff.ncm = item.ncm; changed = true }
-      if (item.cfop !== base.cfop) { diff.cfop = item.cfop; changed = true }
-      if (changed) itemPatches.push(diff)
+    const structureChanged = itemsStructureChanged(baseline.items, form.items)
+    if (structureChanged) {
+      patch.itemsReplace = form.items.map(i => ({ ...i }))
+    } else {
+      const itemPatches: Array<Partial<OrderItem> & { key: string }> = []
+      for (const item of form.items) {
+        const base = baseline.items.find(b => b.key === item.key)
+        if (!base) continue
+        const diff: Partial<OrderItem> & { key: string } = { key: item.key }
+        let changed = false
+        if (item.descricao !== base.descricao) { diff.descricao = item.descricao; changed = true }
+        if (item.quantidade !== base.quantidade) { diff.quantidade = item.quantidade; changed = true }
+        if (item.valorUnitario !== base.valorUnitario) { diff.valorUnitario = item.valorUnitario; changed = true }
+        if (item.ncm !== base.ncm) { diff.ncm = item.ncm; changed = true }
+        if (item.cfop !== base.cfop) { diff.cfop = item.cfop; changed = true }
+        if (changed) itemPatches.push(diff)
+      }
+      if (itemPatches.length) patch.items = itemPatches
     }
-    if (itemPatches.length) patch.items = itemPatches
 
     return patch
   }
@@ -833,14 +847,15 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
     if (patch?.fornecedor) parts.push('troca/edição de fornecedor')
     if (patch?.cliente) parts.push('troca/edição de cliente')
     if (patch?.header) parts.push('cabeçalho do pedido')
-    if (patch?.items?.length) parts.push(`${patch.items.length} item(ns)`)
+    if (patch?.itemsReplace?.length) parts.push(`${patch.itemsReplace.length} item(ns) (lista substituída)`)
+    else if (patch?.items?.length) parts.push(`${patch.items.length} item(ns)`)
     return parts.join(' · ')
   }
 
   const buildPendingDraft = (): PendingPatchDraft | null => {
     if (!order) return null
     const patch = buildPatch()
-    if (!patch || (!patch.header && !patch.cliente && !patch.fornecedor && !patch.items?.length)) return null
+    if (!patch || (!patch.header && !patch.cliente && !patch.fornecedor && !patch.items?.length && !patch.itemsReplace?.length)) return null
     return {
       orderKind: order.orderKind,
       numero: String(order.numero),
@@ -970,6 +985,35 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
     })
   }
 
+  const removeItem = (key: string) => {
+    setForm(prev => {
+      if (!prev) return prev
+      return { ...prev, items: prev.items.filter(it => it.key !== key) }
+    })
+  }
+
+  const addItem = () => {
+    setForm(prev => {
+      if (!prev) return prev
+      const n = prev.items.length + 1
+      return {
+        ...prev,
+        items: [
+          ...prev.items,
+          {
+            key: `new-${Date.now()}-${n}`,
+            codigo: '',
+            descricao: '',
+            quantidade: 1,
+            valorUnitario: 0,
+            ncm: '',
+            cfop: '',
+          },
+        ],
+      }
+    })
+  }
+
   const updateParceiro = (field: keyof ParceiroView, value: string) => {
     setForm(prev => {
       if (!prev) return prev
@@ -1035,7 +1079,7 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
   }
 
   const patchPreview = buildPatch()
-  const hasChanges = !!(patchPreview?.header || patchPreview?.cliente || patchPreview?.fornecedor || patchPreview?.items?.length)
+  const hasChanges = !!(patchPreview?.header || patchPreview?.cliente || patchPreview?.fornecedor || patchPreview?.items?.length || patchPreview?.itemsReplace?.length)
   const showParceiroSection = !!form && !!order
 
   return (
@@ -1425,7 +1469,13 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
 
           {form.items.length > 0 && (
             <div className="space-y-2">
-              <Label className="text-xs font-semibold uppercase text-gray-500">Itens / Serviços</Label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label className="text-xs font-semibold uppercase text-gray-500">Itens / Serviços</Label>
+                <Button type="button" size="sm" variant="outline" onClick={addItem}>
+                  <Plus className="w-3.5 h-3.5 mr-1" />
+                  Adicionar item
+                </Button>
+              </div>
               <div className="overflow-x-auto rounded-lg border">
                 <table className="w-full text-xs">
                   <thead className="bg-gray-50 text-gray-600">
@@ -1440,12 +1490,20 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
                       {order.orderKind === 'OV' && (
                         <th className="text-center p-2 w-20">CFOP</th>
                       )}
+                      <th className="p-2 w-10" />
                     </tr>
                   </thead>
                   <tbody>
                     {form.items.map(item => (
                       <tr key={item.key} className="border-t">
-                        <td className="p-2 font-mono">{item.codigo}</td>
+                        <td className="p-2 font-mono">
+                          <Input
+                            className="h-8 text-xs font-mono"
+                            value={item.codigo}
+                            placeholder="SKU / cod. Omie"
+                            onChange={e => updateItem(item.key, 'codigo', e.target.value)}
+                          />
+                        </td>
                         <td className="p-2">
                           <Input
                             className="h-8 text-xs"
@@ -1498,11 +1556,36 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
                             </td>
                           </>
                         )}
+                        <td className="p-2 text-center">
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+                            onClick={() => removeItem(item.key)}
+                            title="Remover item"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              <p className="text-[10px] text-gray-500">
+                Ao adicionar ou remover itens, a lista completa é reenviada ao Omie na atualização.
+              </p>
+            </div>
+          )}
+
+          {form.items.length === 0 && (
+            <div className="rounded-lg border border-dashed p-4 text-center space-y-2">
+              <p className="text-sm text-gray-500">Nenhum item no pedido.</p>
+              <Button type="button" size="sm" variant="outline" onClick={addItem}>
+                <Plus className="w-3.5 h-3.5 mr-1" />
+                Adicionar item
+              </Button>
             </div>
           )}
 
