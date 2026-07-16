@@ -1320,7 +1320,12 @@ export async function sendApprovedProcessToOmieAction(
       }
     }
 
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"
+    // Chamada INTERNA à própria API: usa loopback, nunca a URL pública (ngrok/Bitrix).
+    // A URL pública (NEXT_PUBLIC_APP_URL) depende do túnel ngrok — se ele cai ou troca
+    // de endereço, o app chamava a si mesmo por fora e recebia o 404 do ngrok.
+    const basePath = process.env.NEXT_PUBLIC_BASE_PATH || ""
+    const baseUrl = process.env.INTERNAL_APP_URL
+      || `http://127.0.0.1:${process.env.PORT || 3000}${basePath}`
     const response = await fetch(`${baseUrl}/api/omie/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
