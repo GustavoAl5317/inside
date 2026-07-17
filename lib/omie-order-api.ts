@@ -341,16 +341,22 @@ async function resolveProdutoByCodigo(
   const sku = String(codigo ?? '').trim()
   if (!sku) return null
 
-  let res = await omieRequest(cnpj, OMIE_URL.PRODUTOS, 'ConsultarProduto', { codigo: sku }, dealId, 'checkProduto')
-  if (res?.faultstring && /não cadastrado|nao cadastrado/i.test(String(res.faultstring))) {
-    res = await omieRequest(cnpj, OMIE_URL.PRODUTOS, 'ConsultarProduto', { codigo_produto: sku }, dealId, 'checkProduto')
+  // O part number informado pode ser o código (SKU), o código de integração
+  // (ex.: "B5NH6AA#AC4") ou o próprio código interno. Tenta os três.
+  const attempts = [
+    { codigo: sku },
+    { codigo_produto_integracao: sku },
+    { codigo_produto: sku },
+  ]
+  for (const param of attempts) {
+    const res = await omieRequest(cnpj, OMIE_URL.PRODUTOS, 'ConsultarProduto', param, dealId, 'checkProduto')
+    if (res && !res.faultstring) {
+      const prod = res.produto_servico_cadastro ?? res
+      const codigoProduto = Number(prod?.codigo_produto ?? 0)
+      if (codigoProduto) return { codigoProduto, codigo: String(prod?.codigo ?? sku) }
+    }
   }
-  if (!res || res.faultstring) return null
-
-  const prod = res.produto_servico_cadastro ?? res
-  const codigoProduto = Number(prod?.codigo_produto ?? 0)
-  if (!codigoProduto) return null
-  return { codigoProduto, codigo: String(prod?.codigo ?? sku) }
+  return null
 }
 
 /**

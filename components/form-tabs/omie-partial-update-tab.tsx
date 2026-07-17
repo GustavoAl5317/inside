@@ -801,7 +801,11 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
     }
     if (Object.keys(headerPatch).length) patch.header = headerPatch
 
-    const baseParceiro = getOrderParceiro(baseline)
+    // O formulário começa com IE/endereço/contato em branco (parceiroParaEdicaoManual).
+    // Comparamos contra a MESMA base em branco para não gerar um patch de parceiro
+    // quando o usuário não mexeu nele (senão dispararia a re-resolução do cliente/fornecedor).
+    const baseParceiroRaw = getOrderParceiro(baseline)
+    const baseParceiro = baseParceiroRaw ? parceiroParaEdicaoManual({ ...baseParceiroRaw }) : undefined
     if (form.parceiro) {
       const parceiroPatch: Partial<ParceiroView> = {}
       type ParceiroTextField = Exclude<keyof ParceiroView, 'codigoOmie'>
