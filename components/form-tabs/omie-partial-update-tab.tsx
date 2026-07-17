@@ -161,8 +161,14 @@ function applyPatchToForm(form: FormState, patch: OrderPatch): FormState {
 
 function itemsStructureChanged(baseline: OrderItem[], current: OrderItem[]): boolean {
   if (baseline.length !== current.length) return true
-  const baseKeys = new Set(baseline.map(i => i.key))
-  return current.some(i => !baseKeys.has(i.key))
+  const baseByKey = new Map(baseline.map(i => [i.key, i]))
+  return current.some(i => {
+    const base = baseByKey.get(i.key)
+    if (!base) return true // linha nova
+    // Trocar o código/part number é troca de produto → reenvia a lista completa,
+    // para o back resolver o novo SKU no catálogo Omie.
+    return String(i.codigo ?? '') !== String(base.codigo ?? '')
+  })
 }
 
 function companyToParceiro(company: Record<string, string | undefined>): ParceiroView {
@@ -923,7 +929,7 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
       return
     }
     const patch = buildPatch()
-    if (!patch || (!patch.header && !patch.cliente && !patch.fornecedor && !patch.items?.length)) {
+    if (!patch || (!patch.header && !patch.cliente && !patch.fornecedor && !patch.items?.length && !patch.itemsReplace?.length)) {
       toast.error('Nenhum campo foi alterado')
       return
     }

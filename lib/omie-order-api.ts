@@ -7,6 +7,7 @@ const OMIE_URL = {
   PEDIDOS_COMPRA: 'https://app.omie.com.br/api/v1/produtos/pedidocompra/',
   ORDEM_SERVICO:  'https://app.omie.com.br/api/v1/servicos/os/',
   CLIENTES:       'https://app.omie.com.br/api/v1/geral/clientes/',
+  PRODUTOS:       'https://app.omie.com.br/api/v1/geral/produtos/',
 }
 
 const CNPJ_ES = '03969530000211'
@@ -130,23 +131,29 @@ function parseOmieProductCode(codigo: unknown): number | null {
   return n
 }
 
-function buildOCProdutosFromItems(items: OmieOrderItemView[], currentProdutos: any[]) {
-  return items.map((item, i) => {
+async function buildOCProdutosFromItems(cnpj: string, dealId: number, items: OmieOrderItemView[], currentProdutos: any[]) {
+  const out: Record<string, unknown>[] = []
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
     const intItem = String(i + 1)
     const existing = currentProdutos.find(p =>
-      String(p.cCodIntItem ?? p.nCodItem ?? '') === item.key
-      || String(p.cCodIntProd ?? p.cProduto ?? '') === item.codigo,
+      String(p.cCodIntItem ?? p.nCodItem ?? '') === item.key,
     )
-    const codigoNum = parseOmieProductCode(item.codigo)
-    return {
+    const existingCodigo = String(existing?.cProduto ?? existing?.cCodIntProd ?? existing?.nCodProd ?? '')
+    const codeChanged = !!item.codigo && String(item.codigo) !== existingCodigo
+
+    let ref: Record<string, unknown> = {}
+    if (existing?.nCodProd && !codeChanged) {
+      // mesmo produto: mantém o código interno atual do item
+      ref = { nCodProd: existing.nCodProd }
+    } else if (item.codigo) {
+      // produto novo ou trocado: resolve o SKU no catálogo (cria se não existir) e usa o código interno
+      ref = { nCodProd: await resolveOrCreateProduto(cnpj, dealId, item) }
+    }
+
+    out.push({
       cCodIntItem: intItem,
-      ...(existing?.nCodProd
-        ? { nCodProd: existing.nCodProd }
-        : codigoNum && codigoNum > 100
-          ? { nCodProd: codigoNum }
-          : item.codigo
-            ? { cCodIntProd: String(item.codigo) }
-            : {}),
+      ...ref,
       cDescricao: item.descricao,
       cNCM: normalizeNcm(item.ncm ?? existing?.cNCM ?? ''),
       cUnidade: existing?.cUnidade ?? 'UN',
@@ -154,18 +161,22 @@ function buildOCProdutosFromItems(items: OmieOrderItemView[], currentProdutos: a
       nValUnit: Number(item.valorUnitario ?? 0),
       nPesoLiq: existing?.nPesoLiq ?? 0,
       nPesoBruto: existing?.nPesoBruto ?? 0,
-    }
-  })
+    })
+  }
+  return out
 }
 
-function buildOVDetFromItems(items: OmieOrderItemView[], currentDet: any[]) {
-  return items.map((item, i) => {
+async function buildOVDetFromItems(cnpj: string, dealId: number, items: OmieOrderItemView[], currentDet: any[]) {
+  const out: Record<string, unknown>[] = []
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
     const intKey = String(i + 1)
     const existing = currentDet.find(d =>
       String(d.ide?.codigo_item_integracao ?? '') === item.key
       || String(d.ide?.codigo_item ?? '') === item.key,
     )
-    const codigoNum = parseOmieProductCode(item.codigo)
+    const existingCodigo = String(existing?.produto?.codigo ?? existing?.produto?.codigo_produto ?? '')
+    const codeChanged = !!item.codigo && String(item.codigo) !== existingCodigo
     const produto: Record<string, unknown> = {
       cfop: normalizeCfop(item.cfop ?? existing?.produto?.cfop ?? ''),
       ncm: normalizeNcm(item.ncm ?? existing?.produto?.ncm ?? ''),
@@ -176,21 +187,22 @@ function buildOVDetFromItems(items: OmieOrderItemView[], currentDet: any[]) {
       tipo_desconto: 'V',
       valor_desconto: 0,
     }
-    if (existing?.produto?.codigo_produto) {
+    if (existing?.produto?.codigo_produto && !codeChanged) {
+      // mesmo produto: mantém o código interno atual do item
       produto.codigo_produto = existing.produto.codigo_produto
-    } else if (codigoNum && codigoNum > 100) {
-      produto.codigo_produto = codigoNum
     } else if (item.codigo) {
-      produto.codigo_produto_integracao = String(item.codigo)
+      // produto novo ou trocado: resolve o SKU no catálogo (cria se não existir) e usa o código interno
+      produto.codigo_produto = await resolveOrCreateProduto(cnpj, dealId, item)
     }
-    return {
+    out.push({
       ide: {
         codigo_item_integracao: intKey,
         ...(existing?.ide?.codigo_item ? { codigo_item: existing.ide.codigo_item } : {}),
       },
       produto,
-    }
-  })
+    })
+  }
+  return out
 }
 
 function buildOSServicosFromItems(items: OmieOrderItemView[], currentServicos: any[]) {
@@ -314,6 +326,69 @@ async function consultClienteFull(interatellCnpj: string, dealId: number, codigo
   const c = res.clientes_cadastro ?? res
   if (!c?.codigo_cliente_omie) return null
   return c as Record<string, unknown>
+}
+
+/**
+ * Resolve um part number (SKU) no catálogo do Omie e devolve o código interno (codigo_produto).
+ * Espelha o checkProduto do integrador (omie/omie.js): tenta por `codigo` (SKU) e cai para
+ * `codigo_produto` (ID interno). Retorna null se o produto não estiver cadastrado no Omie.
+ */
+async function resolveProdutoByCodigo(
+  cnpj: string,
+  dealId: number,
+  codigo: unknown,
+): Promise<{ codigoProduto: number; codigo: string } | null> {
+  const sku = String(codigo ?? '').trim()
+  if (!sku) return null
+
+  let res = await omieRequest(cnpj, OMIE_URL.PRODUTOS, 'ConsultarProduto', { codigo: sku }, dealId, 'checkProduto')
+  if (res?.faultstring && /não cadastrado|nao cadastrado/i.test(String(res.faultstring))) {
+    res = await omieRequest(cnpj, OMIE_URL.PRODUTOS, 'ConsultarProduto', { codigo_produto: sku }, dealId, 'checkProduto')
+  }
+  if (!res || res.faultstring) return null
+
+  const prod = res.produto_servico_cadastro ?? res
+  const codigoProduto = Number(prod?.codigo_produto ?? 0)
+  if (!codigoProduto) return null
+  return { codigoProduto, codigo: String(prod?.codigo ?? sku) }
+}
+
+/**
+ * Cadastra um produto novo no catálogo do Omie a partir do item do pedido.
+ * Espelha o createProduto do integrador (IncluirProduto). Usado quando o part number
+ * informado ainda não existe no Omie — assim o usuário não precisa cadastrar na mão.
+ */
+async function createProdutoByCodigo(cnpj: string, dealId: number, item: OmieOrderItemView): Promise<number | null> {
+  const sku = String(item.codigo ?? '').trim()
+  if (!sku) return null
+
+  const params: Record<string, unknown> = {
+    codigo: sku,
+    codigo_produto_integracao: sku,
+    descricao: String(item.descricao ?? '').trim() || sku,
+    unidade: 'UN',
+    ncm: normalizeNcm(item.ncm ?? ''),
+    valor_unitario: Number(item.valorUnitario ?? 0),
+  }
+  const res = await omieRequest(cnpj, OMIE_URL.PRODUTOS, 'IncluirProduto', params, dealId, 'createProduto')
+
+  if (res?.faultstring) {
+    // Corrida/duplicidade: o produto pode já ter sido criado — tenta resolver de novo.
+    const again = await resolveProdutoByCodigo(cnpj, dealId, sku)
+    if (again) return again.codigoProduto
+    throw new Error(`Não foi possível cadastrar o part number "${sku}" no Omie: ${res.faultstring}`)
+  }
+  const codigoProduto = Number(res?.codigo_produto ?? 0)
+  return codigoProduto || null
+}
+
+/** Resolve o part number no catálogo Omie; se não existir, cadastra e devolve o código interno. */
+async function resolveOrCreateProduto(cnpj: string, dealId: number, item: OmieOrderItemView): Promise<number> {
+  const resolved = await resolveProdutoByCodigo(cnpj, dealId, item.codigo)
+  if (resolved) return resolved.codigoProduto
+  const created = await createProdutoByCodigo(cnpj, dealId, item)
+  if (created) return created
+  throw new Error(`Não foi possível resolver nem cadastrar o part number "${item.codigo}" no Omie.`)
 }
 
 async function attachCliente(view: OmieOrderView, cnpj: string, dealId: number): Promise<OmieOrderView> {
@@ -787,7 +862,7 @@ export async function patchOmieOrder(input: OmieOrderPatch) {
     }
 
     const produtos = input.patch.itemsReplace?.length
-      ? buildOCProdutosFromItems(input.patch.itemsReplace, current.produtos ?? [])
+      ? await buildOCProdutosFromItems(cnpj, input.dealId, input.patch.itemsReplace, current.produtos ?? [])
       : (current.produtos ?? []).map((p: any) => {
         const key = String(p.cCodIntItem ?? p.nCodItem ?? '')
         const ch = input.patch.items?.find(i => i.key === key)
@@ -876,7 +951,7 @@ export async function patchOmieOrder(input: OmieOrderPatch) {
     if (input.patch.header?.condicaoPagamento) cab.codigo_parcela = onlyCode(input.patch.header.condicaoPagamento)
 
     const det = input.patch.itemsReplace?.length
-      ? buildOVDetFromItems(input.patch.itemsReplace, current.det ?? [])
+      ? await buildOVDetFromItems(cnpj, input.dealId, input.patch.itemsReplace, current.det ?? [])
       : (current.det ?? []).map((d: any, i: number) => {
         const key = String(d.ide?.codigo_item_integracao ?? d.ide?.codigo_item ?? i + 1)
         const ch = input.patch.items?.find(x => x.key === key)
