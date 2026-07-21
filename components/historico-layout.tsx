@@ -1,15 +1,16 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { getDealsHistoryAction, listUpdateRequestsAction } from '@/lib/actions'
+import { getDealsHistoryAction, listUpdateRequestsAction, deleteProcessAction } from '@/lib/actions'
 import { generateDealPDF } from '@/lib/generate-pdf'
 import type { HistoryDeal } from './omie-stage-sidebar'
 import {
   RefreshCw, CheckCircle2, XCircle, Clock, FileText,
   Building2, Package, History, Download, ShoppingCart,
-  TrendingUp, Wrench, X, User, ShieldCheck,
+  TrendingUp, Wrench, X, User, ShieldCheck, Trash2, Loader2,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useCurrentUser } from '@/components/current-user-provider'
 
 const STATUS_CFG: Record<string, { label: string; dot: string; badge: string; icon: typeof CheckCircle2 }> = {
   pending:  { label: 'Rascunho', dot: 'bg-blue-400',    badge: 'bg-blue-50 text-blue-700 ring-blue-200',          icon: FileText     },
@@ -104,10 +105,37 @@ function Skeleton() {
 }
 
 // ── Painel de detalhe ──────────────────────────────────────────────────────────
-function DealDetail({ deal, onClose }: { deal: HistoryDeal; onClose: () => void }) {
+function DealDetail({ deal, onClose, onDeleted }: {
+  deal: HistoryDeal
+  onClose: () => void
+  onDeleted: () => void
+}) {
+  const { user } = useCurrentUser()
   const [downloading, setDownloading] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const cfg = STATUS_CFG[deal.status] ?? STATUS_CFG.pending
   const resumo = deal.omieResponse?.resumo
+
+  // Só rascunho (ainda não foi ao Omie) pode ser excluído, e não pelo financeiro.
+  const isDraft = deal.status === 'pending' || deal.status === 'draft'
+  const canDelete = isDraft && user?.role !== 'financeiro'
+
+  const handleDelete = async () => {
+    if (!confirm(`Excluir o rascunho #${deal.id}? Esta ação não pode ser desfeita.`)) return
+    setDeleting(true)
+    try {
+      const r = await deleteProcessAction(deal.id)
+      if (r.success) {
+        toast.success('Rascunho excluído')
+        onClose()
+        onDeleted()
+      } else {
+        toast.error(r.error || 'Erro ao excluir rascunho')
+      }
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   const handlePDF = async () => {
     setDownloading(true)
@@ -144,6 +172,16 @@ function DealDetail({ deal, onClose }: { deal: HistoryDeal; onClose: () => void 
             )}
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
+            {canDelete && (
+              <button
+                onClick={handleDelete}
+                disabled={deleting}
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition-colors disabled:opacity-50"
+              >
+                {deleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                Excluir rascunho
+              </button>
+            )}
             <button
               onClick={handlePDF}
               disabled={downloading}
@@ -588,7 +626,11 @@ export function HistoricoLayout() {
                     <p className="text-sm mt-1">Visualize os pedidos gerados no Omie e baixe o PDF</p>
                   </div>
                 ) : (
-                  <DealDetail deal={selected} onClose={() => setSelected(null)} />
+                  <DealDetail
+                    deal={selected}
+                    onClose={() => setSelected(null)}
+                    onDeleted={() => loadDeals(true)}
+                  />
                 )}
               </div>
             </main>
