@@ -38,6 +38,23 @@ const CC_ES       = '5097263320'
 const CNPJ_ES     = '03969530000211'
 const CNPJ_BARUERI = '03969530000130'
 
+const BITRIX_BASE = 'https://interatell.bitrix24.com.br'
+const BITRIX_ENTITY_TYPE_ID = 129
+
+function dealLink(bitrixDealId: unknown): string {
+  const id = String(bitrixDealId ?? '').trim()
+  if (!id) return ''
+  return `${BITRIX_BASE}/crm/type/${BITRIX_ENTITY_TYPE_ID}/details/${id}/`
+}
+
+/** Prefixa a observação interna com o link do negócio (sem duplicar se já estiver lá). */
+function withDealLink(interna: string, bitrixDealId: unknown): string {
+  const link = dealLink(bitrixDealId)
+  if (!link) return interna
+  if (interna.includes(link)) return interna
+  return [`Negócio: ${link}`, interna].filter(Boolean).join('\n')
+}
+
 function getBranchCnpj(branch: string | undefined, fallbackCnpj: string): string {
   if (branch === 'es') return CNPJ_ES
   if (branch === 'barueri') return CNPJ_BARUERI
@@ -445,8 +462,9 @@ async function upsertOC(
       nCodFor: codDistribuidor,
       cCodParc: codParc,
       dDtPrevisao: toOmieDate(business?.deliveryDeadline),
-      cObs: obs.interna,
-      cObsInt: obs.externa,
+      // cObs = observação do pedido; cObsInt = observação interna (só quem consulta vê).
+      cObs: obs.externa,
+      cObsInt: obs.interna,
     },
     produtos_upsert: produtosUpsert,
   }, dealId, 'createOCResult')
@@ -469,7 +487,11 @@ async function upsertOV(
 ) {
   const hwItems = items.filter(i => normalizeNatureza(i.nature) === 'HW' && normalizeNCM(i.ncm) !== '00000000')
   if (!hwItems.length || !codCliente) return null
-  const obsVenda = [obs.externa, obs.interna].filter(Boolean).join('\n')
+  // obs_venda NÃO sai na Nota Fiscal → recebe a interna (com o link do negócio).
+  // A externa vai em informacoes_adicionais.dados_adicionais_nf, que sai na NF
+  // (o Omie usa pipe "|" como separador de linha nesse campo).
+  const obsVenda = obs.interna
+  const dadosAdicNF = obs.externa.replace(/\r?\n/g, '|')
   const baseCode = `OV-${dealId}-C${customerIdx}`
   const createCode = opts.isUpdate ? baseCode : `${baseCode}${opts.retryCount > 0 ? `-R${opts.retryCount}` : ''}`
 
@@ -503,6 +525,7 @@ async function upsertOV(
   const informacoes_adicionais = {
     codigo_categoria: '1.01.03', codigo_conta_corrente: contaCorrente(interatellCnpj),
     consumidor_final: 'S', enviar_email: 'N', numero_pedido_cliente: createCode,
+    ...(dadosAdicNF ? { dados_adicionais_nf: dadosAdicNF } : {}),
   }
 
   const lookupRetry = opts.isUpdate ? Math.max(opts.retryCount, 5) : opts.retryCount
@@ -569,7 +592,8 @@ async function upsertOS(
 ) {
   if (!items.length || !codCliente) return null
   const SERVICO_MAP: Record<Natureza, string> = { SW:'SRV00016', LC:'SRV00007', ST:'SRV00016', SRV:'SRV00001', HW:'' }
-  const obsOS = [obs.externa, obs.interna].filter(Boolean).join('\n')
+  // cObsOS é a observação interna da OS; a externa vai em cDadosAdicNF (sai na NF).
+  const obsOS = obs.interna
   const baseCode = `OS-${dealId}-C${customerIdx}-${nat}`
   const createCode = opts.isUpdate ? baseCode : `${baseCode}${opts.retryCount > 0 ? `-R${opts.retryCount}` : ''}`
 
@@ -669,9 +693,11 @@ async function processDeal(body: any, dealId: number) {
 
     const payload = typeof deal.payload === 'string' ? JSON.parse(deal.payload) : deal.payload
     const { interatell, supplierGroups = [], customers = [], business, notes } = payload
+    // A observação interna sempre carrega o link do negócio no Bitrix, para quem
+    // consultar o pedido no Omie conseguir voltar ao card de origem.
     const obs = {
       externa: String(notes?.externalNotes ?? '').trim(),
-      interna: String(notes?.internalNotes ?? '').trim(),
+      interna: withDealLink(String(notes?.internalNotes ?? '').trim(), deal.bitrix_deal_id),
     }
     const retryCount: number = payload._retryCount ?? 0
     const isUpdate = body.update === true || deal.status === 'sent'

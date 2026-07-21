@@ -80,6 +80,29 @@ export type OmieOrderPatch = {
 
 const digits = (v: unknown) => String(v ?? '').replace(/\D/g, '')
 
+const BITRIX_BASE = 'https://interatell.bitrix24.com.br'
+const BITRIX_ENTITY_TYPE_ID = 129
+
+/**
+ * A observação interna sempre carrega o link do negócio no Bitrix, para quem
+ * consultar o pedido no Omie conseguir voltar ao card de origem.
+ * Busca o bitrix_deal_id pelo id interno do deal; se não achar, devolve o texto puro.
+ */
+async function withDealLinkForDeal(interna: string, dealId: number): Promise<string> {
+  const texto = String(interna ?? '')
+  if (!dealId) return texto
+  try {
+    const [row] = await sql`SELECT bitrix_deal_id FROM deals WHERE id = ${dealId}`
+    const bitrixId = String(row?.bitrix_deal_id ?? '').trim()
+    if (!bitrixId) return texto
+    const link = `${BITRIX_BASE}/crm/type/${BITRIX_ENTITY_TYPE_ID}/details/${bitrixId}/`
+    if (texto.includes(link)) return texto
+    return [`Negócio: ${link}`, texto].filter(Boolean).join('\n')
+  } catch {
+    return texto
+  }
+}
+
 export function branchToCnpj(branch: 'barueri' | 'es') {
   return branch === 'es' ? CNPJ_ES : CNPJ_BARUERI
 }
@@ -572,8 +595,8 @@ function mapOCView(kind: OmieOrderKind, branch: 'barueri' | 'es', data: NonNulla
     internalId: Number(data.cab.nCodPed),
     branch,
     header: {
-      observacaoExterna: String(data.cab.cObsInt ?? ''),
-      observacaoInterna: String(data.cab.cObs ?? ''),
+      observacaoExterna: String(data.cab.cObs ?? ''),
+      observacaoInterna: String(data.cab.cObsInt ?? ''),
       dataPrevisao: toIsoDate(data.cab.dDtPrevisao),
       condicaoPagamento: String(data.cab.cCodParc ?? ''),
       parceiro: String(data.cab.cCodIntFor ?? data.cab.nCodFor ?? ''),
@@ -667,8 +690,9 @@ function mapOVView(kind: OmieOrderKind, branch: 'barueri' | 'es', data: NonNulla
     internalId: Number(data.cab.codigo_pedido),
     branch,
     header: {
-      observacaoExterna: String(data.obs ?? data.cab.obs_venda ?? ''),
-      observacaoInterna: '',
+      // obs_venda não sai na NF → é a interna. A externa é dados_adicionais_nf.
+      observacaoExterna: String(data.informacoes_adicionais?.dados_adicionais_nf ?? '').replace(/\|/g, '\n'),
+      observacaoInterna: String(data.obs ?? data.cab.obs_venda ?? ''),
       dataPrevisao: toIsoDate(data.cab.data_previsao),
       condicaoPagamento: String(data.cab.codigo_parcela ?? ''),
       parceiro: String(data.cab.codigo_cliente ?? ''),
@@ -738,8 +762,13 @@ function mapOSView(kind: OmieOrderKind, branch: 'barueri' | 'es', data: NonNulla
     internalId: Number(data.cab.nCodOS),
     branch,
     header: {
-      observacaoExterna: String(data.cab.cObsOS ?? ''),
-      observacaoInterna: '',
+      // cObsOS é a interna da OS; a externa (que sai na NF) é cDadosAdicNF.
+      observacaoExterna: String(
+        (data as any).raw?.InformacoesAdicionais?.cDadosAdicNF
+        ?? (data as any).raw?.informacoesAdicionais?.cDadosAdicNF
+        ?? '',
+      ),
+      observacaoInterna: String(data.cab.cObsOS ?? ''),
       dataPrevisao: toIsoDate(data.cab.dDtPrevisao),
       condicaoPagamento: String(data.cab.cCodParc ?? ''),
       parceiro: String(data.cab.nCodCli ?? ''),
@@ -825,8 +854,10 @@ export async function patchOmieOrder(input: OmieOrderPatch) {
     if (!current) throw new Error('Não foi possível recarregar a OC antes de atualizar.')
 
     const cab = { ...current.cab }
-    if (input.patch.header?.observacaoExterna !== undefined) cab.cObsInt = input.patch.header.observacaoExterna
-    if (input.patch.header?.observacaoInterna !== undefined) cab.cObs = input.patch.header.observacaoInterna
+    if (input.patch.header?.observacaoExterna !== undefined) cab.cObs = input.patch.header.observacaoExterna
+    if (input.patch.header?.observacaoInterna !== undefined) {
+      cab.cObsInt = await withDealLinkForDeal(input.patch.header.observacaoInterna, input.dealId)
+    }
     if (input.patch.header?.dataPrevisao) cab.dDtPrevisao = toOmieDate(input.patch.header.dataPrevisao)
     if (input.patch.header?.condicaoPagamento) cab.cCodParc = onlyCode(input.patch.header.condicaoPagamento)
 
@@ -951,8 +982,15 @@ export async function patchOmieOrder(input: OmieOrderPatch) {
     }
 
     const cab = { ...current.cab, codigo_cliente: codigoCliente }
+    // obs_venda = interna (não sai na NF); dados_adicionais_nf = externa (sai na NF).
     let obsVenda = current.obs ?? ''
-    if (input.patch.header?.observacaoExterna !== undefined) obsVenda = input.patch.header.observacaoExterna
+    if (input.patch.header?.observacaoInterna !== undefined) {
+      obsVenda = await withDealLinkForDeal(input.patch.header.observacaoInterna, input.dealId)
+    }
+    let dadosAdicNF = current.informacoes_adicionais?.dados_adicionais_nf ?? ''
+    if (input.patch.header?.observacaoExterna !== undefined) {
+      dadosAdicNF = input.patch.header.observacaoExterna.replace(/\r?\n/g, '|')
+    }
     if (input.patch.header?.dataPrevisao) cab.data_previsao = toOmieDate(input.patch.header.dataPrevisao)
     if (input.patch.header?.condicaoPagamento) cab.codigo_parcela = onlyCode(input.patch.header.condicaoPagamento)
 
@@ -983,6 +1021,7 @@ export async function patchOmieOrder(input: OmieOrderPatch) {
     const informacoes_adicionais = {
       ...(current.informacoes_adicionais ?? {}),
       codigo_categoria: current.informacoes_adicionais?.codigo_categoria ?? '1.01.03',
+      ...(dadosAdicNF ? { dados_adicionais_nf: dadosAdicNF } : {}),
     }
 
     const res = await omieRequest(cnpj, OMIE_URL.PEDIDOS_VENDA, 'AlterarPedidoVenda', {
@@ -1081,7 +1120,10 @@ export async function patchOmieOrder(input: OmieOrderPatch) {
     InformacoesAdicionais: {
       cCidPrestServ: infoRaw.cCidPrestServ ?? '',
       cCodCateg: infoRaw.cCodCateg ?? '1.01.02',
-      cDadosAdicNF: infoRaw.cDadosAdicNF ?? '',
+      // cDadosAdicNF sai na Nota Fiscal → recebe a observação externa.
+      cDadosAdicNF: input.patch.header?.observacaoExterna !== undefined
+        ? input.patch.header.observacaoExterna
+        : (infoRaw.cDadosAdicNF ?? ''),
       nCodCC: infoRaw.nCodCC,
       cNumPedido: infoRaw.cNumPedido,
     },
@@ -1092,8 +1134,9 @@ export async function patchOmieOrder(input: OmieOrderPatch) {
       cEnviarPara: emailRaw.cEnviarPara ?? '',
     },
     Observacoes: {
-      cObsOS: input.patch.header?.observacaoExterna !== undefined
-        ? input.patch.header.observacaoExterna
+      // cObsOS é a observação interna da OS (leva o link do negócio).
+      cObsOS: input.patch.header?.observacaoInterna !== undefined
+        ? await withDealLinkForDeal(input.patch.header.observacaoInterna, input.dealId)
         : (obsAtual.cObsOS ?? cab.cObsOS ?? ''),
     },
     Departamentos: [],
