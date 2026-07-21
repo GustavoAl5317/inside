@@ -195,5 +195,59 @@ export function computeDealPayloadChanges(before: any, after: any): PayloadChang
     }
   }
 
+  // Serviço Interatell (SRV): sem fornecedor, itens digitados direto no pedido.
+  const bServices = before.serviceCustomers ?? []
+  const aServices = after.serviceCustomers ?? []
+  const maxServices = Math.max(bServices.length, aServices.length)
+
+  for (let s = 0; s < maxServices; s++) {
+    const bs = bServices[s]
+    const as = aServices[s]
+    const sLabel = `Serviço Interatell ${s + 1}`
+
+    if (!bs && as) {
+      changes.push({ label: sLabel, before: '—', after: as.customer?.name ?? 'Novo cliente de serviço', kind: 'added' })
+      continue
+    }
+    if (bs && !as) {
+      changes.push({ label: sLabel, before: bs.customer?.name ?? '—', after: '—', kind: 'removed' })
+      continue
+    }
+    if (!bs || !as) continue
+
+    pushDiff(changes, `${sLabel} — cliente`, bs.customer?.name, as.customer?.name)
+    pushDiff(changes, `${sLabel} — CNPJ`, bs.customer?.cnpj, as.customer?.cnpj)
+    pushDiff(changes, `${sLabel} — filial`, bs.branch, as.branch)
+
+    const bItems = bs.items ?? []
+    const aItems = as.items ?? []
+    const maxItems = Math.max(bItems.length, aItems.length)
+
+    for (let i = 0; i < maxItems; i++) {
+      const bi = bItems[i]
+      const ai = aItems[i]
+      const iLabel = `${sLabel} · serviço ${i + 1}`
+
+      if (!bi && ai) {
+        changes.push({
+          label: iLabel,
+          before: '—',
+          after: `${ai.description ?? '—'} · qtd ${ai.quantity ?? 1} · venda ${fmtMoney(ai.unitSale)}`,
+          kind: 'added',
+        })
+        continue
+      }
+      if (bi && !ai) {
+        changes.push({ label: iLabel, before: bi.description ?? '—', after: '—', kind: 'removed' })
+        continue
+      }
+      if (!bi || !ai) continue
+
+      pushDiff(changes, `${iLabel} — descrição`, bi.description, ai.description)
+      pushDiff(changes, `${iLabel} — quantidade`, bi.quantity, ai.quantity)
+      pushDiff(changes, `${iLabel} — venda unit.`, bi.unitSale, ai.unitSale, fmtMoney)
+    }
+  }
+
   return changes
 }
