@@ -1,18 +1,131 @@
-export async function generateDealPDF(values: any): Promise<void> {
-  const { formatPaymentConditionLabel } = await import('@/lib/payment-condition-utils')
-  const { default: jsPDF }     = await import('jspdf')
+import { formatPaymentConditionLabel } from '@/lib/payment-condition-utils'
+
+type Natureza = 'HW' | 'SW' | 'LC' | 'ST' | 'SRV'
+
+const NATUREZA_LABEL: Record<Natureza, string> = {
+  HW:  'Hardware',
+  SW:  'Software',
+  LC:  'Licença',
+  ST:  'Serviço Terceiro',
+  SRV: 'Serviço Interatell',
+}
+
+const natureOf = (p: any): Natureza => {
+  const n = String(p?.nature ?? 'HW').trim().toUpperCase()
+  return (['HW', 'SW', 'LC', 'ST', 'SRV'] as const).includes(n as Natureza) ? (n as Natureza) : 'HW'
+}
+
+/**
+ * Um documento = um PDF. O que vai pro Omie como OC, OV e cada OS de natureza
+ * vira um arquivo separado. Todos mostram fornecedor e cliente, menos o de
+ * serviço Interatell (SRV), que não passa por fornecedor.
+ */
+type DocSpec = {
+  title: string
+  filePrefix: string
+  showSuppliers: boolean
+  groups: any[]
+  customers: any[]
+  serviceCustomers?: any[]
+}
+
+/** Natureza do produto referenciado por uma alocação de cliente. */
+function allocNature(values: any, alloc: any): Natureza {
+  const group = (values.supplierGroups || []).find((g: any) => g.localId === alloc.groupLocalId)
+  const product = group?.products?.[alloc.productIndex]
+  return natureOf(product)
+}
+
+function groupsWith(values: any, keep: (n: Natureza) => boolean) {
+  return (values.supplierGroups || [])
+    .map((g: any) => ({ ...g, products: (g.products || []).filter((p: any) => keep(natureOf(p))) }))
+    .filter((g: any) => g.products.length > 0)
+}
+
+function customersWith(values: any, keep: (n: Natureza) => boolean) {
+  return (values.customers || [])
+    .map((c: any) => ({
+      ...c,
+      productAllocations: (c.productAllocations || [])
+        .filter((a: any) => Number(a.quantity) > 0 && keep(allocNature(values, a))),
+    }))
+    .filter((c: any) => c.productAllocations.length > 0)
+}
+
+/** Monta a lista de documentos que este negócio gera. */
+function buildDocSpecs(values: any): DocSpec[] {
+  const specs: DocSpec[] = []
+  const allCustomers = customersWith(values, () => true)
+
+  // OC — tudo que é comprado de fornecedor (SRV não entra: é serviço próprio).
+  const ocGroups = groupsWith(values, n => n !== 'SRV')
+  if (ocGroups.length) {
+    specs.push({
+      title: 'ORDEM DE COMPRA',
+      filePrefix: 'ordem_compra',
+      showSuppliers: true,
+      groups: ocGroups,
+      customers: allCustomers,
+    })
+  }
+
+  // OV — só hardware.
+  const ovGroups = groupsWith(values, n => n === 'HW')
+  const ovCustomers = customersWith(values, n => n === 'HW')
+  if (ovGroups.length || ovCustomers.length) {
+    specs.push({
+      title: 'ORDEM DE VENDA',
+      filePrefix: 'ordem_venda',
+      showSuppliers: true,
+      groups: ovGroups,
+      customers: ovCustomers,
+    })
+  }
+
+  // OS por natureza que passa por fornecedor.
+  for (const nat of ['SW', 'LC', 'ST'] as Natureza[]) {
+    const g = groupsWith(values, n => n === nat)
+    const c = customersWith(values, n => n === nat)
+    if (!g.length && !c.length) continue
+    specs.push({
+      title: `ORDEM DE SERVIÇO — ${NATUREZA_LABEL[nat].toUpperCase()} (${nat})`,
+      filePrefix: `ordem_servico_${nat.toLowerCase()}`,
+      showSuppliers: true,
+      groups: g,
+      customers: c,
+    })
+  }
+
+  // OS de serviço Interatell — só cliente, sem fornecedor.
+  const svc = (values.serviceCustomers || []).filter((s: any) => (s.items || []).length > 0)
+  if (svc.length) {
+    specs.push({
+      title: 'ORDEM DE SERVIÇO — SERVIÇO INTERATELL (SRV)',
+      filePrefix: 'ordem_servico_srv',
+      showSuppliers: false,
+      groups: [],
+      customers: [],
+      serviceCustomers: svc,
+    })
+  }
+
+  return specs
+}
+
+async function renderDoc(values: any, spec: DocSpec): Promise<void> {
+  const { default: jsPDF } = await import('jspdf')
   const { default: autoTable } = await import('jspdf-autotable')
 
-  const doc    = new jsPDF()
+  const doc = new jsPDF()
   const PAGE_W = doc.internal.pageSize.getWidth()
-  let y = 14
+  let y = 18
 
-  const safeY = (need = 20) => {
+  const safeY = (need: number) => {
     if (y + need > 270) { doc.addPage(); y = 14 }
   }
 
   const addSection = (title: string) => {
-    safeY(12)
+    safeY(14)
     doc.setFontSize(10)
     doc.setFont('helvetica', 'bold')
     doc.setTextColor(30, 64, 175)
@@ -34,21 +147,21 @@ export async function generateDealPDF(values: any): Promise<void> {
     const val = doc.splitTextToSize(value || '—', PAGE_W - 70)
     doc.text(val, 58, y)
     doc.setTextColor(0, 0, 0)
-    y += val.length > 1 ? val.length * 4.5 : 5
+    y += Math.max(5, val.length * 4.5)
   }
 
   // Cabeçalho
-  doc.setFontSize(18)
+  doc.setFontSize(16)
   doc.setFont('helvetica', 'bold')
   doc.setTextColor(15, 23, 42)
-  doc.text('ORDEM DE COMPRA', PAGE_W / 2, y, { align: 'center' })
+  doc.text(spec.title, PAGE_W / 2, y, { align: 'center' })
   y += 7
   doc.setFontSize(9)
   doc.setFont('helvetica', 'normal')
   doc.setTextColor(100, 116, 139)
   doc.text(
     `Nº ${values.business?.commercialProposal || values.bitrixDealId || '—'}   ·   Emitido em ${new Date().toLocaleDateString('pt-BR')}`,
-    PAGE_W / 2, y, { align: 'center' }
+    PAGE_W / 2, y, { align: 'center' },
   )
   y += 10
   doc.setDrawColor(200, 200, 200)
@@ -73,12 +186,10 @@ export async function generateDealPDF(values: any): Promise<void> {
     if (e.email || opts?.alwaysContact)       addKV('E-mail:',    e.email || '—')
   }
 
-  // Empresa emissora
   addSection('Empresa Emissora')
   addEntity(values.interatell)
   y += 3
 
-  // Negócio
   addSection('Dados do Negócio')
   addKV('Proposta nº:', values.business?.commercialProposal || '')
   addKV('Data OC:', values.business?.purchaseOrderDate || '')
@@ -88,81 +199,122 @@ export async function generateDealPDF(values: any): Promise<void> {
   addKV('Cond. venda:', formatPaymentConditionLabel(values.business?.salePaymentCondition || '', 'sale'))
   y += 3
 
-  // Fornecedores
-  addSection('Fornecedores e Produtos')
-  for (const [gi, group] of ((values.supplierGroups || []) as any[]).entries()) {
-    safeY(30)
-    doc.setFontSize(8.5)
-    doc.setFont('helvetica', 'bold')
-    doc.setTextColor(30, 64, 175)
-    doc.text(`Fornecedor ${gi + 1}`, 14, y)
-    doc.setTextColor(0, 0, 0)
-    y += 5
-    addEntity((group as any).supplier)
-    y += 3
-    const fmtCur = (v: number) => `R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
-    const products: any[] = (group as any).products || []
-    const totalCusto = products.reduce((s: number, p: any) => s + Number(p.totalCost || 0), 0)
-    autoTable(doc, {
-      startY: y,
-      head: [['Partnumber', 'Descrição', 'Qtd', 'Custo Unit.', 'Total Custo']],
-      body: [
-        ...products.map((p: any) => [
-          p.partnumber, p.description, p.quantity,
-          fmtCur(Number(p.unitCost || 0)),
-          fmtCur(Number(p.totalCost || 0)),
-        ]),
-        ['', '', '', { content: 'Total:', styles: { fontStyle: 'bold' as const, halign: 'right' as const } }, { content: fmtCur(totalCusto), styles: { fontStyle: 'bold' as const, halign: 'right' as const, textColor: [30, 64, 175] as any } }],
-      ],
-      styles:             { fontSize: 7.5, cellPadding: 2.5 },
-      headStyles:         { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' },
-      alternateRowStyles: { fillColor: [240, 245, 255] },
-      columnStyles:       { 0: { fontStyle: 'bold' }, 2: { halign: 'center' }, 3: { halign: 'right' }, 4: { halign: 'right' } },
-      margin:             { left: 14, right: 14 },
-    })
-    y = (doc as any).lastAutoTable.finalY + 6
-  }
-  y += 2
+  const money = (v: number) => `R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
 
-  // Clientes
-  addSection('Clientes')
-  for (const [ci, entry] of ((values.customers || []) as any[]).entries()) {
-    safeY(30)
-    doc.setFontSize(8.5)
-    doc.setFont('helvetica', 'bold')
-    doc.setTextColor(109, 40, 217)
-    doc.text(`Cliente ${ci + 1}`, 14, y)
-    doc.setTextColor(0, 0, 0)
-    y += 5
-    addEntity((entry as any).customer, { alwaysContact: true })
-    const allocated = ((entry as any).productAllocations || []).filter((a: any) => a.quantity > 0)
-    if (allocated.length > 0) {
-      const fmt = (v: number) => `R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
-      const totalVenda = allocated.reduce((s: number, a: any) => s + (Number(a.unitSale || 0) * Number(a.quantity || 0)), 0)
-      autoTable(doc, {
-        startY: y,
-        head: [['Partnumber', 'Descrição', 'Qtd', 'Preço Unit. Venda', 'Total Venda']],
-        body: [
-          ...allocated.map((a: any) => [
-            a.partnumber,
-            a.description,
-            a.quantity,
-            fmt(Number(a.unitSale || 0)),
-            fmt(Number(a.unitSale || 0) * Number(a.quantity || 0)),
-          ]),
-          ['', '', '', { content: 'Total:', styles: { fontStyle: 'bold' as const, halign: 'right' as const } }, { content: fmt(totalVenda), styles: { fontStyle: 'bold' as const, halign: 'right' as const, textColor: [109, 40, 217] as any } }],
-        ],
-        styles:             { fontSize: 7.5, cellPadding: 2.5 },
-        headStyles:         { fillColor: [109, 40, 217], textColor: 255, fontStyle: 'bold' },
-        alternateRowStyles: { fillColor: [245, 243, 255] },
-        columnStyles:       { 0: { fontStyle: 'bold' }, 2: { halign: 'center' }, 3: { halign: 'right' }, 4: { halign: 'right' } },
-        margin:             { left: 14, right: 14 },
-      })
-      y = (doc as any).lastAutoTable.finalY + 6
+  // Fornecedores (ausente no documento de serviço Interatell)
+  if (spec.showSuppliers && spec.groups.length) {
+    addSection('Fornecedores e Produtos')
+    for (const [gi, group] of spec.groups.entries()) {
+      safeY(30)
+      doc.setFontSize(8.5)
+      doc.setFont('helvetica', 'bold')
+      doc.setTextColor(30, 64, 175)
+      doc.text(`Fornecedor ${gi + 1}${group.branch ? ` · ${group.branch === 'es' ? 'Filial ES' : 'Barueri (SP)'}` : ''}`, 14, y)
+      doc.setTextColor(0, 0, 0)
+      y += 5
+      addEntity(group.supplier)
+      const products = group.products || []
+      if (products.length) {
+        const totalCusto = products.reduce((s: number, p: any) => s + Number(p.unitCost || 0) * Number(p.quantity || 0), 0)
+        autoTable(doc, {
+          startY: y,
+          head: [['Partnumber', 'Descrição', 'Nat.', 'Qtd', 'Custo Unit.', 'Total Custo']],
+          body: [
+            ...products.map((p: any) => [
+              p.partnumber, p.description, natureOf(p), p.quantity,
+              money(Number(p.unitCost || 0)),
+              money(Number(p.unitCost || 0) * Number(p.quantity || 0)),
+            ]),
+            ['', '', '', '', { content: 'Total:', styles: { fontStyle: 'bold' as const, halign: 'right' as const } },
+              { content: money(totalCusto), styles: { fontStyle: 'bold' as const, halign: 'right' as const, textColor: [30, 64, 175] as any } }],
+          ],
+          styles:             { fontSize: 7.5, cellPadding: 2.5 },
+          headStyles:         { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' },
+          alternateRowStyles: { fillColor: [239, 246, 255] },
+          columnStyles:       { 0: { fontStyle: 'bold' }, 2: { halign: 'center' }, 3: { halign: 'center' }, 4: { halign: 'right' }, 5: { halign: 'right' } },
+          margin:             { left: 14, right: 14 },
+        })
+        y = (doc as any).lastAutoTable.finalY + 6
+      }
     }
   }
 
-  // Condições de pagamento
+  // Clientes com produtos alocados
+  if (spec.customers.length) {
+    addSection('Clientes')
+    for (const [ci, entry] of spec.customers.entries()) {
+      safeY(30)
+      doc.setFontSize(8.5)
+      doc.setFont('helvetica', 'bold')
+      doc.setTextColor(109, 40, 217)
+      doc.text(`Cliente ${ci + 1}${entry.branch ? ` · ${entry.branch === 'es' ? 'Filial ES' : 'Barueri (SP)'}` : ''}`, 14, y)
+      doc.setTextColor(0, 0, 0)
+      y += 5
+      addEntity(entry.customer, { alwaysContact: true })
+      const allocated = entry.productAllocations || []
+      if (allocated.length) {
+        const totalVenda = allocated.reduce((s: number, a: any) => s + Number(a.unitSale || 0) * Number(a.quantity || 0), 0)
+        autoTable(doc, {
+          startY: y,
+          head: [['Partnumber', 'Descrição', 'Qtd', 'Preço Unit. Venda', 'Total Venda']],
+          body: [
+            ...allocated.map((a: any) => [
+              a.partnumber, a.description, a.quantity,
+              money(Number(a.unitSale || 0)),
+              money(Number(a.unitSale || 0) * Number(a.quantity || 0)),
+            ]),
+            ['', '', '', { content: 'Total:', styles: { fontStyle: 'bold' as const, halign: 'right' as const } },
+              { content: money(totalVenda), styles: { fontStyle: 'bold' as const, halign: 'right' as const, textColor: [109, 40, 217] as any } }],
+          ],
+          styles:             { fontSize: 7.5, cellPadding: 2.5 },
+          headStyles:         { fillColor: [109, 40, 217], textColor: 255, fontStyle: 'bold' },
+          alternateRowStyles: { fillColor: [245, 243, 255] },
+          columnStyles:       { 0: { fontStyle: 'bold' }, 2: { halign: 'center' }, 3: { halign: 'right' }, 4: { halign: 'right' } },
+          margin:             { left: 14, right: 14 },
+        })
+        y = (doc as any).lastAutoTable.finalY + 6
+      }
+    }
+  }
+
+  // Clientes de serviço Interatell — sem fornecedor, itens digitados direto
+  if (spec.serviceCustomers?.length) {
+    addSection('Clientes e Serviços')
+    for (const [ci, entry] of spec.serviceCustomers.entries()) {
+      safeY(30)
+      doc.setFontSize(8.5)
+      doc.setFont('helvetica', 'bold')
+      doc.setTextColor(13, 148, 136)
+      doc.text(`Cliente ${ci + 1}${entry.branch ? ` · ${entry.branch === 'es' ? 'Filial ES' : 'Barueri (SP)'}` : ''}`, 14, y)
+      doc.setTextColor(0, 0, 0)
+      y += 5
+      addEntity(entry.customer, { alwaysContact: true })
+      const items = entry.items || []
+      if (items.length) {
+        const total = items.reduce((s: number, i: any) => s + Number(i.unitSale || 0) * Number(i.quantity || 0), 0)
+        autoTable(doc, {
+          startY: y,
+          head: [['Descrição do Serviço', 'Qtd', 'Valor Unit.', 'Total']],
+          body: [
+            ...items.map((i: any) => [
+              i.description, i.quantity,
+              money(Number(i.unitSale || 0)),
+              money(Number(i.unitSale || 0) * Number(i.quantity || 0)),
+            ]),
+            ['', '', { content: 'Total:', styles: { fontStyle: 'bold' as const, halign: 'right' as const } },
+              { content: money(total), styles: { fontStyle: 'bold' as const, halign: 'right' as const, textColor: [13, 148, 136] as any } }],
+          ],
+          styles:             { fontSize: 7.5, cellPadding: 2.5 },
+          headStyles:         { fillColor: [13, 148, 136], textColor: 255, fontStyle: 'bold' },
+          alternateRowStyles: { fillColor: [240, 253, 250] },
+          columnStyles:       { 0: { fontStyle: 'bold' }, 1: { halign: 'center' }, 2: { halign: 'right' }, 3: { halign: 'right' } },
+          margin:             { left: 14, right: 14 },
+        })
+        y = (doc as any).lastAutoTable.finalY + 6
+      }
+    }
+  }
+
   safeY(20)
   addSection('Condições de Pagamento')
   addKV('Compra:', values.business?.purchasePaymentCondition || '')
@@ -195,7 +347,6 @@ export async function generateDealPDF(values: any): Promise<void> {
     doc.setTextColor(0, 0, 0)
   }
 
-  // Rodapé
   const totalPages = (doc as any).internal.getNumberOfPages()
   for (let i = 1; i <= totalPages; i++) {
     doc.setPage(i)
@@ -205,13 +356,41 @@ export async function generateDealPDF(values: any): Promise<void> {
     doc.setFont('helvetica', 'normal')
     doc.text(
       `Interatell Integrações e Telecomunicações Ltda  ·  Página ${i} de ${totalPages}`,
-      PAGE_W / 2, pageH - 8, { align: 'center' }
+      PAGE_W / 2, pageH - 8, { align: 'center' },
     )
     doc.setDrawColor(220, 220, 220)
     doc.setLineWidth(0.3)
     doc.line(14, pageH - 12, PAGE_W - 14, pageH - 12)
   }
 
-  const filename = `ordem_compra_${values.business?.commercialProposal || values.bitrixDealId || 'rascunho'}.pdf`
-  doc.save(filename)
+  const ref = values.business?.commercialProposal || values.bitrixDealId || 'rascunho'
+  doc.save(`${spec.filePrefix}_${ref}.pdf`)
+}
+
+/**
+ * Gera um PDF por documento (OC, OV e uma OS por natureza).
+ * Retorna quantos arquivos foram baixados.
+ */
+export async function generateDealPDFs(values: any): Promise<number> {
+  const specs = buildDocSpecs(values)
+  if (!specs.length) {
+    // Negócio sem itens: mantém um documento único para não deixar o usuário sem nada.
+    await renderDoc(values, {
+      title: 'ORDEM DE COMPRA',
+      filePrefix: 'ordem_compra',
+      showSuppliers: true,
+      groups: values.supplierGroups || [],
+      customers: values.customers || [],
+    })
+    return 1
+  }
+  for (const spec of specs) {
+    await renderDoc(values, spec)
+  }
+  return specs.length
+}
+
+/** Compatibilidade: gera todos os documentos do negócio. */
+export async function generateDealPDF(values: any): Promise<void> {
+  await generateDealPDFs(values)
 }
