@@ -1,4 +1,5 @@
 import { formatPaymentConditionLabel } from '@/lib/payment-condition-utils'
+import { issuersFromPayload } from '@/lib/interatell-companies'
 
 type Natureza = 'HW' | 'SW' | 'LC' | 'ST' | 'SRV'
 
@@ -232,8 +233,18 @@ async function renderDoc(values: any, spec: DocSpec, resumo?: OmiePdfResumo): Pr
     if (e.email || opts?.alwaysContact)       addKV('E-mail:',    e.email || '—')
   }
 
-  addSection('Empresa Emissora')
-  addEntity(values.interatell)
+  // O payload guarda interatellBranches (uma ou ambas as filiais), não um objeto
+  // pronto — por isso a seção saía vazia quando lia values.interatell direto.
+  const issuers = issuersFromPayload(values)
+  addSection(issuers.length > 1 ? 'Empresas Emissoras' : 'Empresa Emissora')
+  if (!issuers.length) {
+    addKV('Razão Social:', '—')
+  } else {
+    for (const [i, issuer] of issuers.entries()) {
+      if (i > 0) y += 2
+      addEntity(issuer)
+    }
+  }
   y += 3
 
   addSection('Dados do Negócio')
@@ -449,7 +460,11 @@ export async function generateDealPDFs(values: any, resumo?: OmiePdfResumo): Pro
     }, resumo)
     return 1
   }
-  for (const spec of specs) {
+  // Downloads em sequência imediata são engolidos pelo navegador (só o primeiro
+  // arquivo chega). Espaçar os saves faz todos passarem — na primeira vez o
+  // Chrome pergunta se permite baixar vários arquivos do site.
+  for (const [i, spec] of specs.entries()) {
+    if (i > 0) await new Promise(r => setTimeout(r, 700))
     await renderDoc(values, spec, resumo)
   }
   return specs.length

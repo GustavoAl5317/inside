@@ -14,6 +14,7 @@ import { NotesTab } from "./form-tabs/notes-tab"
 import { SupplierGroupsTab } from "./form-tabs/supplier-groups-tab"
 import { CustomersTab } from "./form-tabs/customers-tab"
 import { generateDealPDFs } from "@/lib/generate-pdf"
+import { INTERATELL_COMPANIES } from "@/lib/interatell-companies"
 import { ServiceCustomersTab } from "./form-tabs/service-customers-tab"
 import {
   createDealAction,
@@ -835,29 +836,6 @@ export function MultiStepForm({
 }
 
 // ─── Empresas Interatell ────────────────────────────────────────────────────────
-const INTERATELL_COMPANIES: Record<string, {
-  cnpj: string; name: string; stateRegistration: string
-  zipCode: string; city: string; state: string
-  neighborhood: string; address: string; number: string; complement: string
-}> = {
-  matriz: {
-    cnpj: "03969530000130",
-    name: "Interatell Integrações e Telecomunicações Ltda",
-    stateRegistration: "206.122.484.113",
-    zipCode: "06472001", city: "Barueri", state: "SP",
-    neighborhood: "", address: "Avenida Copacabana",
-    number: "190", complement: "Empresarial Dezoito do Forte",
-  },
-  filial: {
-    cnpj: "03969530000211",
-    name: "Interatell Integrações e Telecomunicações Ltda – FILIAL",
-    stateRegistration: "",
-    zipCode: "29175706", city: "Serra", state: "ES",
-    neighborhood: "Nova Zelândia", address: "Rua Porto Alegre",
-    number: "307", complement: "Galpão 02 Módulo 02B",
-  },
-}
-
 function InteratellSection({ form }: { form: any }) {
   const branches: string[] = form.watch("interatellBranches") || []
 
