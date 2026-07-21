@@ -13,6 +13,7 @@ import { BusinessTab } from "./form-tabs/business-tab"
 import { NotesTab } from "./form-tabs/notes-tab"
 import { SupplierGroupsTab } from "./form-tabs/supplier-groups-tab"
 import { CustomersTab } from "./form-tabs/customers-tab"
+import { ServiceCustomersTab } from "./form-tabs/service-customers-tab"
 import {
   createDealAction,
   saveDraftAction,
@@ -668,6 +669,7 @@ export function MultiStepForm({
       interatellBranches: [] as ('barueri' | 'es')[],
       supplierGroups: [],
       customers:      [],
+      serviceCustomers: [],
       notes: { internalNotes: "", externalNotes: "" },
     },
   })
@@ -696,6 +698,7 @@ export function MultiStepForm({
       interatellBranches: [],
       supplierGroups: [],
       customers:      [],
+      serviceCustomers: [],
       notes: { internalNotes: "", externalNotes: "" },
     })
     setActiveTab("business")
@@ -762,9 +765,10 @@ export function MultiStepForm({
       bitrixDealId:       p.bitrixDealId   || "",
       business:           p.business       || form.getValues("business"),
       interatellBranches: branches,
-      supplierGroups:     p.supplierGroups || [],
-      customers:          p.customers      || [],
-      notes:              p.notes          || { internalNotes: "", externalNotes: "" },
+      supplierGroups:     p.supplierGroups   || [],
+      customers:          p.customers        || [],
+      serviceCustomers:   p.serviceCustomers || [],
+      notes:              p.notes            || { internalNotes: "", externalNotes: "" },
     })
     setActiveTab("business")
     setCompleted(mode === "update" ? tabs.map(t => t.id) : [])
@@ -794,6 +798,17 @@ export function MultiStepForm({
       if (!customers?.length) { toast.error("Adicione pelo menos um cliente."); return false }
       if (customers.some((c: any) => !c.productAllocations?.filter((a: any) => a.quantity > 0).length)) {
         toast.error("Todos os clientes precisam ter pelo menos um produto alocado."); return false
+      }
+      return true
+    }
+    if (tabId === "serviceCustomers") {
+      const svc = form.getValues("serviceCustomers")
+      if (!svc?.length) { toast.error("Adicione pelo menos um cliente de serviço Interatell."); return false }
+      if (svc.some((s: any) => !s.items?.length)) {
+        toast.error("Todos os clientes de serviço precisam ter pelo menos um serviço."); return false
+      }
+      if (svc.some((s: any) => s.items.some((i: any) => !String(i.description ?? '').trim()))) {
+        toast.error("Descreva todos os serviços adicionados."); return false
       }
       return true
     }
@@ -841,6 +856,7 @@ export function MultiStepForm({
       const tabFieldMap: Record<string, string[]> = {
         business: ["business", "interatellBranches"], suppliers: ["supplierGroups"],
         customers: ["customers"],             notes: ["notes"],
+        serviceCustomers: ["serviceCustomers"],
       }
       const firstBadTab = tabs.find(t => (tabFieldMap[t.id] || []).some(f => (errors as any)[f]))
       if (firstBadTab && firstBadTab.id !== activeTab) setActiveTab(firstBadTab.id)
@@ -861,6 +877,7 @@ export function MultiStepForm({
         interatellBranches: values.interatellBranches,
         supplierGroups:     values.supplierGroups,
         customers:          values.customers,
+        serviceCustomers:   values.serviceCustomers ?? [],
         notes:              values.notes || {},
       }
       if (mode === 'backlog') {
@@ -1020,6 +1037,9 @@ export function MultiStepForm({
             </TabsContent>
             <TabsContent value="suppliers"><SupplierGroupsTab form={form} /></TabsContent>
             <TabsContent value="customers"><CustomersTab form={form} /></TabsContent>
+            {hasInteratellService && (
+              <TabsContent value="serviceCustomers"><ServiceCustomersTab form={form} /></TabsContent>
+            )}
             <TabsContent value="notes"><NotesTab form={form} /></TabsContent>
           </div>
         </Tabs>

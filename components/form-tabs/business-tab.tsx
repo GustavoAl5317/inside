@@ -187,6 +187,37 @@ export function BusinessTab({ form }: BusinessTabProps) {
             </FormItem>
           )}
         />
+
+        {/* Serviço Interatell (SRV): não passa por fornecedor, é vendido direto
+            ao cliente — por isso abre um step próprio e gera um PDF separado. */}
+        <FormField
+          control={form.control}
+          name="business.hasInteratellService"
+          render={({ field }) => (
+            <FormItem className="md:col-span-2">
+              <div className="flex items-start gap-3 rounded-xl border-2 border-teal-200 bg-teal-50/60 p-4">
+                <FormControl>
+                  <input
+                    type="checkbox"
+                    checked={!!field.value}
+                    onChange={e => field.onChange(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 accent-teal-600 cursor-pointer"
+                  />
+                </FormControl>
+                <div className="min-w-0">
+                  <FormLabel className="text-sm font-bold text-teal-900 cursor-pointer">
+                    Este negócio tem serviço Interatell
+                  </FormLabel>
+                  <p className="text-xs text-teal-700 mt-1">
+                    Serviço próprio (natureza SRV) não passa por fornecedor. Ao marcar, abre o
+                    step <strong>Cliente Serviço</strong> e o serviço vai em um PDF separado.
+                  </p>
+                </div>
+              </div>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
       </div>
     </div>
   )

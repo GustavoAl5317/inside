@@ -1398,6 +1398,7 @@ export async function createDealAction(data: {
   interatellBranches?: any
   supplierGroups: any[]
   customers: any[]
+  serviceCustomers?: any[]
   notes?: any
 }) {
   try {
@@ -1407,6 +1408,7 @@ export async function createDealAction(data: {
       interatellBranches: data.interatellBranches,
       supplierGroups:     data.supplierGroups,
       customers:          data.customers,
+      serviceCustomers:   data.serviceCustomers ?? [],
       notes:              data.notes || {},
     }
 
@@ -1447,6 +1449,7 @@ export async function saveDraftAction(
     interatellBranches?: any
     supplierGroups: any[]
     customers: any[]
+    serviceCustomers?: any[]
     notes?: any
   },
   existingDealId?: number,
@@ -1458,6 +1461,7 @@ export async function saveDraftAction(
       interatellBranches: data.interatellBranches,
       supplierGroups:     data.supplierGroups,
       customers:          data.customers,
+      serviceCustomers:   data.serviceCustomers ?? [],
       notes:              data.notes || {},
     }
 

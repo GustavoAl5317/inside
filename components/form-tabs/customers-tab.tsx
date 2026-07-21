@@ -23,7 +23,8 @@ const emptyCustomer = {
 }
 
 // ── Diálogo: adicionar cliente manualmente ou buscar da lista #63 ─────────────
-function CustomerDialog({
+// Exportado para o step de Cliente Serviço (SRV) reusar a mesma seleção de empresa.
+export function CustomerDialog({
   open,
   onClose,
   onConfirm,
