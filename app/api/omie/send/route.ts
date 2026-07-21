@@ -692,7 +692,7 @@ async function processDeal(body: any, dealId: number) {
     if (!deal) return NextResponse.json({ success: false, error: 'Deal não encontrado' }, { status: 404 })
 
     const payload = typeof deal.payload === 'string' ? JSON.parse(deal.payload) : deal.payload
-    const { interatell, supplierGroups = [], customers = [], business, notes } = payload
+    const { interatell, supplierGroups = [], customers = [], serviceCustomers = [], business, notes } = payload
     // A observação interna sempre carrega o link do negócio no Bitrix, para quem
     // consultar o pedido no Omie conseguir voltar ao card de origem.
     const obs = {
@@ -718,6 +718,13 @@ async function processDeal(body: any, dealId: number) {
 
     // 1b) Garantir CLIENTES no Omie — usa credenciais da filial do cliente
     for (const entry of customers) {
+      const branchCnpj = getBranchCnpj(entry.branch, fallbackCnpj)
+      await ensureCliente(branchCnpj, entry.customer, dealId)
+    }
+
+    // 1c) Clientes de serviço Interatell (SRV) — não passam por fornecedor,
+    // mas também precisam existir no Omie da filial que vai faturar.
+    for (const entry of serviceCustomers) {
       const branchCnpj = getBranchCnpj(entry.branch, fallbackCnpj)
       await ensureCliente(branchCnpj, entry.customer, dealId)
     }
@@ -776,6 +783,25 @@ async function processDeal(body: any, dealId: number) {
       }
     }
 
+    // 4b) Serviço Interatell (SRV): sem fornecedor e sem OV — só OS, na filial do cliente.
+    // O índice é deslocado por customers.length para não colidir com o código de
+    // integração das OS dos clientes normais (OS-{deal}-C{idx}-{nat}).
+    for (let sIdx = 0; sIdx < serviceCustomers.length; sIdx++) {
+      const entry = serviceCustomers[sIdx]
+      const items = (entry.items ?? []).filter((i: any) => String(i.description ?? '').trim())
+      if (!items.length) continue
+
+      const branchCnpj = getBranchCnpj(entry.branch, fallbackCnpj)
+      const codCliente = ctx().clienteCache.get(`${branchCnpj}:${digits(entry.customer?.cnpj)}`)
+      if (!codCliente) continue
+
+      const os = await upsertOS(
+        branchCnpj, codCliente, entry.customer, items, 'SRV',
+        business, obs, dealId, customers.length + sIdx, upsertOpts, saleCodParc,
+      )
+      if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: 'SRV', _interatellService: true })
+    }
+
     // 5) Resumo com números dos pedidos
     const pickNumero = (r: any, intCode: string) =>
       r?.cNumero || r?.cNumPed || r?.nCodPed || r?.numero_pedido ||
@@ -810,6 +836,8 @@ async function processDeal(body: any, dealId: number) {
         acao: r._action ?? 'created',
         cliente: r._customer,
         nat: r._nat,
+        // Serviço próprio Interatell (não veio de fornecedor) — o PDF é separado.
+        interatellService: r._interatellService ?? undefined,
         erro: omieFaultMessage(r) ?? undefined,
       })),
       alteracoes,
