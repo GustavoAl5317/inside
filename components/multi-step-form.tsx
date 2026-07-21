@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useCallback } from "react"
+import { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { useForm, type UseFormReturn } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import * as z from "zod"
@@ -99,6 +99,29 @@ const customerEntrySchema = z.object({
   productAllocations: z.array(productAllocationSchema),
 })
 
+/**
+ * Serviço Interatell (natureza SRV): não passa por fornecedor — é vendido direto
+ * ao cliente. Por isso o item é digitado na hora, sem custo e sem grupo de compra.
+ * O código do serviço no Omie é fixo por natureza (SERVICO_MAP: SRV → SRV00001).
+ */
+const serviceItemSchema = z.object({
+  localId:     z.string(),
+  description: z.string().min(1, "Descrição do serviço é obrigatória"),
+  quantity:    z.number().min(1),
+  unitSale:    z.number().min(0),
+  totalSale:   z.number(),
+})
+
+const serviceCustomerSchema = z.object({
+  localId:  z.string(),
+  branch:   z.enum(['barueri', 'es']).default('barueri'),
+  customer: companySchema.extend({
+    isTaxpayer:    z.boolean().optional(),
+    purchaseOrder: z.string().optional(),
+  }),
+  items: z.array(serviceItemSchema).min(1, "Adicione pelo menos um serviço"),
+})
+
 const formSchema = z.object({
   bitrixDealId:   z.string().optional(),
   business: z.object({
@@ -109,15 +132,20 @@ const formSchema = z.object({
     purchasePaymentCondition: z.string().min(1, "Condição de pagamento de compra é obrigatória"),
     expectedBillingDate:      z.string().min(1, "Data de previsão de faturamento é obrigatória"),
     salePaymentCondition:     z.string().min(1, "Condição de pagamento de venda é obrigatória"),
+    hasInteratellService:     z.boolean().default(false),
   }),
   interatellBranches: z.array(z.enum(['barueri', 'es'])).min(1, "Selecione pelo menos uma filial Interatell"),
   supplierGroups: z.array(supplierGroupSchema).min(1, "Adicione pelo menos um fornecedor"),
   customers:      z.array(customerEntrySchema).min(1, "Adicione pelo menos um cliente"),
+  serviceCustomers: z.array(serviceCustomerSchema).default([]),
   notes: z.object({
     internalNotes: z.string().optional(),
     externalNotes: z.string().optional(),
   }),
-})
+}).refine(
+  v => !v.business.hasInteratellService || (v.serviceCustomers?.length ?? 0) > 0,
+  { path: ['serviceCustomers'], message: 'Adicione pelo menos um cliente de serviço Interatell' },
+)
 
 type FormValues = z.infer<typeof formSchema>
 // Tipo de entrada do schema (campos com .default() são opcionais antes do parse)
@@ -139,6 +167,17 @@ const TABS = [
   { id: "customers",  label: "Clientes" },
   { id: "notes",      label: "Observações" },
 ]
+
+/** O step de serviço Interatell (SRV) só entra no fluxo se o negócio tiver serviço. */
+function buildTabs(hasInteratellService: boolean) {
+  if (!hasInteratellService) return TABS
+  const i = TABS.findIndex(t => t.id === 'customers')
+  return [
+    ...TABS.slice(0, i + 1),
+    { id: 'serviceCustomers', label: 'Cliente Serviço' },
+    ...TABS.slice(i + 1),
+  ]
+}
 
 type OmiePdfResumo = {
   oc?: Array<{ numero: string; fornecedor?: string }>
@@ -728,14 +767,17 @@ export function MultiStepForm({
       notes:              p.notes          || { internalNotes: "", externalNotes: "" },
     })
     setActiveTab("business")
-    setCompleted(mode === "update" ? TABS.map(t => t.id) : [])
+    setCompleted(mode === "update" ? tabs.map(t => t.id) : [])
     setDealId(dealId)
     setSubmitError(null)
 
     return () => { loadedDealIdRef.current = null }
   }, [existingDeal?.id, existingDeal?.payload, form, mode])
 
-  const currentIdx = TABS.findIndex(t => t.id === activeTab)
+  const hasInteratellService = !!form.watch("business.hasInteratellService")
+  const tabs = useMemo(() => buildTabs(hasInteratellService), [hasInteratellService])
+
+  const currentIdx = tabs.findIndex(t => t.id === activeTab)
 
   const validateTab = async (tabId: string): Promise<boolean> => {
     if (tabId === "business") return form.trigger(["business", "interatellBranches"])
@@ -759,14 +801,14 @@ export function MultiStepForm({
   }
 
   const handleNext = async () => {
-    const ok = await validateTab(TABS[currentIdx].id)
+    const ok = await validateTab(tabs[currentIdx].id)
     if (!ok) return
-    if (!completedTabs.includes(TABS[currentIdx].id)) setCompleted(p => [...p, TABS[currentIdx].id])
-    if (currentIdx < TABS.length - 1) setActiveTab(TABS[currentIdx + 1].id)
+    if (!completedTabs.includes(tabs[currentIdx].id)) setCompleted(p => [...p, tabs[currentIdx].id])
+    if (currentIdx < tabs.length - 1) setActiveTab(tabs[currentIdx + 1].id)
   }
 
   const handleBack = () => {
-    if (currentIdx > 0) setActiveTab(TABS[currentIdx - 1].id)
+    if (currentIdx > 0) setActiveTab(tabs[currentIdx - 1].id)
   }
 
   // ── Baixar PDF (sem envio) ────────────────────────────────────────────────
@@ -800,7 +842,7 @@ export function MultiStepForm({
         business: ["business", "interatellBranches"], suppliers: ["supplierGroups"],
         customers: ["customers"],             notes: ["notes"],
       }
-      const firstBadTab = TABS.find(t => (tabFieldMap[t.id] || []).some(f => (errors as any)[f]))
+      const firstBadTab = tabs.find(t => (tabFieldMap[t.id] || []).some(f => (errors as any)[f]))
       if (firstBadTab && firstBadTab.id !== activeTab) setActiveTab(firstBadTab.id)
       toast.error(errorList[0] || "Corrija os erros antes de enviar.", {
         description: errorList.slice(1, 4).join(" · ") || undefined, duration: 8000,
@@ -829,7 +871,7 @@ export function MultiStepForm({
           return
         }
         setDealId(result.dealId!)
-        setCompleted(TABS.map(t => t.id))
+        setCompleted(tabs.map(t => t.id))
         toast.success("Rascunho salvo! Gerando PDF...")
         try {
           await generateDealPDF(values)
@@ -853,7 +895,7 @@ export function MultiStepForm({
           dealIdToSend = result.dealId!
         }
         setDealId(dealIdToSend)
-        setCompleted(TABS.map(t => t.id))
+        setCompleted(tabs.map(t => t.id))
         toast.success("Enviando para o Omie...")
         await clearTransactionLogsAction(dealIdToSend)
         const runId = crypto.randomUUID()
@@ -891,7 +933,7 @@ export function MultiStepForm({
         setOmieChanges(payloadChanges)
         const upd = await updateDealPayloadAndStatusAction(existingDeal.id, "approved", updatePayload)
         if (!upd.success) { setSubmitError(upd.error || "Erro ao preparar atualização."); toast.error(upd.error || "Erro ao preparar atualização."); return }
-        setCompleted(TABS.map(t => t.id))
+        setCompleted(tabs.map(t => t.id))
         toast.success(payloadChanges.length
           ? `Reenviando ao Omie (${payloadChanges.length} alteração${payloadChanges.length > 1 ? 'ões' : ''})...`
           : "Reenviando ao Omie (sem alterações detectadas)...")
@@ -921,7 +963,7 @@ export function MultiStepForm({
     }
   }
 
-  const isLastTab = currentIdx === TABS.length - 1
+  const isLastTab = currentIdx === tabs.length - 1
 
   // ── Botão de submit ───────────────────────────────────────────────────────
   const SUBMIT_CONFIG = {
@@ -938,7 +980,7 @@ export function MultiStepForm({
 
         {/* Progress bar */}
         <div className="flex items-center gap-1">
-          {TABS.map(tab => (
+          {tabs.map(tab => (
             <div key={tab.id} className={`h-1.5 flex-1 rounded-full transition-colors ${
               completedTabs.includes(tab.id) ? "bg-green-500"
               : tab.id === activeTab
@@ -953,7 +995,7 @@ export function MultiStepForm({
         {/* Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="w-full grid grid-cols-4">
-            {TABS.map(tab => (
+            {tabs.map(tab => (
               <TabsTrigger
                 key={tab.id}
                 value={tab.id}
