@@ -27,6 +27,48 @@ type DocSpec = {
   groups: any[]
   customers: any[]
   serviceCustomers?: any[]
+  /** Natureza deste documento — usada para filtrar o resumo do Omie. */
+  nat?: Natureza | 'OC'
+}
+
+/** Números das ordens criadas no Omie, para carimbar no PDF após o envio. */
+export type OmiePdfResumo = {
+  oc?: Array<{ numero: string; fornecedor?: string }>
+  ov?: Array<{ numero: string; cliente?: string }>
+  os?: Array<{ numero: string; cliente?: string; nat?: string }>
+}
+
+const OMIE_ORDER_LABEL: Record<string, string> = {
+  SW:  'Ordem de Serviço — Software (SW)',
+  LC:  'Ordem de Serviço — Licença (LC)',
+  ST:  'Ordem de Serviço — Serviço Terceiro (ST)',
+  SRV: 'Ordem de Serviço — Serviço (SRV)',
+}
+
+/** Só os pedidos Omie que pertencem a este documento. */
+function omieRowsFor(resumo: OmiePdfResumo | undefined, nat: DocSpec['nat']): string[][] {
+  if (!resumo || !nat) return []
+  const ok = (n?: string) => !!n && n !== '?'
+  const rows: string[][] = []
+
+  if (nat === 'OC') {
+    for (const oc of resumo.oc ?? []) {
+      if (ok(oc.numero)) rows.push(['Ordem de Compra (OC)', oc.numero, oc.fornecedor || '—'])
+    }
+    return rows
+  }
+  if (nat === 'HW') {
+    for (const ov of resumo.ov ?? []) {
+      if (ok(ov.numero)) rows.push(['Ordem de Venda (OV)', ov.numero, ov.cliente || '—'])
+    }
+    return rows
+  }
+  for (const os of resumo.os ?? []) {
+    if (ok(os.numero) && os.nat === nat) {
+      rows.push([OMIE_ORDER_LABEL[nat] ?? `OS (${nat})`, String(os.numero), os.cliente || '—'])
+    }
+  }
+  return rows
 }
 
 /** Natureza do produto referenciado por uma alocação de cliente. */
@@ -64,6 +106,7 @@ function buildDocSpecs(values: any): DocSpec[] {
       title: 'ORDEM DE COMPRA',
       filePrefix: 'ordem_compra',
       showSuppliers: true,
+      nat: 'OC',
       groups: ocGroups,
       customers: allCustomers,
     })
@@ -77,6 +120,7 @@ function buildDocSpecs(values: any): DocSpec[] {
       title: 'ORDEM DE VENDA',
       filePrefix: 'ordem_venda',
       showSuppliers: true,
+      nat: 'HW',
       groups: ovGroups,
       customers: ovCustomers,
     })
@@ -91,6 +135,7 @@ function buildDocSpecs(values: any): DocSpec[] {
       title: `ORDEM DE SERVIÇO — ${NATUREZA_LABEL[nat].toUpperCase()} (${nat})`,
       filePrefix: `ordem_servico_${nat.toLowerCase()}`,
       showSuppliers: true,
+      nat,
       groups: g,
       customers: c,
     })
@@ -103,6 +148,7 @@ function buildDocSpecs(values: any): DocSpec[] {
       title: 'ORDEM DE SERVIÇO — SERVIÇO INTERATELL (SRV)',
       filePrefix: 'ordem_servico_srv',
       showSuppliers: false,
+      nat: 'SRV',
       groups: [],
       customers: [],
       serviceCustomers: svc,
@@ -112,7 +158,7 @@ function buildDocSpecs(values: any): DocSpec[] {
   return specs
 }
 
-async function renderDoc(values: any, spec: DocSpec): Promise<void> {
+async function renderDoc(values: any, spec: DocSpec, resumo?: OmiePdfResumo): Promise<void> {
   const { default: jsPDF } = await import('jspdf')
   const { default: autoTable } = await import('jspdf-autotable')
 
@@ -315,6 +361,24 @@ async function renderDoc(values: any, spec: DocSpec): Promise<void> {
     }
   }
 
+  // Pedidos gerados no Omie (só os deste documento)
+  const omieRows = omieRowsFor(resumo, spec.nat)
+  if (omieRows.length) {
+    safeY(omieRows.length * 7 + 18)
+    addSection('Pedidos Gerados no Omie')
+    autoTable(doc, {
+      startY: y,
+      head: [['Tipo', 'Número', 'Parceiro']],
+      body: omieRows,
+      styles:             { fontSize: 7.5, cellPadding: 2.5 },
+      headStyles:         { fillColor: [22, 101, 52], textColor: 255, fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [240, 253, 244] },
+      columnStyles:       { 1: { fontStyle: 'bold' } },
+      margin:             { left: 14, right: 14 },
+    })
+    y = (doc as any).lastAutoTable.finalY + 6
+  }
+
   safeY(20)
   addSection('Condições de Pagamento')
   addKV('Compra:', values.business?.purchasePaymentCondition || '')
@@ -364,14 +428,14 @@ async function renderDoc(values: any, spec: DocSpec): Promise<void> {
   }
 
   const ref = values.business?.commercialProposal || values.bitrixDealId || 'rascunho'
-  doc.save(`${spec.filePrefix}_${ref}.pdf`)
+  doc.save(`${spec.filePrefix}_${ref}${resumo ? '_omie' : ''}.pdf`)
 }
 
 /**
  * Gera um PDF por documento (OC, OV e uma OS por natureza).
  * Retorna quantos arquivos foram baixados.
  */
-export async function generateDealPDFs(values: any): Promise<number> {
+export async function generateDealPDFs(values: any, resumo?: OmiePdfResumo): Promise<number> {
   const specs = buildDocSpecs(values)
   if (!specs.length) {
     // Negócio sem itens: mantém um documento único para não deixar o usuário sem nada.
@@ -379,18 +443,19 @@ export async function generateDealPDFs(values: any): Promise<number> {
       title: 'ORDEM DE COMPRA',
       filePrefix: 'ordem_compra',
       showSuppliers: true,
+      nat: 'OC',
       groups: values.supplierGroups || [],
       customers: values.customers || [],
-    })
+    }, resumo)
     return 1
   }
   for (const spec of specs) {
-    await renderDoc(values, spec)
+    await renderDoc(values, spec, resumo)
   }
   return specs.length
 }
 
 /** Compatibilidade: gera todos os documentos do negócio. */
-export async function generateDealPDF(values: any): Promise<void> {
-  await generateDealPDFs(values)
+export async function generateDealPDF(values: any, resumo?: OmiePdfResumo): Promise<void> {
+  await generateDealPDFs(values, resumo)
 }
