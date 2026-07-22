@@ -154,14 +154,35 @@ function parseOmieProductCode(codigo: unknown): number | null {
   return n
 }
 
+// Chave estável de um item já existente no Omie — DEVE espelhar exatamente a
+// mesma lógica usada em mapOCView/mapOVView/mapOSView, senão a linha do
+// formulário não casa com a linha do Omie e o item é tratado como novo (duplica).
+const ocItemKey = (p: any, i: number) => String(p.cCodIntItem ?? p.nCodItem ?? i + 1)
+const ovItemKey = (d: any, i: number) => String(d.ide?.codigo_item_integracao ?? d.ide?.codigo_item ?? i + 1)
+const osItemKey = (s: any, i: number) => String(s.nSeqItem ?? s.cCodIntServ ?? i + 1)
+
+/** Gera códigos de integração novos e únicos para linhas adicionadas, sem colidir com os existentes. */
+function makeNewCodeFactory(usedCodes: Iterable<string>) {
+  const used = new Set(usedCodes)
+  let seq = 0
+  return () => {
+    let code: string
+    do { seq += 1; code = `n${Date.now().toString(36)}${seq}` } while (used.has(code))
+    used.add(code)
+    return code
+  }
+}
+
 async function buildOCProdutosFromItems(cnpj: string, dealId: number, items: OmieOrderItemView[], currentProdutos: any[]) {
+  const current = currentProdutos ?? []
+  // Mantém a linha existente sempre com o MESMO cCodIntItem original (item.key já é
+  // essa chave). Só linhas novas ganham um código inédito — assim o UpsertPedCompra
+  // atualiza no lugar em vez de inserir uma cópia, e os itens omitidos são removidos.
+  const nextNewCode = makeNewCodeFactory(current.map((p, i) => ocItemKey(p, i)))
   const out: Record<string, unknown>[] = []
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i]
-    const intItem = String(i + 1)
-    const existing = currentProdutos.find(p =>
-      String(p.cCodIntItem ?? p.nCodItem ?? '') === item.key,
-    )
+
+  for (const item of items) {
+    const existing = current.find((p, i) => ocItemKey(p, i) === String(item.key))
     const existingCodigo = String(existing?.cProduto ?? existing?.cCodIntProd ?? existing?.nCodProd ?? '')
     const codeChanged = !!item.codigo && String(item.codigo) !== existingCodigo
 
@@ -175,7 +196,8 @@ async function buildOCProdutosFromItems(cnpj: string, dealId: number, items: Omi
     }
 
     out.push({
-      cCodIntItem: intItem,
+      cCodIntItem: existing ? String(item.key) : nextNewCode(),
+      ...(existing?.nCodItem ? { nCodItem: existing.nCodItem } : {}),
       ...ref,
       cDescricao: item.descricao,
       cNCM: normalizeNcm(item.ncm ?? existing?.cNCM ?? ''),
@@ -190,14 +212,13 @@ async function buildOCProdutosFromItems(cnpj: string, dealId: number, items: Omi
 }
 
 async function buildOVDetFromItems(cnpj: string, dealId: number, items: OmieOrderItemView[], currentDet: any[]) {
+  const current = currentDet ?? []
+  const nextNewCode = makeNewCodeFactory(current.map((d, i) => ovItemKey(d, i)))
+  const keptKeys = new Set(items.map(it => String(it.key)))
   const out: Record<string, unknown>[] = []
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i]
-    const intKey = String(i + 1)
-    const existing = currentDet.find(d =>
-      String(d.ide?.codigo_item_integracao ?? '') === item.key
-      || String(d.ide?.codigo_item ?? '') === item.key,
-    )
+
+  for (const item of items) {
+    const existing = current.find((d, i) => ovItemKey(d, i) === String(item.key))
     const existingCodigo = String(existing?.produto?.codigo ?? existing?.produto?.codigo_produto ?? '')
     const codeChanged = !!item.codigo && String(item.codigo) !== existingCodigo
     const produto: Record<string, unknown> = {
@@ -219,24 +240,48 @@ async function buildOVDetFromItems(cnpj: string, dealId: number, items: OmieOrde
     }
     out.push({
       ide: {
-        codigo_item_integracao: intKey,
+        // Linha existente conserva o código de integração original (item.key);
+        // linha nova recebe um código inédito. Nunca reatribuir por posição.
+        codigo_item_integracao: existing ? String(item.key) : nextNewCode(),
         ...(existing?.ide?.codigo_item ? { codigo_item: existing.ide.codigo_item } : {}),
       },
       produto,
     })
   }
+
+  // Itens que o usuário removeu do formulário: o Omie só exclui de fato quando a
+  // linha é reenviada com acao_item = "E" (identificada pelo código original).
+  current.forEach((d, i) => {
+    const key = ovItemKey(d, i)
+    if (keptKeys.has(key)) return
+    out.push({
+      ide: {
+        codigo_item_integracao: key,
+        ...(d.ide?.codigo_item ? { codigo_item: d.ide.codigo_item } : {}),
+        acao_item: 'E',
+      },
+      produto: {
+        ...(d.produto?.codigo_produto ? { codigo_produto: d.produto.codigo_produto } : {}),
+      },
+    })
+  })
+
   return out
 }
 
 function buildOSServicosFromItems(items: OmieOrderItemView[], currentServicos: any[]) {
-  return items.map((item, i) => {
-    const seq = i + 1
-    const existing = currentServicos.find(s =>
-      String(s.nSeqItem ?? s.cCodIntServ ?? '') === item.key,
-    )
+  const current = currentServicos ?? []
+  const keptKeys = new Set(items.map(it => String(it.key)))
+  // Item novo não pode reaproveitar um nSeqItem já usado (senão o Omie sobrescreve
+  // ou duplica) — parte do maior sequencial existente e segue incrementando.
+  let nextSeq = current.reduce((m, s) => Math.max(m, Number(s.nSeqItem ?? 0)), 0)
+
+  const out: Record<string, unknown>[] = items.map((item) => {
+    const existing = current.find((s, i) => osItemKey(s, i) === String(item.key))
     const codigoNum = parseOmieProductCode(item.codigo)
+    const seq = existing ? Number(existing.nSeqItem) : (nextSeq += 1)
     const row: Record<string, unknown> = {
-      nSeqItem: Number(existing?.nSeqItem ?? seq),
+      nSeqItem: seq,
       cAcaoItem: existing ? 'A' : 'I',
       ...(existing?.nIdItem ? { nIdItem: existing.nIdItem } : {}),
       nCodServico: existing?.nCodServico ?? codigoNum ?? undefined,
@@ -252,6 +297,27 @@ function buildOSServicosFromItems(items: OmieOrderItemView[], currentServicos: a
     if (existing?.impostos) row.impostos = existing.impostos
     return row
   })
+
+  // Serviços removidos pelo usuário: reenviados com cAcaoItem "E" para o Omie excluir.
+  current.forEach((s, i) => {
+    const key = osItemKey(s, i)
+    if (keptKeys.has(key)) return
+    out.push({
+      nSeqItem: Number(s.nSeqItem ?? i + 1),
+      cAcaoItem: 'E',
+      ...(s.nIdItem ? { nIdItem: s.nIdItem } : {}),
+      nCodServico: s.nCodServico,
+      cCodServLC116: s.cCodServLC116,
+      cCodServMun: s.cCodServMun,
+      cDescServ: s.cDescServ,
+      nQtde: Number(s.nQtde ?? 1),
+      nValUnit: Number(s.nValUnit ?? 0),
+      cRetemISS: s.cRetemISS ?? 'N',
+      cTribServ: s.cTribServ ?? '01',
+    })
+  })
+
+  return out
 }
 
 function numeroMatches(a: unknown, b: unknown) {
