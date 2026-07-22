@@ -417,10 +417,28 @@ async function consultClienteFull(interatellCnpj: string, dealId: number, codigo
   return c as Record<string, unknown>
 }
 
+/** Faltas do Omie que indicam limite/bloqueio de uso — NÃO significam "produto inexistente". */
+function isOmieRateLimitFault(faultstring: unknown): boolean {
+  const s = String(faultstring ?? '').toUpperCase()
+  return s.includes('REDUNDANT')
+    || s.includes('MISUSE_API_PROCESS')
+    || s.includes('CONSUMO REDUNDANTE')
+    || s.includes('API BLOQUEADA')
+    || s.includes('BLOQUEADA POR CONSUMO')
+}
+
+function rateLimitError(faultstring: unknown): Error {
+  return new Error(
+    `Omie temporariamente bloqueado por excesso de chamadas — aguarde alguns minutos e tente de novo. (${String(faultstring ?? '')})`,
+  )
+}
+
 /**
  * Resolve um part number (SKU) no catálogo do Omie e devolve o código interno (codigo_produto).
- * Espelha o checkProduto do integrador (omie/omie.js): tenta por `codigo` (SKU) e cai para
- * `codigo_produto` (ID interno). Retorna null se o produto não estiver cadastrado no Omie.
+ * Tenta por `codigo` (SKU) e por `codigo_produto_integracao` (ex.: "B5NH6AA#AC4", cujo código
+ * real pode ser outro, tipo "AA36022"). Só tenta `codigo_produto` quando o valor é numérico —
+ * mandar texto nessa tag só gera erro "tag obrigatória" e desperdiça chamada.
+ * Devolve null quando o produto realmente não está cadastrado; lança se a API estiver bloqueada.
  */
 async function resolveProdutoByCodigo(
   cnpj: string,
@@ -430,28 +448,30 @@ async function resolveProdutoByCodigo(
   const sku = String(codigo ?? '').trim()
   if (!sku) return null
 
-  // O part number informado pode ser o código (SKU), o código de integração
-  // (ex.: "B5NH6AA#AC4") ou o próprio código interno. Tenta os três.
-  const attempts = [
+  const attempts: Record<string, unknown>[] = [
     { codigo: sku },
     { codigo_produto_integracao: sku },
-    { codigo_produto: sku },
   ]
+  const numeric = sku.replace(/\D/g, '')
+  if (numeric && numeric === sku) attempts.push({ codigo_produto: Number(numeric) })
+
   for (const param of attempts) {
     const res = await omieRequest(cnpj, OMIE_URL.PRODUTOS, 'ConsultarProduto', param, dealId, 'checkProduto')
-    if (res && !res.faultstring) {
-      const prod = res.produto_servico_cadastro ?? res
-      const codigoProduto = Number(prod?.codigo_produto ?? 0)
-      if (codigoProduto) return { codigoProduto, codigo: String(prod?.codigo ?? sku) }
+    if (res?.faultstring) {
+      // Rate-limit/bloqueio: aborta em vez de fingir que o produto não existe e cadastrar duplicado.
+      if (isOmieRateLimitFault(res.faultstring)) throw rateLimitError(res.faultstring)
+      continue // "não cadastrado" → tenta o próximo critério
     }
+    const prod = res?.produto_servico_cadastro ?? res
+    const codigoProduto = Number(prod?.codigo_produto ?? 0)
+    if (codigoProduto) return { codigoProduto, codigo: String(prod?.codigo ?? sku) }
   }
   return null
 }
 
 /**
  * Cadastra um produto novo no catálogo do Omie a partir do item do pedido.
- * Espelha o createProduto do integrador (IncluirProduto). Usado quando o part number
- * informado ainda não existe no Omie — assim o usuário não precisa cadastrar na mão.
+ * Usado quando o part number informado ainda não existe — assim o usuário não cadastra na mão.
  */
 async function createProdutoByCodigo(cnpj: string, dealId: number, item: OmieOrderItemView): Promise<number | null> {
   const sku = String(item.codigo ?? '').trim()
@@ -468,7 +488,12 @@ async function createProdutoByCodigo(cnpj: string, dealId: number, item: OmieOrd
   const res = await omieRequest(cnpj, OMIE_URL.PRODUTOS, 'IncluirProduto', params, dealId, 'createProduto')
 
   if (res?.faultstring) {
-    // Corrida/duplicidade: o produto pode já ter sido criado — tenta resolver de novo.
+    if (isOmieRateLimitFault(res.faultstring)) throw rateLimitError(res.faultstring)
+    // O produto já existe pelo código de integração: o Omie devolve o ID no próprio erro,
+    // ex.: "Produto já cadastrado ... (ID: 5822707631 / Código: AA36022)". Aproveita o ID.
+    const jaCad = String(res.faultstring).match(/ID:\s*(\d+)/i)
+    if (jaCad) return Number(jaCad[1])
+    // Corrida/duplicidade sem ID na mensagem: tenta resolver de novo.
     const again = await resolveProdutoByCodigo(cnpj, dealId, sku)
     if (again) return again.codigoProduto
     throw new Error(`Não foi possível cadastrar o part number "${sku}" no Omie: ${res.faultstring}`)
@@ -1098,7 +1123,8 @@ export async function patchOmieOrder(input: OmieOrderPatch) {
         data_previsao: cab.data_previsao,
         etapa: cab.etapa ?? '10',
         codigo_parcela: cab.codigo_parcela,
-        quantidade_itens: det.length,
+        // Conta só os itens ativos — linhas de exclusão (acao_item "E") não entram.
+        quantidade_itens: det.filter((d: any) => d?.ide?.acao_item !== 'E').length,
       },
       informacoes_adicionais,
       observacoes: { obs_venda: obsVenda },
