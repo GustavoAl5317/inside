@@ -419,10 +419,13 @@ async function findExistingOS(interatellCnpj: string, dealId: number, baseCode: 
       { cCodIntOS }, dealId, 'checkOS')
     const cab = existing?.Cabecalho ?? existing?.cabecalho
     if (cab?.nCodOS && !existing?.faultstring) {
+      const puRaw = existing?.produtosUtilizados ?? existing?.ProdutosUtilizados ?? existing?.produtos_utilizados
+      const produtosUtilizados = (puRaw?.produtoUtilizado ?? puRaw?.ProdutoUtilizado ?? (Array.isArray(puRaw) ? puRaw : [])) as any[]
       return {
         cab,
         intCode: cCodIntOS,
         servicos: (existing?.ServicosPrestados ?? existing?.servicosPrestados ?? []) as any[],
+        produtosUtilizados,
       }
     }
   }
@@ -652,20 +655,26 @@ async function upsertOS(
     .filter((e: any) => e.codigoProdutoOmie)
     .map((e: any) => ({ cAcaoItemPU: 'I', nCodProdutoPU: Number(e.codigoProdutoOmie), nQtdePU: Number(e.quantity ?? 1) }))
   const produtosUtilizados = { cAcaoProdUtilizados: 'EST', cCodCategRem: '', produtoUtilizado }
-  // Na atualização (AlterarOS) não reenviamos os produtos utilizados, pra não duplicar
-  // a baixa de estoque do item já registrado na criação.
-  const produtosUtilizadosSemBaixa = { cAcaoProdUtilizados: 'EST', cCodCategRem: '', produtoUtilizado: [] as unknown[] }
 
   const lookupRetry = opts.isUpdate ? Math.max(opts.retryCount, 5) : opts.retryCount
   const found = await findExistingOS(interatellCnpj, dealId, baseCode, lookupRetry)
   if (found) {
+    // Idempotente: na atualização só INCLUI o produto que a OS ainda não tem, evitando
+    // baixa de estoque em duplicidade a cada reenvio. Produtos já presentes ficam intactos.
+    const jaPresentes = new Set(
+      (found.produtosUtilizados ?? [])
+        .map((p: any) => Number(p.nCodProdutoPU ?? p.nCodProduto ?? p.codigo_produto ?? 0))
+        .filter(Boolean),
+    )
+    const produtoUtilizadoNovo = produtoUtilizado.filter(p => !jaPresentes.has(Number(p.nCodProdutoPU)))
+    const produtosUtilizadosUpdate = { cAcaoProdUtilizados: 'EST', cCodCategRem: '', produtoUtilizado: produtoUtilizadoNovo }
     const res = await omieCall(interatellCnpj, OMIE_URL.ORDEM_SERVICO, 'AlterarOS', {
       Cabecalho: { ...Cabecalho, cCodIntOS: found.intCode, nCodOS: found.cab.nCodOS },
       InformacoesAdicionais,
       Observacoes: { cObsOS: obsOS },
       Departamentos: [],
       ServicosPrestados: await buildServicos(found.servicos),
-      produtosUtilizados: produtosUtilizadosSemBaixa,
+      produtosUtilizados: produtosUtilizadosUpdate,
     }, dealId, 'createOSResult')
     return { ...res, _action: 'updated', _numero: found.cab.cNumOS ?? found.cab.nCodOS, _codigo: found.cab.nCodOS }
   }
