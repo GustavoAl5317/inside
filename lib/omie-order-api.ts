@@ -183,7 +183,9 @@ async function buildOCProdutosFromItems(cnpj: string, dealId: number, items: Omi
 
   for (const item of items) {
     const existing = current.find((p, i) => ocItemKey(p, i) === String(item.key))
-    const existingCodigo = String(existing?.cProduto ?? existing?.cCodIntProd ?? existing?.nCodProd ?? '')
+    // Compara na mesma base que o mapOCView exibe (part number/cCodIntProd primeiro),
+    // senão um item inalterado pareceria "trocado" e re-resolveria o produto à toa.
+    const existingCodigo = String(existing?.cCodIntProd ?? existing?.cProduto ?? existing?.nCodProd ?? '')
     const codeChanged = !!item.codigo && String(item.codigo) !== existingCodigo
 
     let ref: Record<string, unknown> = {}
@@ -672,7 +674,9 @@ async function findOCByNumero(interatellCnpj: string, dealId: number, numero: st
 function mapOCView(kind: OmieOrderKind, branch: 'barueri' | 'es', data: NonNullable<Awaited<ReturnType<typeof findOCByNumero>>>) {
   const items: OmieOrderItemView[] = (data.produtos ?? []).map((p: any, i: number) => ({
     key: String(p.cCodIntItem ?? p.nCodItem ?? i + 1),
-    codigo: String(p.cProduto ?? p.cCodIntProd ?? ''),
+    // Mostra o part number (código de integração) e não o SKU interno do Omie
+    // (ex.: "C9200L-48P-4X-E" em vez de "AA39915"). Cai para o cProduto se não houver.
+    codigo: String(p.cCodIntProd ?? p.cProduto ?? ''),
     descricao: String(p.cDescricao ?? ''),
     quantidade: Number(p.nQtde ?? 1),
     valorUnitario: Number(p.nValUnit ?? 0),
