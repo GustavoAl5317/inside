@@ -67,7 +67,11 @@ async function call(branch, method, param) {
 
 async function consult(branch, numero) {
   const n = String(numero).replace(/\D/g, '')
-  for (const param of [{ cNumero: String(numero) }, { nCodPed: Number(n) }]) {
+  // Aceita número (cNumero), código de integração (cCodIntPed, ex.: "2026.10727"
+  // ou "OC-123-G0") e id interno (nCodPed) — igual o app faz.
+  const attempts = [{ cNumero: String(numero) }, { cCodIntPed: String(numero) }]
+  if (n && String(Number(n)) === n) attempts.push({ nCodPed: Number(n) })
+  for (const param of attempts) {
     const { data } = await call(branch, 'ConsultarPedCompra', param)
     if (data && !data.faultstring) {
       const wrapped = Array.isArray(data.pedidos_pesquisa) ? data.pedidos_pesquisa[0] : undefined
