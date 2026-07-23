@@ -605,7 +605,7 @@ async function upsertOS(
   codParc: string,
 ) {
   if (!items.length || !codCliente) return null
-  const SERVICO_MAP: Record<Natureza, string> = { SW:'SRV00016', LC:'SRV00007', ST:'SRV00016', SRV:'SRV00001', HW:'' }
+  const SERVICO_MAP: Record<Natureza, string> = { SW:'SRV00007', LC:'SRV00007', ST:'SRV00016', SRV:'SRV00001', HW:'' }
   // cObsOS é a observação interna da OS; a externa vai em cDadosAdicNF (sai na NF).
   const obsOS = obs.interna
   const baseCode = `OS-${dealId}-C${customerIdx}-${nat}`
