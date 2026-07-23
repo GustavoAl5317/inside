@@ -1571,16 +1571,20 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
                           </>
                         )}
                         <td className="p-2 text-center">
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="ghost"
-                            className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
-                            onClick={() => removeItem(item.key)}
-                            title="Remover item"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
+                          {/* OC (Pedido de Compra) não permite excluir item por API
+                              (UpsertPedCompra não remove item omitido) — some com o botão. */}
+                          {order.orderKind !== 'OC' && (
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+                              onClick={() => removeItem(item.key)}
+                              title="Remover item"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -1588,7 +1592,9 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
                 </table>
               </div>
               <p className="text-[10px] text-gray-500">
-                Ao adicionar ou remover itens, a lista completa é reenviada ao Omie na atualização.
+                {order.orderKind === 'OC'
+                  ? 'Você pode adicionar itens ou trocar o produto de um item. A exclusão de item não é feita aqui — remova direto no Omie, se necessário.'
+                  : 'Ao adicionar ou remover itens, a lista completa é reenviada ao Omie na atualização.'}
               </p>
             </div>
           )}
