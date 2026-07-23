@@ -583,6 +583,20 @@ async function upsertOV(
   }
 }
 
+/**
+ * O Omie exige a cidade da prestação de serviço (cCidPrestServ) no formato do
+ * cadastro de municípios: "Nome (UF)", ex.: "Campos dos Goytacazes (RJ)". Se a
+ * cidade vier sem a UF, o Omie rejeita a OS com "Cidade não cadastrada".
+ * Anexa a UF do cliente quando a cidade ainda não tem o sufixo "(XX)".
+ */
+function cidadePrestServ(city: unknown, state: unknown): string {
+  const nome = String(city ?? '').trim()
+  if (!nome) return ''
+  if (/\([A-Za-z]{2}\)\s*$/.test(nome)) return nome // já tem "(UF)"
+  const uf = String(state ?? '').trim().toUpperCase().slice(0, 2)
+  return uf.length === 2 ? `${nome} (${uf})` : nome
+}
+
 // ─── Upsert OS (busca pelo código de integração → atualiza ou cria) ──────────
 async function upsertOS(
   interatellCnpj: string, codCliente: number, cliente: any, items: any[], nat: Natureza,
@@ -603,7 +617,7 @@ async function upsertOS(
     cCodParc: codParc, nQtdeParc: 1,
   }
   const InformacoesAdicionais = {
-    cCidPrestServ: cliente?.city ?? '', cCodCateg: '1.01.02',
+    cCidPrestServ: cidadePrestServ(cliente?.city, cliente?.state), cCodCateg: '1.01.02',
     cNumPedido: createCode, nCodCC: contaCorrente(interatellCnpj),
     cDadosAdicNF: obs.externa,
   }
