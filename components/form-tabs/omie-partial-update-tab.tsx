@@ -8,7 +8,7 @@ import { CurrencyInput } from '@/components/ui/currency-input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Loader2, Search, Save, RotateCcw, Building2, Plus, CheckCircle, AlertCircle, Send, Trash2 } from 'lucide-react'
+import { Loader2, Search, Save, RotateCcw, Building2, Plus, CheckCircle, AlertCircle, Send } from 'lucide-react'
 import { toast } from 'sonner'
 import { getBitrixClientsAction, getBitrixSuppliersAction, lookupCnpjAction, getActiveOrderUpdateApprovalAction, requestOrderUpdateApprovalAction, getMyPendingOrderApprovalsAction } from '@/lib/actions'
 import { formatCNPJ, isCNPJComplete } from '@/lib/utils'
@@ -999,13 +999,6 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
     })
   }
 
-  const removeItem = (key: string) => {
-    setForm(prev => {
-      if (!prev) return prev
-      return { ...prev, items: prev.items.filter(it => it.key !== key) }
-    })
-  }
-
   const addItem = () => {
     setForm(prev => {
       if (!prev) return prev
@@ -1504,7 +1497,6 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
                       {order.orderKind === 'OV' && (
                         <th className="text-center p-2 w-20">CFOP</th>
                       )}
-                      <th className="p-2 w-10" />
                     </tr>
                   </thead>
                   <tbody>
@@ -1570,31 +1562,13 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
                             </td>
                           </>
                         )}
-                        <td className="p-2 text-center">
-                          {/* OC (Pedido de Compra) não permite excluir item por API
-                              (UpsertPedCompra não remove item omitido) — some com o botão. */}
-                          {order.orderKind !== 'OC' && (
-                            <Button
-                              type="button"
-                              size="icon"
-                              variant="ghost"
-                              className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
-                              onClick={() => removeItem(item.key)}
-                              title="Remover item"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          )}
-                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
               <p className="text-[10px] text-gray-500">
-                {order.orderKind === 'OC'
-                  ? 'Você pode adicionar itens ou trocar o produto de um item. A exclusão de item não é feita aqui — remova direto no Omie, se necessário.'
-                  : 'Ao adicionar ou remover itens, a lista completa é reenviada ao Omie na atualização.'}
+                Você pode adicionar itens ou trocar o produto de um item. A exclusão de item não é feita aqui — remova direto no Omie, se necessário.
               </p>
             </div>
           )}
