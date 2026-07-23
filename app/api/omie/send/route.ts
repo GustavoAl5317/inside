@@ -644,7 +644,17 @@ async function upsertOS(
     }
     return out
   }
-  const produtosUtilizados = { cAcaoProdUtilizados: 'EST', cCodCategRem: '', produtoUtilizado: [] }
+  // Como o código de referência: amarra o produto de revenda (SW/LC/ST) na OS via
+  // "Produtos Utilizados" (dá baixa de estoque — cAcaoProdUtilizados "EST"). Só entra
+  // item com produto resolvido (codigoProdutoOmie); SRV (serviço próprio, sem produto
+  // comprado) não amarra nada.
+  const produtoUtilizado = items
+    .filter((e: any) => e.codigoProdutoOmie)
+    .map((e: any) => ({ cAcaoItemPU: 'I', nCodProdutoPU: Number(e.codigoProdutoOmie), nQtdePU: Number(e.quantity ?? 1) }))
+  const produtosUtilizados = { cAcaoProdUtilizados: 'EST', cCodCategRem: '', produtoUtilizado }
+  // Na atualização (AlterarOS) não reenviamos os produtos utilizados, pra não duplicar
+  // a baixa de estoque do item já registrado na criação.
+  const produtosUtilizadosSemBaixa = { cAcaoProdUtilizados: 'EST', cCodCategRem: '', produtoUtilizado: [] as unknown[] }
 
   const lookupRetry = opts.isUpdate ? Math.max(opts.retryCount, 5) : opts.retryCount
   const found = await findExistingOS(interatellCnpj, dealId, baseCode, lookupRetry)
@@ -655,7 +665,7 @@ async function upsertOS(
       Observacoes: { cObsOS: obsOS },
       Departamentos: [],
       ServicosPrestados: await buildServicos(found.servicos),
-      produtosUtilizados,
+      produtosUtilizados: produtosUtilizadosSemBaixa,
     }, dealId, 'createOSResult')
     return { ...res, _action: 'updated', _numero: found.cab.cNumOS ?? found.cab.nCodOS, _codigo: found.cab.nCodOS }
   }
