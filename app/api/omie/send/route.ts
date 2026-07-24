@@ -484,17 +484,15 @@ async function upsertOC(
 // ─── Upsert OV (busca pelo código de integração → atualiza ou cria) ──────────
 async function upsertOV(
   interatellCnpj: string, codCliente: number, items: any[], business: any,
-  obs: { externa: string; interna: string },
+  obs: { externa: string; interna: string; completa: string },
   dealId: number, customerIdx: number, opts: { isUpdate: boolean; retryCount: number },
   codParc: string,
 ) {
   const hwItems = items.filter(i => normalizeNatureza(i.nature) === 'HW' && normalizeNCM(i.ncm) !== '00000000')
   if (!hwItems.length || !codCliente) return null
-  // obs_venda NÃO sai na Nota Fiscal → recebe a interna (com o link do negócio).
-  // A externa vai em informacoes_adicionais.dados_adicionais_nf, que sai na NF
-  // (o Omie usa pipe "|" como separador de linha nesse campo).
-  const obsVenda = obs.interna
-  const dadosAdicNF = obs.externa.replace(/\r?\n/g, '|')
+  // Como o integrador de referência (createOV): obs_venda leva tudo junto —
+  // link do negócio + observação externa + interna.
+  const obsVenda = obs.completa
   const baseCode = `OV-${dealId}-C${customerIdx}`
   const createCode = opts.isUpdate ? baseCode : `${baseCode}${opts.retryCount > 0 ? `-R${opts.retryCount}` : ''}`
 
@@ -528,7 +526,6 @@ async function upsertOV(
   const informacoes_adicionais = {
     codigo_categoria: '1.01.03', codigo_conta_corrente: contaCorrente(interatellCnpj),
     consumidor_final: 'S', enviar_email: 'N', numero_pedido_cliente: createCode,
-    ...(dadosAdicNF ? { dados_adicionais_nf: dadosAdicNF } : {}),
   }
 
   const lookupRetry = opts.isUpdate ? Math.max(opts.retryCount, 5) : opts.retryCount
@@ -603,14 +600,15 @@ function cidadePrestServ(city: unknown, state: unknown): string {
 // ─── Upsert OS (busca pelo código de integração → atualiza ou cria) ──────────
 async function upsertOS(
   interatellCnpj: string, codCliente: number, cliente: any, items: any[], nat: Natureza,
-  business: any, obs: { externa: string; interna: string },
+  business: any, obs: { externa: string; interna: string; completa: string },
   dealId: number, customerIdx: number, opts: { isUpdate: boolean; retryCount: number },
   codParc: string,
 ) {
   if (!items.length || !codCliente) return null
   const SERVICO_MAP: Record<Natureza, string> = { SW:'SRV00007', LC:'SRV00007', ST:'SRV00016', SRV:'SRV00001', HW:'' }
-  // cObsOS é a observação interna da OS; a externa vai em cDadosAdicNF (sai na NF).
-  const obsOS = obs.interna
+  // Como a referência (createOS): cObsOS leva tudo junto (link + externa + interna);
+  // a externa vai TAMBÉM em cDadosAdicNF (sai na NF).
+  const obsOS = obs.completa
   const baseCode = `OS-${dealId}-C${customerIdx}-${nat}`
   const createCode = opts.isUpdate ? baseCode : `${baseCode}${opts.retryCount > 0 ? `-R${opts.retryCount}` : ''}`
 
@@ -728,9 +726,14 @@ async function processDeal(body: any, dealId: number) {
     const { interatell, supplierGroups = [], customers = [], serviceCustomers = [], business, notes } = payload
     // A observação interna sempre carrega o link do negócio no Bitrix, para quem
     // consultar o pedido no Omie conseguir voltar ao card de origem.
+    const externaRaw = String(notes?.externalNotes ?? '').trim()
+    const internaRaw = String(notes?.internalNotes ?? '').trim()
     const obs = {
-      externa: String(notes?.externalNotes ?? '').trim(),
-      interna: withDealLink(String(notes?.internalNotes ?? '').trim(), deal.bitrix_deal_id),
+      externa: externaRaw,
+      interna: withDealLink(internaRaw, deal.bitrix_deal_id),
+      // Como o integrador de referência (omie/omie.js): OV (obs_venda) e OS (cObsOS)
+      // recebem tudo junto — link do negócio + externa + interna.
+      completa: withDealLink([externaRaw, internaRaw].filter(Boolean).join('\n'), deal.bitrix_deal_id),
     }
     const retryCount: number = payload._retryCount ?? 0
     const isUpdate = body.update === true || deal.status === 'sent'

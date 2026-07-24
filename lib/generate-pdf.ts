@@ -392,8 +392,9 @@ async function renderDoc(values: any, spec: DocSpec, resumo?: OmiePdfResumo): Pr
 
   safeY(20)
   addSection('Condições de Pagamento')
-  addKV('Compra:', values.business?.purchasePaymentCondition || '')
-  addKV('Venda:', values.business?.salePaymentCondition || '')
+  // Mostra o rótulo completo cadastrado (ex.: "A60 - Para 60 Dias"), não só o código.
+  addKV('Compra:', formatPaymentConditionLabel(values.business?.purchasePaymentCondition || '', 'purchase'))
+  addKV('Venda:', formatPaymentConditionLabel(values.business?.salePaymentCondition || '', 'sale'))
   y += 3
 
   const extNotes = (values.notes?.externalNotes || '').trim()
