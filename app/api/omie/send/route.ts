@@ -238,6 +238,15 @@ const newRunCtx = (runId: string | null): RunCtx => ({
 })
 const ctx = (): RunCtx => runStore.getStore() ?? newRunCtx(null)
 
+/** Faltas de limite/bloqueio do Omie — NÃO significam "registro não encontrado". */
+function isOmieRateLimitFault(faultstring: unknown): boolean {
+  const s = String(faultstring ?? '').toUpperCase()
+  return s.includes('REDUNDANT')
+    || s.includes('MISUSE_API_PROCESS')
+    || s.includes('CONSUMO REDUNDANTE')
+    || s.includes('BLOQUEADA')
+}
+
 async function ensureCliente(interatellCnpj: string, company: any, dealId: number): Promise<number> {
   const cnpj = digits(company?.cnpj ?? '')
   const key  = `${digits(interatellCnpj)}:${cnpj}`
@@ -247,12 +256,18 @@ async function ensureCliente(interatellCnpj: string, company: any, dealId: numbe
   const check = await omieCall(interatellCnpj, OMIE_URL.CLIENTES, 'ListarClientes',
     { pagina: 1, registros_por_pagina: 5, apenas_importado_api: 'N', clientesFiltro: { cnpj_cpf: cnpj } },
     dealId, 'checkCliente')
+  // Rate-limit na consulta NÃO é "não encontrado" — abortar evita cadastrar duplicado.
+  if (check?.faultstring && isOmieRateLimitFault(check.faultstring)) {
+    throw new Error(`Omie temporariamente bloqueado por excesso de chamadas — aguarde alguns minutos e reenvie. (${check.faultstring})`)
+  }
 
   let codigo: number
   if (check?.clientes_cadastro?.length) {
     codigo = check.clientes_cadastro[0].codigo_cliente_omie
   } else {
     const created = await omieCall(interatellCnpj, OMIE_URL.CLIENTES, 'IncluirCliente', {
+      // Obrigatório no IncluirCliente; o CNPJ garante um código estável e único.
+      codigo_cliente_integracao: `CLI-${cnpj}`,
       cnpj_cpf: cnpj, razao_social: company.name, nome_fantasia: company.name,
       email: company.email ?? '', endereco: company.address ?? '',
       endereco_numero: company.number ?? 'S/N', bairro: company.neighborhood ?? '',
@@ -283,12 +298,18 @@ async function ensureFornecedor(interatellCnpj: string, supplier: any, dealId: n
     { pagina: 1, registros_por_pagina: 5, apenas_importado_api: 'N',
       clientesFiltro: { cnpj_cpf: cnpj } },
     dealId, 'checkFornecedor')
+  // Rate-limit na consulta NÃO é "não encontrado" — abortar evita cadastrar duplicado.
+  if (check?.faultstring && isOmieRateLimitFault(check.faultstring)) {
+    throw new Error(`Omie temporariamente bloqueado por excesso de chamadas — aguarde alguns minutos e reenvie. (${check.faultstring})`)
+  }
 
   let codigo: number
   if (check?.clientes_cadastro?.length) {
     codigo = check.clientes_cadastro[0].codigo_cliente_omie
   } else {
     const created = await omieCall(interatellCnpj, OMIE_URL.CLIENTES, 'IncluirCliente', {
+      // Obrigatório no IncluirCliente; o CNPJ garante um código estável e único.
+      codigo_cliente_integracao: `FORN-${cnpj}`,
       cnpj_cpf: cnpj, razao_social: supplier.name, nome_fantasia: supplier.name,
       email: supplier.email ?? '', endereco: supplier.address ?? '',
       endereco_numero: supplier.number ?? 'S/N', bairro: supplier.neighborhood ?? '',
