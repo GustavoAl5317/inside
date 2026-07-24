@@ -337,6 +337,9 @@ async function ensureProduto(interatellCnpj: string, item: any, dealId: number):
   if (cache.has(key)) return cache.get(key)
 
   const check = await omieCall(interatellCnpj, OMIE_URL.PRODUTOS, 'ConsultarProduto', { codigo: sku }, dealId, 'checkProduto')
+  if (check?.faultstring && isOmieRateLimitFault(check.faultstring)) {
+    throw new Error(`Omie temporariamente bloqueado por excesso de chamadas — aguarde alguns minutos e reenvie. (${check.faultstring})`)
+  }
   let cod: number | undefined
   if (check?.codigo_produto) {
     cod = check.codigo_produto
@@ -358,7 +361,30 @@ async function ensureProduto(interatellCnpj: string, item: any, dealId: number):
     }, dealId, 'createProdutoResult')
     cod = created?.codigo_produto
     if (!cod) {
-      throw new Error(`Produto "${sku}": ${created?.faultstring ?? 'não foi possível cadastrar no Omie.'}`)
+      const fault = String(created?.faultstring ?? '')
+      if (isOmieRateLimitFault(fault)) {
+        throw new Error(`Omie temporariamente bloqueado por excesso de chamadas — aguarde alguns minutos e reenvie. (${fault})`)
+      }
+      // "A descrição já está sendo utilizada pelo produto com código X" (Client-143):
+      // o produto já existe com OUTRO código — recupera pelo código informado no erro.
+      const outroCodigo = fault.match(/produto com c[oó]digo\s+([^\s.]+)/i)?.[1]
+      if (outroCodigo) {
+        const again = await omieCall(interatellCnpj, OMIE_URL.PRODUTOS, 'ConsultarProduto', { codigo: outroCodigo }, dealId, 'checkProduto')
+        if (again?.codigo_produto) cod = again.codigo_produto
+      }
+      // "Produto já cadastrado ... (ID: N)": aproveita o ID do próprio erro.
+      if (!cod) {
+        const idMatch = fault.match(/ID:\s*(\d+)/i)
+        if (idMatch) cod = Number(idMatch[1])
+      }
+      // Última tentativa: consultar pelo código de integração.
+      if (!cod) {
+        const byInt = await omieCall(interatellCnpj, OMIE_URL.PRODUTOS, 'ConsultarProduto', { codigo_produto_integracao: sku }, dealId, 'checkProduto')
+        if (byInt?.codigo_produto) cod = byInt.codigo_produto
+      }
+      if (!cod) {
+        throw new Error(`Produto "${sku}": ${created?.faultstring ?? 'não foi possível cadastrar no Omie.'}`)
+      }
     }
   }
   cache.set(key, cod)
