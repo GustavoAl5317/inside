@@ -89,7 +89,7 @@ export function BusinessTab({ form }: BusinessTabProps) {
               <FormItem>
                 <FormLabel>Data da Criação da OC</FormLabel>
                 <FormControl>
-                  <Input type="date" {...field} />
+                  <Input type="date" {...field} disabled className="bg-gray-100 cursor-not-allowed" />
                 </FormControl>
                 <FormMessage />
               </FormItem>
