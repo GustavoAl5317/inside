@@ -65,15 +65,6 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: 'Comissões',
-    emoji: '💰',
-    items: [
-      { href: '/comissoes',           label: 'Painel',     emoji: '📈', area: 'comissoes' },
-      { href: '/comissoes/historico', label: 'Histórico',  emoji: '🗓️', area: 'comissoes' },
-      { href: '/admin/comissoes',     label: 'Configuração', emoji: '⚙️', area: 'comissoes_admin' },
-    ],
-  },
-  {
     label: 'Cadastros',
     emoji: '🗂️',
     items: [

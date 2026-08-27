@@ -166,7 +166,7 @@ function normalizeFormCNPJs(form: UseFormReturn<FormInput, any, FormValues>) {
 // ─── Tabs ──────────────────────────────────────────────────────────────────────
 const TABS = [
   { id: "business",   label: "Negócio" },
-  { id: "suppliers",  label: "Fornecedores" },
+  { id: "suppliers",  label: "Fornecedores/Produtos" },
   { id: "customers",  label: "Clientes" },
   { id: "notes",      label: "Observações" },
 ]
@@ -315,7 +315,7 @@ export function MultiStepForm({
       bitrixDealId: code,
       business: {
         name: selectedItem.title || "", commercialProposal: code,
-        purchaseOrderDate: "", deliveryDeadline: "",
+        purchaseOrderDate: new Date().toISOString().slice(0, 10), deliveryDeadline: "",
         purchasePaymentCondition: "", expectedBillingDate: "",
         salePaymentCondition: "",
       },
@@ -335,7 +335,8 @@ export function MultiStepForm({
   useEffect(() => {
     if (!cardDetails) return
     const { item, clientCompany } = cardDetails
-    if (item?.begindate) form.setValue("business.purchaseOrderDate", String(item.begindate).split("T")[0])
+    // Data da Criação da OC sempre inicia com o dia atual (não a data do card Bitrix).
+    form.setValue("business.purchaseOrderDate", new Date().toISOString().slice(0, 10))
     if (item?.closedate) {
       const d = String(item.closedate).split("T")[0]
       form.setValue("business.deliveryDeadline", d)
@@ -635,7 +636,10 @@ export function MultiStepForm({
 
         {/* Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="w-full grid grid-cols-4">
+          <TabsList
+            className="w-full grid gap-1"
+            style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}
+          >
             {tabs.map(tab => (
               <TabsTrigger
                 key={tab.id}

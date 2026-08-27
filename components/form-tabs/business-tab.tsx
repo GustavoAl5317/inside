@@ -38,6 +38,15 @@ export function BusinessTab({ form }: BusinessTabProps) {
     load()
   }, [])
 
+  // Número da proposta comercial sempre com o prefixo "2026." e travado.
+  const commercialProposal = form.watch("business.commercialProposal")
+  useEffect(() => {
+    const v = String(commercialProposal ?? "").trim()
+    if (v && !v.startsWith("2026.")) {
+      form.setValue("business.commercialProposal", `2026.${v}`)
+    }
+  }, [commercialProposal, form])
+
   return (
     <div className="space-y-6">
       <h2 className="text-2xl font-bold">Informações do Negócio</h2>
@@ -51,7 +60,7 @@ export function BusinessTab({ form }: BusinessTabProps) {
             <FormItem>
               <FormLabel>Nome do Negócio</FormLabel>
               <FormControl>
-                <Input {...field} placeholder="Nome do negócio" />
+                <Input {...field} placeholder="Nome do negócio" readOnly className="bg-gray-100 cursor-not-allowed" />
               </FormControl>
               <FormMessage />
             </FormItem>
@@ -65,7 +74,7 @@ export function BusinessTab({ form }: BusinessTabProps) {
             <FormItem>
               <FormLabel>Número da Proposta Comercial</FormLabel>
               <FormControl>
-                <Input placeholder="Número da proposta comercial" {...field} />
+                <Input placeholder="Número da proposta comercial" {...field} readOnly className="bg-gray-100 cursor-not-allowed" />
               </FormControl>
               <FormMessage />
             </FormItem>

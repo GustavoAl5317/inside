@@ -215,7 +215,7 @@ function SupplierDialog({
           {/* ── Modo: Adicionar Manualmente ── */}
           {mode === "manual" && (
             <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="col-span-2">
                   <label className="text-xs font-medium text-gray-700">Nome / Razão Social *</label>
                   <Input className="mt-1" placeholder="Nome do fornecedor" autoFocus
@@ -301,21 +301,6 @@ function SupplierDialog({
               )}
             </div>
           )}
-
-          {/* Filial Interatell */}
-          <div className="border rounded-lg p-3 bg-gray-50">
-            <p className="text-xs font-semibold text-gray-700 mb-2">Filial Interatell *</p>
-            <div className="flex gap-4">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="radio" checked={branch === 'barueri'} onChange={() => setBranch('barueri')} className="accent-blue-600" />
-                <span className="text-sm">Barueri (SP)</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="radio" checked={branch === 'es'} onChange={() => setBranch('es')} className="accent-blue-600" />
-                <span className="text-sm">Serra (ES)</span>
-              </label>
-            </div>
-          </div>
 
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={onClose}>Cancelar</Button>
@@ -513,7 +498,7 @@ function ProductDialog({
           {/* ── Manual ── */}
           {mode === "manual" && (
             <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-medium text-gray-700">Código / Partnumber *</label>
                   <Input
@@ -554,7 +539,7 @@ function ProductDialog({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-medium text-gray-700">NCM</label>
                   <Input
