@@ -4,6 +4,7 @@ import { createTransaction } from "./db"
 import { sql } from "./db"
 import { validateCNPJ, formatZipCode, formatPhoneNumber, normalizeCNPJDigits } from "./utils"
 import { BitrixService } from "./bitrix-service"
+import { listOmieStock, compareStockWithCatalog, type CatalogEntry } from './omie-stock'
 import { ProcessHistoryService } from "./process-history-service"
 import { unifiedLogService } from "./unified-log-service"
 import { getSessionUser } from "./auth-actions"
@@ -2059,5 +2060,52 @@ export async function lookupCnpjAction(cnpj: string): Promise<{
   } catch (err: any) {
     console.error(`[lookupCnpj] Exceção ao consultar ${digits}:`, err)
     return { success: false, error: err?.message || 'Erro ao consultar CNPJ' }
+  }
+}
+
+// ============================
+// Estoque Omie — de-para com o catálogo
+// ============================
+
+export async function getStockComparisonAction(branch: 'barueri' | 'es' = 'barueri') {
+  try {
+    // O catálogo vem de duas fontes: o Bitrix (poucos itens hoje — o Catálogo
+    // Comercial fica fora do escopo do webhook) e a tabela local de produtos,
+    // que é o que o app efetivamente usa nas OCs.
+    const [estoque, bitrix, locais] = await Promise.all([
+      listOmieStock(branch),
+      BitrixService.listCatalogProducts(),
+      sql`SELECT partnumber, description, ncm FROM products ORDER BY partnumber`.catch(() => [] as any[]),
+    ])
+
+    const catalogo: CatalogEntry[] = []
+    const vistos = new Set<string>()
+    for (const b of bitrix) {
+      if (!b.partnumber) continue
+      vistos.add(b.partnumber.toUpperCase())
+      catalogo.push({ partnumber: b.partnumber, description: b.description, origem: 'bitrix', ncm: b.ncm, sku: b.sku })
+    }
+    for (const l of (locais as any[])) {
+      const pn = String(l.partnumber ?? '').trim()
+      if (!pn || vistos.has(pn.toUpperCase())) continue
+      catalogo.push({ partnumber: pn, description: String(l.description ?? ''), origem: 'local', ncm: l.ncm ?? undefined })
+    }
+
+    const rows = compareStockWithCatalog(estoque.items, catalogo)
+    return {
+      success: true as const,
+      rows,
+      resumo: {
+        omieTotal:      estoque.total,
+        omieCarregados: estoque.items.length,
+        catalogoBitrix: bitrix.length,
+        catalogoLocal:  catalogo.filter(c => c.origem === 'local').length,
+        casados:        rows.filter(r => r.match !== 'nenhum').length,
+        soNoCatalogo:   rows.filter(r => r.partnumber && r.match === 'nenhum').length,
+        soNoOmie:       rows.filter(r => !r.partnumber).length,
+      },
+    }
+  } catch (error) {
+    return { success: false as const, error: error instanceof Error ? error.message : 'Erro desconhecido' }
   }
 }

@@ -42,6 +42,7 @@ export const ROLE_ACCESS: Record<string, Role[]> = {
   historico:       ['insidesales', 'financeiro', 'admin'],
   solicitacoes:    ['financeiro', 'admin'],             // aprovação de atualização
   cadastros:       ['insidesales', 'admin'],            // fornecedores, famílias, pagamentos
+  estoque:         ['insidesales', 'financeiro', 'admin'], // posicao no Omie x catalogo
   comissoes:       ['am', 'financeiro', 'admin'],       // AM vê as suas; Financeiro/Admin veem todas
   comissoes_admin: ['admin'],                           // config avançada (faixas, de-para, regras)
   admin:           ['admin'],

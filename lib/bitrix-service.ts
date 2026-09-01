@@ -917,6 +917,39 @@ export class BitrixService {
     }
   }
 
+  /**
+   * Lista o catalogo inteiro (sem filtro de busca) — usado no de-para com o
+   * estoque do Omie. crm.product.list pagina de 50 em 50.
+   */
+  static async listCatalogProducts(): Promise<Array<{
+    id: number; partnumber: string; description: string; sku?: string; ncm?: string
+  }>> {
+    const P = BitrixService.PRODUCT_PROPS
+    const select = ['ID', 'NAME', 'DESCRIPTION', P.ncm, P.sku, P.skuLegacy]
+    const out: Array<{ id: number; partnumber: string; description: string; sku?: string; ncm?: string }> = []
+    let start = 0
+    try {
+      while (true) {
+        const j: any = await bPost('/crm.product.list.json', { select, start })
+        const page: any[] = Array.isArray(j?.result) ? j.result : []
+        for (const p of page) {
+          out.push({
+            id: Number(p.ID),
+            partnumber: String(p.NAME || '').trim(),
+            description: BitrixService.stripHtml(String(p.DESCRIPTION || '')) || String(p.NAME || '').trim(),
+            sku: BitrixService.propValue(p[P.sku]) || BitrixService.propValue(p[P.skuLegacy]) || undefined,
+            ncm: BitrixService.propValue(p[P.ncm]) || undefined,
+          })
+        }
+        if (j?.next === undefined || j?.next === null || page.length < 50) break
+        start = Number(j.next)
+      }
+    } catch (error) {
+      console.error('Erro ao listar catalogo de produtos:', error)
+    }
+    return out
+  }
+
   // ─── Listas do Bitrix24 ───────────────────────────────────────────────────────
 
   /**
