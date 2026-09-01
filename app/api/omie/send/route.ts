@@ -545,15 +545,17 @@ async function upsertOC(
 // ─── Upsert OV (busca pelo código de integração → atualiza ou cria) ──────────
 async function upsertOV(
   interatellCnpj: string, codCliente: number, items: any[], business: any,
-  obs: { externa: string; interna: string; completa: string },
+  obs: { externa: string; interna: string },
   dealId: number, customerIdx: number, opts: { isUpdate: boolean; retryCount: number },
-  codParc: string,
+  codParc: string, pedidoCliente: string,
 ) {
   const hwItems = items.filter(i => normalizeNatureza(i.nature) === 'HW' && normalizeNCM(i.ncm) !== '00000000')
   if (!hwItems.length || !codCliente) return null
-  // Como o integrador de referência (createOV): obs_venda leva tudo junto —
-  // link do negócio + observação externa + interna.
-  const obsVenda = obs.completa
+  // O Pedido de Venda tem um unico campo de observacao (observacoes.obs_venda),
+  // entao a externa vai para dados_adicionais_nf — que e o texto que sai na nota —
+  // e obs_venda fica so com a interna e o link do negocio. Antes as duas iam
+  // juntas em obs_venda e apareciam misturadas no Omie.
+  const obsVenda = obs.interna
   const baseCode = `OV-${dealId}-C${customerIdx}`
   const createCode = opts.isUpdate ? baseCode : `${baseCode}${opts.retryCount > 0 ? `-R${opts.retryCount}` : ''}`
 
@@ -586,7 +588,11 @@ async function upsertOV(
   }
   const informacoes_adicionais = {
     codigo_categoria: '1.01.03', codigo_conta_corrente: contaCorrente(interatellCnpj),
-    consumidor_final: 'S', enviar_email: 'N', numero_pedido_cliente: createCode,
+    consumidor_final: 'S', enviar_email: 'N',
+    // Numero do pedido de compra do cliente. Sem ele o Omie ficava com o codigo
+    // de integracao do app (OV-123-C0), que nao diz nada para quem consulta.
+    numero_pedido_cliente: pedidoCliente || createCode,
+    dados_adicionais_nf: obs.externa,
   }
 
   const lookupRetry = opts.isUpdate ? Math.max(opts.retryCount, 5) : opts.retryCount
@@ -661,15 +667,16 @@ function cidadePrestServ(city: unknown, state: unknown): string {
 // ─── Upsert OS (busca pelo código de integração → atualiza ou cria) ──────────
 async function upsertOS(
   interatellCnpj: string, codCliente: number, cliente: any, items: any[], nat: Natureza,
-  business: any, obs: { externa: string; interna: string; completa: string },
+  business: any, obs: { externa: string; interna: string },
   dealId: number, customerIdx: number, opts: { isUpdate: boolean; retryCount: number },
-  codParc: string,
+  codParc: string, pedidoCliente: string,
 ) {
   if (!items.length || !codCliente) return null
   const SERVICO_MAP: Record<Natureza, string> = { SW:'SRV00007', LC:'SRV00007', ST:'SRV00016', SRV:'SRV00001', HW:'' }
-  // Como a referência (createOS): cObsOS leva tudo junto (link + externa + interna);
-  // a externa vai TAMBÉM em cDadosAdicNF (sai na NF).
-  const obsOS = obs.completa
+  // A externa ja vai em cDadosAdicNF (sai na NF), entao cObsOS fica so com a
+  // interna e o link. Antes cObsOS levava tudo junto e o texto externo aparecia
+  // duplicado, misturado com o interno.
+  const obsOS = obs.interna
   const baseCode = `OS-${dealId}-C${customerIdx}-${nat}`
   const createCode = opts.isUpdate ? baseCode : `${baseCode}${opts.retryCount > 0 ? `-R${opts.retryCount}` : ''}`
 
@@ -680,7 +687,9 @@ async function upsertOS(
   }
   const InformacoesAdicionais = {
     cCidPrestServ: cidadePrestServ(cliente?.city, cliente?.state), cCodCateg: '1.01.02',
-    cNumPedido: createCode, nCodCC: contaCorrente(interatellCnpj),
+    // Numero do pedido do cliente; cai no codigo de integracao so quando o
+    // cliente nao informou o dele.
+    cNumPedido: pedidoCliente || createCode, nCodCC: contaCorrente(interatellCnpj),
     cDadosAdicNF: obs.externa,
   }
 
@@ -794,9 +803,6 @@ async function processDeal(body: any, dealId: number) {
     const obs = {
       externa: externaRaw,
       interna: prefixDealLink(internaRaw, linkNegocio),
-      // Como o integrador de referência (omie/omie.js): OV (obs_venda) e OS (cObsOS)
-      // recebem tudo junto — link do negócio + externa + interna.
-      completa: prefixDealLink([externaRaw, internaRaw].filter(Boolean).join('\n'), linkNegocio),
     }
     const retryCount: number = payload._retryCount ?? 0
     const isUpdate = body.update === true || deal.status === 'sent'
@@ -871,13 +877,13 @@ async function processDeal(body: any, dealId: number) {
         })
         .filter(Boolean)
 
-      const ov = await upsertOV(branchCnpj, codCliente, allItems, business, obs, dealId, cIdx, upsertOpts, saleCodParc)
+      const ov = await upsertOV(branchCnpj, codCliente, allItems, business, obs, dealId, cIdx, upsertOpts, saleCodParc, String(entry.customer?.purchaseOrder ?? '').trim())
       if (ov) ovResults.push({ ...ov, _customer: entry.customer?.name })
 
       for (const nat of ['SW','LC','ST','SRV'] as Natureza[]) {
         const natItems = allItems.filter(i => normalizeNatureza(i.nature) === nat)
         if (!natItems.length) continue
-        const os = await upsertOS(branchCnpj, codCliente, entry.customer, natItems, nat, business, obs, dealId, cIdx, upsertOpts, saleCodParc)
+        const os = await upsertOS(branchCnpj, codCliente, entry.customer, natItems, nat, business, obs, dealId, cIdx, upsertOpts, saleCodParc, String(entry.customer?.purchaseOrder ?? '').trim())
         if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: nat })
       }
     }
@@ -897,6 +903,7 @@ async function processDeal(body: any, dealId: number) {
       const os = await upsertOS(
         branchCnpj, codCliente, entry.customer, items, 'SRV',
         business, obs, dealId, customers.length + sIdx, upsertOpts, saleCodParc,
+        String(entry.customer?.purchaseOrder ?? '').trim(),
       )
       if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: 'SRV', _interatellService: true })
     }

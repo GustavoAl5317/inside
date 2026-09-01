@@ -702,6 +702,23 @@ function CustomerCard({
         )}
       </div>
 
+      {/* Pedido de compra do cliente — vai para numero_pedido_cliente (OV) e
+          cNumPedido (OS) no Omie. Sem ele, o Omie fica com o codigo interno do app. */}
+      <div className="px-4 py-2.5 border-b border-gray-100 bg-white flex items-center gap-3">
+        <label className="text-[11px] font-semibold uppercase shrink-0 text-gray-500">
+          Pedido do cliente
+        </label>
+        <Input
+          className="h-7 text-xs max-w-xs"
+          placeholder="Número da OC do cliente (opcional)"
+          value={customer?.purchaseOrder || ""}
+          onChange={e => form.setValue(`${basePath}.customer.purchaseOrder`, e.target.value)}
+        />
+        <span className="text-[11px] text-gray-400">
+          Aparece no Omie como "Número do Pedido do cliente".
+        </span>
+      </div>
+
       {/* Alocação de produtos por fornecedor */}
       {expanded && (
         <div className="p-4 bg-gray-50 space-y-4">
