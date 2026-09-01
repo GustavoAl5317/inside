@@ -654,17 +654,20 @@ export function MultiStepForm({
             className="w-full grid gap-1"
             style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}
           >
+            {/* min-w-0 + truncate: "Fornecedores/Produtos" nao cabe na celula em telas
+                estreitas (iframe do Bitrix). Sem isso o conteudo transborda e o check,
+                que fica a esquerda do texto, sai da area visivel. */}
             {tabs.map(tab => (
               <TabsTrigger
                 key={tab.id}
                 value={tab.id}
                 disabled={!completedTabs.includes(tab.id) && tab.id !== activeTab}
-                className="text-xs sm:text-sm"
+                className="text-xs sm:text-sm min-w-0 gap-1"
               >
                 {completedTabs.includes(tab.id) && tab.id !== activeTab && (
-                  <CheckCircle className="w-3 h-3 mr-1 text-green-500" />
+                  <CheckCircle className="w-3 h-3 shrink-0 text-green-500" />
                 )}
-                {tab.label}
+                <span className="truncate">{tab.label}</span>
               </TabsTrigger>
             ))}
           </TabsList>
