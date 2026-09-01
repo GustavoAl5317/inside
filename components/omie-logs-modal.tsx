@@ -239,6 +239,10 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
   const [touchedSteps, setTouchedSteps] = useState<Set<StepKey>>(new Set());
   const [isComplete, setIsComplete] = useState(false);
   const [hasError, setHasError] = useState(false);
+  // Falha terminal: a execucao acabou em erro. Diferente de hasError, que fica
+  // true no primeiro log de nivel error — inclusive erros transitorios no meio
+  // da execucao, que depois sao superados (retry, produto recriado, etc.).
+  const [isFailed, setIsFailed] = useState(false);
 
   // Overlay 3D de resultado (sucesso/erro) — dispara na transição do estado
   const [resultFx, setResultFx] = useState<'success' | 'error' | null>(null);
@@ -254,14 +258,14 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
     }
   }, [isComplete]);
   useEffect(() => {
-    const rose = hasError && !isComplete && !prevErrorRef.current;
-    prevErrorRef.current = hasError;
+    const rose = isFailed && !isComplete && !prevErrorRef.current;
+    prevErrorRef.current = isFailed;
     if (rose) {
       setResultFx('error');
       const t = setTimeout(() => setResultFx(null), 2400);
       return () => clearTimeout(t);
     }
-  }, [hasError, isComplete]);
+  }, [isFailed, isComplete]);
 
   const [resumo, setResumo] = useState<{ oc: any[]; ov: any[]; os: any[]; alteracoes?: PayloadChange[] } | null>(null);
   const [showDetailedLogs, setShowDetailedLogs] = useState(false);
@@ -532,6 +536,8 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
     setHasError(anyError);
 
     const finishedOk = lastType === 'result' && last.level === 'success';
+    // So e falha quando o log final de resultado vem com erro.
+    setIsFailed(lastType === 'result' && last.level === 'error');
     setIsComplete(finishedOk);
     isCompleteRef.current = finishedOk;
 

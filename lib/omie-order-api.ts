@@ -1,6 +1,7 @@
 import 'server-only'
 import { sql } from '@/lib/db'
 import { addOmieRawLog } from '@/lib/unified-log-service'
+import { BitrixService } from '@/lib/bitrix-service'
 
 const OMIE_URL = {
   PEDIDOS_VENDA:  'https://app.omie.com.br/api/v1/produtos/pedido/',
@@ -95,7 +96,12 @@ async function withDealLinkForDeal(interna: string, dealId: number): Promise<str
     const [row] = await sql`SELECT bitrix_deal_id FROM deals WHERE id = ${dealId}`
     const bitrixId = String(row?.bitrix_deal_id ?? '').trim()
     if (!bitrixId) return texto
-    const link = `${BITRIX_BASE}/crm/type/${BITRIX_ENTITY_TYPE_ID}/details/${bitrixId}/`
+    // bitrix_deal_id pode ser o xmlId (numero da proposta) ou o ID interno;
+    // a URL de detalhes so aceita o ID interno, entao resolve antes.
+    const item = await BitrixService.getDeal(bitrixId)
+    const itemId = String(item?.id ?? '').trim()
+    if (!itemId) return texto
+    const link = `${BITRIX_BASE}/crm/type/${BITRIX_ENTITY_TYPE_ID}/details/${itemId}/`
     if (texto.includes(link)) return texto
     return [`Negócio: ${link}`, texto].filter(Boolean).join('\n')
   } catch {

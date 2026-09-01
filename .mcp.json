@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "bitrix24-docs": {
+      "type": "http",
+      "url": "https://mcp-dev.bitrix24.com/mcp"
+    },
+    "bitrix24": {
+      "type": "http",
+      "url": "https://mcp.bitrix24.com/mcp/"
+    }
+  }
+}

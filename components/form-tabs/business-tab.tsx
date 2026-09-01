@@ -18,6 +18,18 @@ export function BusinessTab({ form }: BusinessTabProps) {
   // false = BX24 disponível, true = fora do Bitrix24 (digitar manualmente)
   const [manualMode, setManualMode] = useState(false)
 
+  /**
+   * Garante que o valor salvo no rascunho apareca no Select mesmo quando a opcao
+   * nao vem mais da lista do Bitrix (condicao desativada, renomeada ou fora da
+   * pagina retornada). Sem isso o campo abre em branco e a selecao do rascunho
+   * parece ter sumido.
+   */
+  const withSaved = (options: any[], value: unknown) => {
+    const v = String(value ?? '').trim()
+    if (!v || options.some(c => (c.code || c.name) === v)) return options
+    return [...options, { id: `__saved__${v}`, code: v, name: `${v} (fora da lista atual)` }]
+  }
+
   useEffect(() => {
     const load = async () => {
       setIsLoadingConditions(true)
@@ -133,7 +145,7 @@ export function BusinessTab({ form }: BusinessTabProps) {
                       {isLoadingConditions ? (
                         <SelectItem value="__loading__" disabled>Carregando...</SelectItem>
                       ) : purchaseConditions.length > 0 ? (
-                        purchaseConditions.map((c) => (
+                        withSaved(purchaseConditions, field.value).map((c) => (
                           <SelectItem key={c.id} value={c.code || c.name}>{c.name}</SelectItem>
                         ))
                       ) : (
@@ -183,7 +195,7 @@ export function BusinessTab({ form }: BusinessTabProps) {
                     {isLoadingConditions ? (
                       <SelectItem value="__loading__" disabled>Carregando...</SelectItem>
                     ) : saleConditions.length > 0 ? (
-                      saleConditions.map((c) => (
+                      withSaved(saleConditions, field.value).map((c) => (
                         <SelectItem key={c.id} value={c.code || c.name}>{c.name}</SelectItem>
                       ))
                     ) : (

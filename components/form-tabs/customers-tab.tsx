@@ -120,6 +120,7 @@ export function CustomerDialog({
 
   const handleManualConfirm = async () => {
     if (!manual.name.trim()) { setError("Nome é obrigatório"); return }
+    if (!manual.contactName.trim()) { setError("Contato é obrigatório"); return }
     if (manual.cnpj.trim() && !isCNPJComplete(manual.cnpj)) {
       setError("CNPJ inválido — deve ter 12 a 14 dígitos"); return
     }
@@ -616,6 +617,8 @@ function CustomerCard({
     form.setValue(`${basePath}.productAllocations`, next)
   }
 
+  const contactMissing = !String(customer?.contactName ?? '').trim()
+
   const allocatedCount = allocations.filter(a => a.quantity > 0).length
   const totalUnits = allocations.reduce((s, a) => s + (a.quantity || 0), 0)
   const totalSaleValue = allocations.reduce((s, a) => s + (a.totalSale || 0), 0)
@@ -675,6 +678,28 @@ function CustomerCard({
             <Trash2 className="w-4 h-4" />
           </Button>
         </div>
+      </div>
+
+      {/* Contato do cliente — obrigatório para avançar */}
+      <div className={`px-4 py-2.5 border-b flex items-center gap-3 ${
+        contactMissing ? 'bg-red-50 border-red-100' : 'bg-white border-gray-100'
+      }`}>
+        <label className={`text-[11px] font-semibold uppercase shrink-0 ${
+          contactMissing ? 'text-red-600' : 'text-gray-500'
+        }`}>
+          Contato {contactMissing && '*'}
+        </label>
+        <Input
+          className={`h-7 text-xs max-w-xs ${contactMissing ? 'border-red-300 focus-visible:ring-red-400' : ''}`}
+          placeholder="Nome do contato no cliente"
+          value={customer?.contactName || ""}
+          onChange={e => form.setValue(`${basePath}.customer.contactName`, e.target.value)}
+        />
+        {contactMissing && (
+          <span className="text-[11px] text-red-600">
+            Obrigatório — o Bitrix não trouxe contato para este cliente.
+          </span>
+        )}
       </div>
 
       {/* Alocação de produtos por fornecedor */}

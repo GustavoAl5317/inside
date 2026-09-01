@@ -231,8 +231,11 @@ export async function getInsideSalesCardDetailsAction(itemId: number) {
 
     // Empresa cliente e responsável em paralelo
     const [clientCompany, assignedUser] = await Promise.all([
+      // Caminho completo (requisito + endereço + contato). getCRMCompanyById lê só
+      // crm.company.get, que neste portal traz praticamente só o título.
       item.companyId && Number(item.companyId) > 0
-        ? BitrixService.getCRMCompanyById(Number(item.companyId))
+        ? BitrixService.getCRMCompanyFullDetails(Number(item.companyId))
+            .then(d => ({ id: Number(item.companyId), ...d }))
         : Promise.resolve(null),
       item.assignedById && Number(item.assignedById) > 0
         ? BitrixService.getBitrixUser(Number(item.assignedById))
@@ -351,31 +354,31 @@ export async function createBitrixClientAction(data: {
 export async function searchBitrixProductsAction(query: string) {
   try {
     const products = await BitrixService.searchCatalogProducts(query)
+    if (products.length === 0) return { success: true, products }
 
-    // Enriquece com NCM, cfop, nature e family do banco local (por partnumber)
-    const codes = products.map((p: any) => p.code || p.partnumber).filter(Boolean)
-    if (codes.length > 0) {
-      const locals = await sql`
-        SELECT partnumber, ncm, cfop, nature, family
-        FROM products
-        WHERE partnumber = ANY(${codes})
-      `
-      const localMap = new Map(locals.map((r: any) => [r.partnumber, r]))
-      const enriched = products.map((p: any) => {
-        const code = p.code || p.partnumber
-        const local = localMap.get(code) as any
-        return {
-          ...p,
-          ncm:    p.ncm    || local?.ncm    || '',
-          cfop:   p.cfop   || local?.cfop   || '',
-          nature: p.nature || local?.nature || 'HW',
-          family: local?.family || '',
-        }
-      })
-      return { success: true, products: enriched }
-    }
+    // O banco local complementa o Bitrix: família é só local, e NCM/CFOP/natureza
+    // servem de fallback quando a propriedade está vazia no catálogo.
+    const codes = products.map(p => p.partnumber).filter(Boolean)
+    const locals = codes.length
+      ? await sql`
+          SELECT partnumber, ncm, cfop, nature, family
+          FROM products
+          WHERE partnumber = ANY(${codes})
+        `
+      : []
+    const localMap = new Map(locals.map((r: any) => [String(r.partnumber), r]))
 
-    return { success: true, products }
+    const enriched = products.map(p => {
+      const local = localMap.get(p.partnumber) as any
+      return {
+        ...p,
+        ncm:    p.ncm    || local?.ncm    || '',
+        cfop:   p.cfop   || local?.cfop   || '',
+        nature: p.nature || local?.nature || 'HW',
+        family: local?.family || '',
+      }
+    })
+    return { success: true, products: enriched }
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Erro desconhecido' }
   }

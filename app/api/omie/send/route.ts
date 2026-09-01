@@ -41,18 +41,32 @@ const CNPJ_BARUERI = '03969530000130'
 const BITRIX_BASE = 'https://interatell.bitrix24.com.br'
 const BITRIX_ENTITY_TYPE_ID = 129
 
-function dealLink(bitrixDealId: unknown): string {
-  const id = String(bitrixDealId ?? '').trim()
-  if (!id) return ''
-  return `${BITRIX_BASE}/crm/type/${BITRIX_ENTITY_TYPE_ID}/details/${id}/`
+/**
+ * Monta o link do card no Bitrix.
+ *
+ * bitrix_deal_id guarda ora o xmlId (numero da proposta, ex.: 12579), ora o ID
+ * interno do item, dependendo do card. A URL /crm/type/129/details/ so aceita o
+ * ID interno; com o xmlId o link aponta para um item inexistente. getDeal aceita
+ * os dois formatos e devolve o ID real.
+ */
+async function dealLink(bitrixDealId: unknown): Promise<string> {
+  const raw = String(bitrixDealId ?? '').trim()
+  if (!raw) return ''
+  try {
+    const deal = await BitrixService.getDeal(raw)
+    const id = String(deal?.id ?? '').trim()
+    if (!id) return ''
+    return `${BITRIX_BASE}/crm/type/${BITRIX_ENTITY_TYPE_ID}/details/${id}/`
+  } catch {
+    return ''
+  }
 }
 
 /** Prefixa a observação interna com o link do negócio (sem duplicar se já estiver lá). */
-function withDealLink(interna: string, bitrixDealId: unknown): string {
-  const link = dealLink(bitrixDealId)
-  if (!link) return interna
-  if (interna.includes(link)) return interna
-  return [`Negócio: ${link}`, interna].filter(Boolean).join('\n')
+function prefixDealLink(texto: string, link: string): string {
+  if (!link) return texto
+  if (texto.includes(link)) return texto
+  return [`Negocio: ${link}`, texto].filter(Boolean).join('\n')
 }
 
 function getBranchCnpj(branch: string | undefined, fallbackCnpj: string): string {
@@ -775,12 +789,14 @@ async function processDeal(body: any, dealId: number) {
     // consultar o pedido no Omie conseguir voltar ao card de origem.
     const externaRaw = String(notes?.externalNotes ?? '').trim()
     const internaRaw = String(notes?.internalNotes ?? '').trim()
+    // Resolve o link uma vez so — evita duas idas ao Bitrix pelo mesmo card.
+    const linkNegocio = await dealLink(deal.bitrix_deal_id)
     const obs = {
       externa: externaRaw,
-      interna: withDealLink(internaRaw, deal.bitrix_deal_id),
+      interna: prefixDealLink(internaRaw, linkNegocio),
       // Como o integrador de referência (omie/omie.js): OV (obs_venda) e OS (cObsOS)
       // recebem tudo junto — link do negócio + externa + interna.
-      completa: withDealLink([externaRaw, internaRaw].filter(Boolean).join('\n'), deal.bitrix_deal_id),
+      completa: prefixDealLink([externaRaw, internaRaw].filter(Boolean).join('\n'), linkNegocio),
     }
     const retryCount: number = payload._retryCount ?? 0
     const isUpdate = body.update === true || deal.status === 'sent'

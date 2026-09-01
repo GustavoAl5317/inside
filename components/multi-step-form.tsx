@@ -96,6 +96,9 @@ const customerEntrySchema = z.object({
   localId:            z.string(),
   branch:             z.enum(['barueri', 'es']).default('barueri'),
   customer:           companySchema.extend({
+    // Contato é obrigatório no cliente (e só nele): a OC precisa de alguém
+    // nomeado do lado do cliente. No fornecedor segue opcional.
+    contactName:   z.string().trim().min(1, "Informe o nome do contato do cliente"),
     isTaxpayer:    z.boolean().optional(),
     purchaseOrder: z.string().optional(),
   }),
@@ -356,8 +359,8 @@ export function MultiStepForm({
           neighborhood:      clientCompany.neighborhood || "",
           address:           clientCompany.address || "",
           number:            clientCompany.number || "",
-          complement:        "",
-          contactName:       "",
+          complement:        clientCompany.complement || "",
+          contactName:       clientCompany.contactName || "",
           phone:             clientCompany.phone || "",
           email:             clientCompany.email || "",
           isTaxpayer:        false,
@@ -423,6 +426,17 @@ export function MultiStepForm({
       if (!customers?.length) { toast.error("Adicione pelo menos um cliente."); return false }
       if (customers.some((c: any) => !c.productAllocations?.filter((a: any) => a.quantity > 0).length)) {
         toast.error("Todos os clientes precisam ter pelo menos um produto alocado."); return false
+      }
+      const semContato = customers
+        .map((c: any, i: number) => (!String(c.customer?.contactName ?? '').trim() ? i + 1 : 0))
+        .filter(Boolean)
+      if (semContato.length) {
+        toast.error(
+          semContato.length === 1
+            ? `Informe o contato do cliente ${semContato[0]}.`
+            : `Informe o contato dos clientes ${semContato.join(', ')}.`
+        )
+        return false
       }
       return true
     }

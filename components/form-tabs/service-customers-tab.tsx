@@ -162,21 +162,6 @@ export function ServiceCustomersTab({ form }: ServiceCustomersTabProps) {
                 </div>
               </div>
 
-              {/* Filial de faturamento deste cliente */}
-              <div className="flex items-center gap-4 mt-2">
-                <span className="text-xs font-medium text-gray-600">Filial:</span>
-                {(["barueri", "es"] as const).map(b => (
-                  <label key={b} className="flex items-center gap-1.5 text-xs cursor-pointer">
-                    <input
-                      type="radio"
-                      className="accent-teal-600"
-                      checked={(entry.branch ?? "barueri") === b}
-                      onChange={() => form.setValue(`serviceCustomers.${idx}.branch`, b, { shouldDirty: true })}
-                    />
-                    {b === "barueri" ? "Barueri (SP)" : "Filial ES"}
-                  </label>
-                ))}
-              </div>
             </div>
 
             {/* Itens de serviço */}

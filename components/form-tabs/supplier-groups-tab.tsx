@@ -363,21 +363,23 @@ function ProductDialog({
     // Mescla: local tem prioridade; Bitrix adiciona produtos que não estão no local
     const localCodes = new Set(localList.map((p: any) => String(p.partnumber || "").toLowerCase()))
     const extraFromBitrix = bitrixList.filter((p: any) => {
-      const code = String(p.code || p.partnumber || "").toLowerCase()
-      return code && !localCodes.has(code)
+      const pn = String(p.partnumber || "").toLowerCase()
+      return pn && !localCodes.has(pn)
     })
 
     const merged = [
       ...localList.map((p: any) => ({
-        id: p.id,
-        code: p.partnumber,
-        name: p.description,
-        ncm: p.ncm || "",
-        cfop: p.cfop || "",
-        nature: p.nature || "HW",
-        family: p.family || "",
+        id:          p.id,
+        partnumber:  p.partnumber,
+        description: p.description,
+        sku:         "",
+        ncm:         p.ncm || "",
+        cfop:        p.cfop || "",
+        nature:      p.nature || "HW",
+        family:      p.family || "",
+        source:      "local" as const,
       })),
-      ...extraFromBitrix,
+      ...extraFromBitrix.map((p: any) => ({ ...p, source: "bitrix" as const })),
     ]
 
     setLoading(false)
@@ -480,9 +482,15 @@ function ProductDialog({
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div>
-                          <p className="font-medium text-sm">{p.code || p.partnumber || `ID: ${p.id}`}</p>
-                          <p className="text-xs text-gray-500 mt-0.5">{p.name || p.description}</p>
-                          {p.ncm && <p className="text-xs text-blue-500 mt-0.5">NCM: {p.ncm}{p.cfop ? ` · CFOP: ${p.cfop}` : ""}</p>}
+                          <p className="font-medium text-sm">{p.partnumber || `ID: ${p.id}`}</p>
+                          <p className="text-xs text-gray-500 mt-0.5">{p.description}</p>
+                          <p className="text-xs text-blue-500 mt-0.5">
+                            {p.sku ? `SKU: ${p.sku}` : ""}
+                            {p.sku && p.ncm ? " · " : ""}
+                            {p.ncm ? `NCM: ${p.ncm}` : ""}
+                            {(p.sku || p.ncm) && p.cfop ? " · " : ""}
+                            {p.cfop ? `CFOP: ${p.cfop}` : ""}
+                          </p>
                         </div>
                         {p.nature && (
                           <Badge variant="outline" className="text-xs shrink-0">{p.nature}</Badge>
@@ -798,13 +806,13 @@ function SupplierGroupCard({
   const handleAddProduct = (p: any) => {
     appendProduct({
       id:          p.id,
-      // Bitrix24 catalog usa 'code' como partnumber e 'name' como descrição
-      partnumber:  p.code || p.partnumber || "",
-      description: p.name  || p.description || "",
+      // partnumber vem de NAME no catálogo do Bitrix; CODE é só o slug interno.
+      partnumber:  p.partnumber || "",
+      description: p.description || "",
       cfop:        p.cfop  || "",
       nature:      p.nature || "HW",
       ncm:         p.ncm   || "",
-      family:      "",  // codigo_familia para o Omie
+      family:      p.family || "",  // codigo_familia para o Omie
       state:       "SP",
       quantity:    1,
       unitCost:    0,

@@ -44,6 +44,8 @@ export interface BitrixCRMCompany {
   phone?: string;
   email?: string;
   stateRegistration?: string;
+  complement?: string;
+  contactName?: string;
 }
 
 export interface BitrixUser {
@@ -637,24 +639,32 @@ export class BitrixService {
   }
 
   /**
-   * Busca todos os dados de uma empresa do CRM: nome, telefone, e-mail, CNPJ e
-   * endereço completo (via crm.requisite + crm.address vinculado ao requisite).
+   * Busca todos os dados de uma empresa do CRM: nome, telefone, e-mail, CNPJ,
+   * endereço e contato.
+   *
+   * Ordem das fontes, da mais confiável para a menos:
+   *   1. crm.company.get      — nome; raramente tem telefone/e-mail/endereço neste portal
+   *   2. crm.requisite        — CNPJ (RQ_CNPJ, com RQ_INN de reserva) e IE (RQ_STATE_REG)
+   *   3. crm.address          — endereço vinculado ao requisito
+   *   4. crm.contact          — contato vinculado à empresa; costuma ser a única
+   *                             fonte de telefone e e-mail aqui
    */
   static async getCRMCompanyFullDetails(companyId: number): Promise<{
     cnpj: string; name: string; email: string; phone: string;
     address: string; number: string; complement: string; neighborhood: string;
     city: string; state: string; zipCode: string; stateRegistration: string;
+    contactName: string;
   }> {
     const empty = { cnpj: '', name: '', email: '', phone: '', address: '', number: '',
-      complement: '', neighborhood: '', city: '', state: '', zipCode: '', stateRegistration: '' }
+      complement: '', neighborhood: '', city: '', state: '', zipCode: '',
+      stateRegistration: '', contactName: '' }
     try {
-      // 1. Dados básicos da empresa (nome, telefone, e-mail, endereço do cadastro)
+      // 1. Dados básicos da empresa
       const cj: any = await bGet(`/crm.company.get.json?id=${companyId}`)
       const c = cj?.result ?? {}
       const name  = String(c.TITLE || '')
-      const phone = Array.isArray(c.PHONE) ? String(c.PHONE[0]?.VALUE ?? '') : ''
-      const email = Array.isArray(c.EMAIL) ? String(c.EMAIL[0]?.VALUE ?? '') : ''
-      // Endereço do cadastro da empresa (fallback se não tiver no requisite)
+      let phone = Array.isArray(c.PHONE) ? String(c.PHONE[0]?.VALUE ?? '') : ''
+      let email = Array.isArray(c.EMAIL) ? String(c.EMAIL[0]?.VALUE ?? '') : ''
       let address      = String(c.ADDRESS              || '')
       let complement   = String(c.ADDRESS_2            || '')
       let neighborhood = ''
@@ -664,43 +674,85 @@ export class BitrixService {
       let number       = ''
       let cnpj         = ''
       let stateReg     = ''
+      let contactName  = ''
 
-      // 2. Requisite para pegar CNPJ e ID do requisite
+      // 2. Requisito: CNPJ e inscrição estadual.
+      // Neste portal o campo rotulado "CNPJ" na interface é RQ_VAT_ID (preset
+      // "Pessoa jurídica", ID 1) — preenchido em ~95% dos requisitos. RQ_CNPJ e
+      // RQ_INN existem no schema mas estão vazios; ficam como reserva.
+      // O valor vem ora mascarado ("03.969.530/0001-30"), ora só com dígitos.
       const rj: any = await bPost('/crm.requisite.list.json', {
         filter: { ENTITY_TYPE_ID: 4, ENTITY_ID: companyId },
-        select: ['ID', 'RQ_INN', 'RQ_KPP'],
+        select: ['ID', 'RQ_VAT_ID', 'RQ_CNPJ', 'RQ_INN', 'RQ_STATE_REG', 'RQ_KPP', 'RQ_CONTACT', 'RQ_PHONE', 'RQ_EMAIL'],
         order: { ID: 'ASC' },
       }).catch(() => ({}))
       const requisites: any[] = Array.isArray(rj?.result) ? rj.result : []
       let requisiteId: number | null = null
       for (const r of requisites) {
-        const inn = String(r.RQ_INN || '').replace(/\D/g, '')
-        if (inn.length >= 12 && inn.length <= 14) {
-          cnpj       = formatCNPJ(inn)
+        if (requisiteId === null) requisiteId = Number(r.ID)
+        const raw = String(r.RQ_VAT_ID || r.RQ_CNPJ || r.RQ_INN || '').replace(/\D/g, '')
+        if (raw.length >= 12 && raw.length <= 14) {
+          cnpj        = formatCNPJ(raw)
           requisiteId = Number(r.ID)
-          stateReg   = String(r.RQ_KPP || '')
+          stateReg    = String(r.RQ_STATE_REG || r.RQ_KPP || '')
+          if (!contactName) contactName = String(r.RQ_CONTACT || '')
+          if (!phone) phone = String(r.RQ_PHONE || '')
+          if (!email) email = String(r.RQ_EMAIL || '')
           break
         }
+        if (!stateReg) stateReg = String(r.RQ_STATE_REG || r.RQ_KPP || '')
+        if (!contactName) contactName = String(r.RQ_CONTACT || '')
       }
 
-      // 3. Endereço vinculado ao requisite (crm.address — mais completo que o da empresa)
+      // 3. Endereço do requisito.
+      // Atenção à semântica do Bitrix neste portal: PROVINCE é a UF, REGION é a
+      // cidade e CITY costuma trazer o bairro. Quando CITY e REGION são iguais,
+      // não há bairro cadastrado.
       if (requisiteId) {
         const aj: any = await bPost('/crm.address.list.json', {
           filter: { ENTITY_TYPE_ID: 8, ENTITY_ID: requisiteId },
-          select: ['ADDRESS_1', 'ADDRESS_2', 'CITY', 'REGION', 'POSTAL_CODE'],
+          select: ['ADDRESS_1', 'ADDRESS_2', 'CITY', 'REGION', 'PROVINCE', 'POSTAL_CODE'],
         }).catch(() => ({}))
         const addrs: any[] = Array.isArray(aj?.result) ? aj.result : []
         if (addrs.length > 0) {
           const a = addrs[0]
-          if (a.ADDRESS_1) address    = String(a.ADDRESS_1)
-          if (a.ADDRESS_2) complement = String(a.ADDRESS_2)
-          if (a.CITY)      city       = String(a.CITY)
-          if (a.REGION)    state      = String(a.REGION)
-          if (a.POSTAL_CODE) zipCode  = String(a.POSTAL_CODE).replace(/\D/g, '')
+          if (a.ADDRESS_1) {
+            const logradouro = String(a.ADDRESS_1).trim()
+            // "R HUNGRIA 1100" → endereço "R HUNGRIA", número "1100"
+            const m = logradouro.match(/^(.*?)[,\s]+(\d+[A-Za-z]?)$/)
+            if (m) { address = m[1].trim(); number = m[2] } else { address = logradouro }
+          }
+          if (a.ADDRESS_2)   complement = String(a.ADDRESS_2)
+          if (a.PROVINCE)    state      = String(a.PROVINCE).trim()
+          if (a.REGION)      city       = String(a.REGION).trim()
+          if (a.CITY && String(a.CITY).trim() !== String(a.REGION || '').trim()) {
+            neighborhood = String(a.CITY).trim()
+          }
+          if (a.POSTAL_CODE) zipCode    = String(a.POSTAL_CODE).replace(/\D/g, '')
         }
       }
 
-      return { cnpj, name, email, phone, address, number, complement, neighborhood, city, state, zipCode, stateRegistration: stateReg }
+      // 4. Contato vinculado — neste portal é onde telefone e e-mail realmente existem.
+      if (!contactName || !phone || !email) {
+        const ctj: any = await bPost('/crm.contact.list.json', {
+          filter: { COMPANY_ID: companyId },
+          select: ['ID', 'NAME', 'LAST_NAME', 'PHONE', 'EMAIL'],
+          order: { ID: 'ASC' },
+        }).catch(() => ({}))
+        const contacts: any[] = Array.isArray(ctj?.result) ? ctj.result : []
+        if (contacts.length > 0) {
+          const ct = contacts[0]
+          if (!contactName) {
+            contactName = [ct.NAME, ct.LAST_NAME].map((x: any) => String(x || '').trim())
+              .filter(Boolean).join(' ')
+          }
+          if (!phone && Array.isArray(ct.PHONE)) phone = String(ct.PHONE[0]?.VALUE ?? '')
+          if (!email && Array.isArray(ct.EMAIL)) email = String(ct.EMAIL[0]?.VALUE ?? '')
+        }
+      }
+
+      return { cnpj, name, email, phone, address, number, complement, neighborhood,
+        city, state, zipCode, stateRegistration: stateReg, contactName }
     } catch (err) {
       console.error('Erro ao buscar dados completos da empresa CRM:', err)
       return empty
@@ -709,41 +761,156 @@ export class BitrixService {
 
   // ─── Catálogo de Produtos ─────────────────────────────────────────────────────
 
+  // Propriedades customizadas do catálogo CRM (portal Interatell).
+  // IDs confirmados via crm.product.fields — se o portal mudar, é aqui que se ajusta.
+  private static readonly PRODUCT_PROPS = {
+    ncm:        'PROPERTY_175',
+    cfop:       'PROPERTY_317',
+    sku:        'PROPERTY_503',
+    skuLegacy:  'PROPERTY_319',  // "SKU_old" — ainda é onde o dado real está
+    tipo:       'PROPERTY_321',  // lista: Hardware | Software | Licença | Serviço Interatell | Serviços de Terceiros
+    origem:     'PROPERTY_323',  // lista: Nacional | Importado
+    fornecedor: 'PROPERTY_327',  // lista de fornecedores
+  } as const
+
+  // "Tipo de Part Number" do Bitrix → natureza usada no formulário
+  private static readonly NATURE_BY_LABEL: Record<string, string> = {
+    'hardware':              'HW',
+    'software':              'SW',
+    'licença':               'LC',
+    'licenca':               'LC',
+    'serviço interatell':    'SRV',
+    'servico interatell':    'SRV',
+    'serviços de terceiros': 'ST',
+    'servicos de terceiros': 'ST',
+  }
+
+  // Valores das propriedades de lista (ID numérico → rótulo). Uma chamada por processo.
+  private static _productEnumCache: Map<string, Map<string, string>> | null = null
+
+  private static async getProductEnums(): Promise<Map<string, Map<string, string>>> {
+    if (BitrixService._productEnumCache) return BitrixService._productEnumCache
+    const cache = new Map<string, Map<string, string>>()
+    try {
+      const j: any = await bPost('/crm.product.property.list.json', {})
+      for (const prop of (Array.isArray(j?.result) ? j.result : [])) {
+        const values = prop?.VALUES
+        if (!values || typeof values !== 'object') continue
+        const byId = new Map<string, string>()
+        for (const v of Object.values<any>(values)) byId.set(String(v.ID), String(v.VALUE ?? ''))
+        cache.set(`PROPERTY_${prop.ID}`, byId)
+      }
+    } catch (err) {
+      console.error('Erro ao carregar valores das propriedades de produto:', err)
+    }
+    BitrixService._productEnumCache = cache
+    return cache
+  }
+
+  /** Propriedade de produto vem como { valueId, value } ou null — extrai a string. */
+  private static propValue(raw: any): string {
+    if (raw == null) return ''
+    if (typeof raw === 'object') return String(raw.value ?? '').trim()
+    return String(raw).trim()
+  }
+
+  /** DESCRIPTION vem com HTML do editor do Bitrix. */
+  private static stripHtml(html: string): string {
+    return html
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'")
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+
   /**
-   * Busca produtos no catálogo do Bitrix24 por nome ou código (sem banco de dados)
+   * Busca produtos no catálogo do Bitrix24.
+   *
+   * Procura em NAME, CODE, DESCRIPTION, SKU e SKU_old — o Bitrix não faz OR entre
+   * campos num filtro só, então são chamadas paralelas deduplicadas por ID.
+   *
+   * Observação: catalog.product.list (Trade Catalog) não é usado porque o webhook
+   * atual não tem o escopo `catalog` — responde insufficient_scope. Os produtos
+   * acessíveis são os do Catálogo de Produtos do CRM.
    */
   static async searchCatalogProducts(query: string): Promise<Array<{
-    id: number; name: string; code?: string; ncm?: string; cfop?: string; nature?: string
+    id: number
+    partnumber: string
+    description: string
+    code?: string
+    sku?: string
+    ncm?: string
+    cfop?: string
+    nature?: string
+    origem?: string
+    fornecedor?: string
   }>> {
-    try {
-      // Tenta catalog.product.list (Bitrix24 moderno)
-      const j: any = await bPost('/catalog.product.list.json', {
-        filter: { '%NAME': query },
-        select: ['id', 'name', 'code', 'article'],
-        start: 0,
-      }).catch(() => null)
+    const q = query.trim()
+    if (!q) return []
 
-      if (j?.result?.products?.length) {
-        return j.result.products.map((p: any) => ({
-          id: Number(p.id),
-          name: String(p.name || ''),
-          code: String(p.code || p.article || '').trim() || undefined,
-        }))
+    const P = BitrixService.PRODUCT_PROPS
+    const select = [
+      'ID', 'NAME', 'CODE', 'XML_ID', 'DESCRIPTION', 'ACTIVE',
+      P.ncm, P.cfop, P.sku, P.skuLegacy, P.tipo, P.origem, P.fornecedor,
+    ]
+
+    // Um filtro por campo pesquisável; o Bitrix trata cada chamada de forma independente.
+    const filters: Record<string, any>[] = [
+      { '%NAME': q },
+      { '%CODE': q },
+      { '%DESCRIPTION': q },
+      { [P.sku]: q },
+      { [P.skuLegacy]: q },
+    ]
+
+    try {
+      const [enums, ...responses] = await Promise.all([
+        BitrixService.getProductEnums(),
+        ...filters.map(filter =>
+          bPost('/crm.product.list.json', { select, filter, start: 0 })
+            .catch(() => ({ result: [] as any[] })),
+        ),
+      ])
+
+      // Dedupe por ID — o mesmo produto casa em mais de um filtro com frequência.
+      const byId = new Map<string, any>()
+      for (const r of responses as any[]) {
+        for (const p of (Array.isArray(r?.result) ? r.result : [])) {
+          if (p?.ID != null) byId.set(String(p.ID), p)
+        }
       }
 
-      // Fallback: crm.product.list
-      const j2: any = await bPost('/crm.product.list.json', {
-        filter: { '%NAME': query },
-        select: ['ID', 'NAME', 'CODE'],
-        start: 0,
-      }).catch(() => ({ result: [] }))
+      const labelOf = (propKey: string, raw: any): string => {
+        const v = BitrixService.propValue(raw)
+        if (!v) return ''
+        return enums.get(propKey)?.get(v) ?? v
+      }
 
-      const fallbackItems: any[] = Array.isArray(j2.result) ? j2.result : []
-      return fallbackItems.map((p: any) => ({
-        id: Number(p.ID || p.id),
-        name: String(p.NAME || p.name || ''),
-        code: String(p.CODE || p.code || '').trim() || undefined,
-      }))
+      return Array.from(byId.values()).map((p: any) => {
+        const tipoLabel = labelOf(P.tipo, p[P.tipo])
+        const sku = BitrixService.propValue(p[P.sku]) || BitrixService.propValue(p[P.skuLegacy])
+        const descricao = BitrixService.stripHtml(String(p.DESCRIPTION || ''))
+
+        return {
+          id: Number(p.ID),
+          // NAME é o part number no catálogo (ex.: "C9200L-48T-4X-E");
+          // CODE é o slug gerado pelo Bitrix (ex.: "c9200l_48t_4x_e__1").
+          partnumber: String(p.NAME || '').trim(),
+          description: descricao || String(p.NAME || '').trim(),
+          code: String(p.CODE || '').trim() || undefined,
+          sku: sku || undefined,
+          ncm: BitrixService.propValue(p[P.ncm]) || undefined,
+          cfop: BitrixService.propValue(p[P.cfop]) || undefined,
+          nature: BitrixService.NATURE_BY_LABEL[tipoLabel.toLowerCase()] || undefined,
+          origem: labelOf(P.origem, p[P.origem]) || undefined,
+          fornecedor: labelOf(P.fornecedor, p[P.fornecedor]) || undefined,
+        }
+      })
     } catch (error) {
       console.error('Erro ao buscar produtos no catálogo:', error)
       return []
@@ -811,12 +978,22 @@ export class BitrixService {
       }
 
       // ── 2. Busca elementos sem filtro ACTIVE (evita listas com itens inativos) ──
-      const j: any = await bPost('/lists.element.get.json', {
-        IBLOCK_TYPE_ID: 'lists',
-        IBLOCK_ID: listId,
-      })
-
-      const items: any[] = Array.isArray(j.result) ? j.result : Object.values(j.result || {})
+      // Paginado: lists.element.get devolve no maximo 50 por pagina. Sem o laco,
+      // condicoes alem da 50a somem silenciosamente e o rascunho que usa uma delas
+      // reabre com o Select vazio.
+      const items: any[] = []
+      let start = 0
+      while (true) {
+        const j: any = await bPost('/lists.element.get.json', {
+          IBLOCK_TYPE_ID: 'lists',
+          IBLOCK_ID: listId,
+          start,
+        })
+        const page: any[] = Array.isArray(j.result) ? j.result : Object.values(j.result || {})
+        items.push(...page)
+        if (!j.next || page.length < 50) break
+        start = j.next
+      }
       console.log(`[payment] lista ${listId}: ${items.length} itens, primeiro:`, JSON.stringify(items[0] ?? null))
       if (!items.length) return []
 
