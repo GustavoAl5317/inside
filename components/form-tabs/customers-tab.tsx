@@ -269,20 +269,6 @@ export function CustomerDialog({
                 </div>
               </div>
               {error && <p className="text-sm text-red-600">{error}</p>}
-              {/* Filial Interatell */}
-              <div className="border rounded-lg p-3 bg-gray-50">
-                <p className="text-xs font-semibold text-gray-700 mb-2">Filial Interatell *</p>
-                <div className="flex gap-4">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="radio" checked={branch === 'barueri'} onChange={() => setBranch('barueri')} className="accent-purple-600" />
-                    <span className="text-sm">Barueri (SP)</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="radio" checked={branch === 'es'} onChange={() => setBranch('es')} className="accent-purple-600" />
-                    <span className="text-sm">Serra (ES)</span>
-                  </label>
-                </div>
-              </div>
               <div className="flex justify-end gap-2 pt-1">
                 <Button variant="outline" onClick={onClose}>Cancelar</Button>
                 <Button onClick={handleManualConfirm} disabled={saving} className="bg-purple-600 hover:bg-purple-700">
@@ -344,20 +330,6 @@ export function CustomerDialog({
 
               {error && <p className="text-sm text-amber-600">{error}</p>}
 
-              {/* Filial Interatell */}
-              <div className="border rounded-lg p-3 bg-gray-50">
-                <p className="text-xs font-semibold text-gray-700 mb-2">Filial Interatell *</p>
-                <div className="flex gap-4">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="radio" checked={branch === 'barueri'} onChange={() => setBranch('barueri')} className="accent-purple-600" />
-                    <span className="text-sm">Barueri (SP)</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="radio" checked={branch === 'es'} onChange={() => setBranch('es')} className="accent-purple-600" />
-                    <span className="text-sm">Serra (ES)</span>
-                  </label>
-                </div>
-              </div>
 
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={onClose}>Cancelar</Button>
@@ -566,10 +538,22 @@ function CustomerCard({
 
   const basePath = `customers.${customerIndex}`
   const customer = form.watch(`${basePath}.customer`)
-  const customerBranch: string = form.watch(`${basePath}.branch`) || 'barueri'
   const allocations: any[] = form.watch(`${basePath}.productAllocations`) || []
   // Clientes ES só veem fornecedores ES; clientes Barueri só veem fornecedores Barueri
-  const visibleSupplierGroups = supplierGroups.filter((g: any) => (g.branch || 'barueri') === customerBranch)
+  // A filial da venda e derivada de onde o produto foi comprado, entao o cliente
+  // enxerga todos os fornecedores — inclusive de filiais diferentes, que geram
+  // uma OV por empresa.
+  const visibleSupplierGroups = supplierGroups
+
+  // Filiais efetivamente usadas por este cliente, a partir das alocacoes.
+  const filiaisDoCliente: string[] = [...new Set(
+    (allocations || [])
+      .filter((a: any) => Number(a.quantity) > 0)
+      .map((a: any) => {
+        const g = supplierGroups.find((x: any) => x.localId === a.groupLocalId)
+        return (g?.branch === 'es' ? 'es' : 'barueri')
+      }),
+  )]
 
   // Retorna a quantidade alocada por ESTE cliente para um produto específico
   const getMyAllocation = (groupLocalId: string, productIndex: number): number => {
@@ -634,13 +618,19 @@ function CustomerCard({
           <div>
             <div className="flex items-center gap-2">
               <p className="font-semibold text-purple-900">{customer?.name || "Cliente"}</p>
-              <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${
-                customerBranch === 'es'
-                  ? 'bg-green-100 text-green-700 border-green-300'
-                  : 'bg-blue-100 text-blue-700 border-blue-300'
-              }`}>
-                {customerBranch === 'es' ? 'Serra/ES' : 'Barueri/SP'}
-              </span>
+              {filiaisDoCliente.length === 0 ? (
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full border bg-gray-100 text-gray-500 border-gray-300">
+                  sem alocação
+                </span>
+              ) : filiaisDoCliente.map((f: string) => (
+                <span key={f} className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${
+                  f === 'es'
+                    ? 'bg-green-100 text-green-700 border-green-300'
+                    : 'bg-blue-100 text-blue-700 border-blue-300'
+                }`}>
+                  {f === 'es' ? 'Fatura ES' : 'Fatura Barueri'}
+                </span>
+              ))}
             </div>
             <p className="text-xs text-purple-600">
               {customer?.cnpj}
@@ -723,7 +713,7 @@ function CustomerCard({
             <p className="text-sm text-gray-400 text-center py-4">
               {supplierGroups.length === 0
                 ? "Adicione fornecedores na aba anterior para alocar produtos aqui."
-                : `Nenhum fornecedor da filial ${customerBranch === 'es' ? 'Serra/ES' : 'Barueri/SP'} adicionado.`}
+                : "Nenhum fornecedor adicionado."}
             </p>
           ) : (
             visibleSupplierGroups.map((group: any, gIdx: number) => (
@@ -841,6 +831,20 @@ export function CustomersTab({ form }: CustomersTabProps) {
   const uniqueSuppliers = supplierGroups.length
   const uniqueCustomers = customerFields.length
 
+  // Uma OV por cliente E por filial: o mesmo cliente gera dois pedidos quando
+  // recebe produtos comprados em filiais diferentes.
+  const totalOVs = allCustomers.reduce((soma: number, c: any) => {
+    const filiais = new Set(
+      (c.productAllocations ?? [])
+        .filter((a: any) => Number(a.quantity) > 0)
+        .map((a: any) => {
+          const g = supplierGroups.find((x: any) => x.localId === a.groupLocalId)
+          return g?.branch === 'es' ? 'es' : 'barueri'
+        }),
+    )
+    return soma + filiais.size
+  }, 0)
+
   // Total de unidades disponíveis vs alocadas
   const totalSupplierUnits = supplierGroups.reduce((sum: number, g: any) =>
     sum + (g.products || []).reduce((s: number, p: any) => s + (p.quantity || 0), 0), 0)
@@ -874,9 +878,9 @@ export function CustomersTab({ form }: CustomersTabProps) {
             <p className="text-xs text-blue-500 mt-0.5">1 OC por fornecedor</p>
           </div>
           <div className="border rounded-lg p-3 bg-purple-50 border-purple-200 text-center">
-            <p className="text-2xl font-bold text-purple-700">{uniqueCustomers}</p>
+            <p className="text-2xl font-bold text-purple-700">{totalOVs || uniqueCustomers}</p>
             <p className="text-sm text-purple-600">Ordem(ns) de Venda</p>
-            <p className="text-xs text-purple-500 mt-0.5">1 OV por cliente</p>
+            <p className="text-xs text-purple-500 mt-0.5">1 OV por cliente e por filial</p>
           </div>
           {totalSupplierUnits > 0 && (
             <div className={`border rounded-lg p-3 text-center ${
