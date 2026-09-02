@@ -14,6 +14,7 @@ import { NotesTab } from "./form-tabs/notes-tab"
 import { SupplierGroupsTab } from "./form-tabs/supplier-groups-tab"
 import { CustomersTab } from "./form-tabs/customers-tab"
 import { generateDealPDFs } from "@/lib/generate-pdf"
+import { downloadOcExcels } from "@/lib/download-oc-excel"
 import { INTERATELL_COMPANIES } from "@/lib/interatell-companies"
 import { ServiceCustomersTab } from "./form-tabs/service-customers-tab"
 import {
@@ -545,12 +546,18 @@ export function MultiStepForm({
         }
         setDealId(result.dealId!)
         setCompleted(tabs.map(t => t.id))
-        toast.success("Rascunho salvo! Gerando PDFs...")
+        // O download automatico do backlog e a planilha no modelo da Interatell;
+        // o PDF continua disponivel no botao "Baixar PDF".
+        toast.success("Rascunho salvo! Gerando planilha...")
         try {
-          const n = await generateDealPDFs(values)
-          toast.success(n > 1 ? `${n} PDFs baixados (um por documento)!` : "PDF baixado com sucesso!")
-        } catch (pdfErr: any) {
-          toast.error("Rascunho salvo, mas houve erro ao gerar PDF: " + (pdfErr?.message || ""))
+          const n = await downloadOcExcels(values)
+          if (n === 0) {
+            toast.warning("Rascunho salvo, mas nenhuma planilha foi gerada — nenhum produto alocado a cliente.")
+          } else {
+            toast.success(n > 1 ? `${n} planilhas baixadas (uma por fornecedor/cliente)!` : "Planilha baixada com sucesso!")
+          }
+        } catch (xlsErr: any) {
+          toast.error("Rascunho salvo, mas houve erro ao gerar a planilha: " + (xlsErr?.message || ""))
         }
         return
       }

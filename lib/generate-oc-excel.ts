@@ -1,0 +1,176 @@
+import 'server-only'
+import path from 'node:path'
+import ExcelJS from 'exceljs'
+
+/**
+ * Gera a Ordem de Compra em Excel a partir do modelo da Interatell.
+ *
+ * O modelo (templates/ordem-de-compra.xlsx) e a planilha que o time ja usa, com
+ * as macros removidas: cores, bordas, mesclagens, larguras, o logo e as formulas
+ * de calculo continuam iguais. O codigo so preenche celulas.
+ *
+ * O modelo tem UM bloco de fornecedor e UM de cliente, entao sai um arquivo por
+ * par fornecedor x cliente. As formulas de VLOOKUP das abas ocultas sao
+ * substituidas por valores: o app ja tem esses dados em memoria.
+ */
+
+const TEMPLATE = path.join(process.cwd(), 'templates', 'ordem-de-compra.xlsx')
+const ABA = 'Ordem de Compra'
+
+/** Tabela de itens: linha 29 e o cabecalho, 30..49 sao as 20 linhas de item. */
+const LINHA_ITENS = 30
+const ULTIMA_LINHA_ITEM = 49
+
+/** Colunas de dado da tabela; A guarda a numeracao do item, que fica como esta. */
+const COLUNAS_ITEM = ['B','C','D','E','F','G','H','I','J','K','L','M','N','O'] as const
+
+export interface OcExcelFile {
+  filename: string
+  buffer: Buffer
+}
+
+const txt = (v: unknown) => String(v ?? '').trim()
+const nmb = (v: unknown) => {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+
+/** "2026-08-14" ou "14/08/2026" -> Date, para o Excel formatar como data. */
+function paraData(v: unknown): Date | null {
+  const s = txt(v)
+  if (!s) return null
+  // Meio-dia UTC: o ExcelJS grava a data em UTC e, com a meia-noite local, um
+  // fuso negativo joga a data para o dia anterior na planilha.
+  const meioDia = (a: number, m: number, d: number) => new Date(Date.UTC(a, m - 1, d, 12, 0, 0))
+  const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(s)
+  if (iso) return meioDia(Number(iso[1]), Number(iso[2]), Number(iso[3]))
+  const br = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(s)
+  if (br) return meioDia(Number(br[3]), Number(br[2]), Number(br[1]))
+  return null
+}
+
+function nomeArquivo(proposta: string, fornecedor: string, cliente: string): string {
+  const limpa = (s: string) =>
+    s.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40)
+  return `OC_${limpa(proposta) || 'sem_proposta'}_${limpa(fornecedor)}_${limpa(cliente)}.xlsx`.replace(/_+/g, '_')
+}
+
+/** Itens que este cliente recebe deste grupo de fornecedor. */
+function itensDoPar(group: any, customer: any) {
+  const itens: any[] = []
+  for (const alloc of (customer?.productAllocations ?? [])) {
+    if (alloc?.groupLocalId !== group?.localId) continue
+    if (!(Number(alloc.quantity) > 0)) continue
+    const p = group?.products?.[alloc.productIndex]
+    if (!p) continue
+    itens.push({ ...p, quantity: Number(alloc.quantity), unitSale: Number(alloc.unitSale ?? 0) })
+  }
+  return itens
+}
+
+async function montaArquivo(values: any, group: any, entry: any): Promise<OcExcelFile | null> {
+  const itens = itensDoPar(group, entry)
+  if (!itens.length) return null
+
+  const wb = new ExcelJS.Workbook()
+  await wb.xlsx.readFile(TEMPLATE)
+  const ws = wb.getWorksheet(ABA)
+  if (!ws) throw new Error(`Aba "${ABA}" não encontrada no modelo`)
+
+  const business = values?.business ?? {}
+  const forn = group?.supplier ?? {}
+  const cli = entry?.customer ?? {}
+  const filialES = group?.branch === 'es'
+
+  const set = (ref: string, v: unknown) => { ws.getCell(ref).value = (v as any) ?? null }
+
+  // ── Cabeçalho ──────────────────────────────────────────────────────────────
+  set('J2', txt(business.commercialProposal))
+  set('J3', paraData(business.purchaseOrderDate))
+  set('J4', paraData(business.deliveryDeadline))
+  set('N4', paraData(business.expectedBillingDate))
+  set('J6', txt(business.purchasePaymentCondition))
+  set('N6', txt(business.salePaymentCondition))
+
+  // ── Distribuidor / Fornecedor ──────────────────────────────────────────────
+  set('A9',  txt(forn.name))
+  set('B10', txt(forn.zipCode))
+  set('B11', txt(forn.city));         set('D11', txt(forn.state))
+  set('B12', txt(forn.neighborhood))
+  set('B13', txt(forn.address));      set('D13', txt(forn.number))
+  set('B14', txt(forn.complement))
+  set('G11', txt(forn.contactName))
+  set('G12', txt(forn.phone))
+  set('G14', txt(forn.email))
+
+  // ── Interatell: o "Faturamento via" do grupo decide a empresa ──────────────
+  set('H9', filialES ? 'SERRA' : 'BARUERI')
+
+  // ── Cliente final ──────────────────────────────────────────────────────────
+  set('A16', txt(cli.name))
+  set('B17', txt(cli.zipCode))
+  set('B18', txt(cli.city));          set('D18', txt(cli.state))
+  set('B19', txt(cli.neighborhood))
+  set('B20', txt(cli.address));       set('D20', txt(cli.number))
+  set('B21', txt(cli.complement))
+  set('B22', txt(cli.purchaseOrder) || txt(business.commercialProposal))
+  set('G16', txt(cli.cnpj))
+  set('G17', cli.isTaxpayer ? 'SIM' : 'NÃO')
+  set('G18', txt(cli.stateRegistration))
+  set('G19', txt(cli.contactName))
+  set('G20', txt(cli.phone))
+  set('G22', txt(cli.email))
+
+  // ── Observações ────────────────────────────────────────────────────────────
+  set('H16', txt(values?.notes?.externalNotes))
+  set('H22', txt(values?.notes?.internalNotes))
+
+  // ── Itens ──────────────────────────────────────────────────────────────────
+  // Limpa o bloco inteiro antes de escrever. O modelo traz VLOOKUPs como formula
+  // compartilhada (C, G, H, I, J nas linhas 32..49); apagar so algumas linhas
+  // deixaria clones apontando para uma celula-mestre que nao existe mais, e o
+  // ExcelJS recusa o arquivo. A formatacao das celulas nao e afetada.
+  for (let l = LINHA_ITENS; l <= ULTIMA_LINHA_ITEM; l++) {
+    for (const col of COLUNAS_ITEM) ws.getCell(`${col}${l}`).value = null
+  }
+
+  itens.forEach((p, i) => {
+    const l = LINHA_ITENS + i
+    set(`B${l}`, txt(p.sku) || txt(p.partnumber))
+    set(`C${l}`, txt(p.description))
+    set(`F${l}`, filialES ? 'ES' : 'SP')
+    set(`G${l}`, txt(p.cfop))
+    set(`H${l}`, txt(p.nature))
+    set(`I${l}`, txt(p.family))
+    set(`J${l}`, txt(p.ncm))
+    set(`K${l}`, nmb(p.quantity))
+    set(`L${l}`, nmb(p.unitCost))
+    set(`N${l}`, nmb(p.unitSale))
+    // M e O sao os totais; o modelo ja traz =L*K e =N*K nas primeiras linhas.
+    // Nas demais a formula e escrita aqui para a planilha continuar recalculando.
+    ws.getCell(`M${l}`).value = { formula: `L${l}*K${l}` } as any
+    ws.getCell(`O${l}`).value = { formula: `N${l}*K${l}` } as any
+  })
+
+  const buffer = Buffer.from(await wb.xlsx.writeBuffer())
+  return {
+    filename: nomeArquivo(txt(business.commercialProposal), txt(forn.name), txt(cli.name)),
+    buffer,
+  }
+}
+
+/**
+ * Um arquivo por par fornecedor x cliente que tenha item alocado.
+ * A coluna NATUREZA distingue HW, SW, LC, ST e SRV dentro do mesmo arquivo.
+ */
+export async function generateOcExcelFiles(values: any): Promise<OcExcelFile[]> {
+  const arquivos: OcExcelFile[] = []
+  for (const group of (values?.supplierGroups ?? [])) {
+    for (const entry of (values?.customers ?? [])) {
+      const f = await montaArquivo(values, group, entry)
+      if (f) arquivos.push(f)
+    }
+  }
+  return arquivos
+}
