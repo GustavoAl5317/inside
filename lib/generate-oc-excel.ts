@@ -49,11 +49,33 @@ function paraData(v: unknown): Date | null {
   return null
 }
 
-function nomeArquivo(proposta: string, fornecedor: string, cliente: string): string {
-  const limpa = (s: string) =>
-    s.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40)
-  return `OC_${limpa(proposta) || 'sem_proposta'}_${limpa(fornecedor)}_${limpa(cliente)}.xlsx`.replace(/_+/g, '_')
+/**
+ * Nome do arquivo no padrao que o time ja usa ("OC 8195 26 - Parkshop Brasilia"):
+ * numero da proposta, nome do negocio e fornecedor, com espacos e hifen.
+ *
+ * O nome do negocio vem do Bitrix como "Negocio Fechado: 2026.12483 - CLIENTE -
+ * descricao"; o prefixo e o numero repetido sao removidos para nao duplicar.
+ */
+function nomeArquivo(proposta: string, negocio: string, fornecedor: string): string {
+  // Windows recusa \\ / : * ? " < > | em nome de arquivo, e o caminho todo
+  // nao pode passar de 260 caracteres — dai os limites de tamanho.
+  const limpa = (v: string, max: number) =>
+    v.replace(/[\\\/:*?"<>|]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, max)
+      .replace(/[\s-]+$/, '')  // corte no meio do texto deixa hifen solto
+      .trim()
+
+  // A proposta e do tipo "2026.12483": so o ponto precisa virar literal.
+  const escapa = (v: string) => v.replace(/[.]/g, '\\.')
+  const semPrefixo = negocio
+    .replace(/^\s*neg[oó]cio\s+fechado\s*:\s*/i, '')
+    .replace(new RegExp('^\\s*' + escapa(proposta) + '\\s*-\\s*'), '')
+
+  const partes = [proposta || 'sem proposta', limpa(semPrefixo, 55), limpa(fornecedor, 24)]
+    .filter(Boolean)
+  return `OC ${partes.join(' - ')}.xlsx`
 }
 
 /** Itens que este cliente recebe deste grupo de fornecedor. */
@@ -155,7 +177,7 @@ async function montaArquivo(values: any, group: any, entry: any): Promise<OcExce
 
   const buffer = Buffer.from(await wb.xlsx.writeBuffer())
   return {
-    filename: nomeArquivo(txt(business.commercialProposal), txt(forn.name), txt(cli.name)),
+    filename: nomeArquivo(txt(business.commercialProposal), txt(business.name), txt(forn.name)),
     buffer,
   }
 }

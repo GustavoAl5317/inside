@@ -41,6 +41,7 @@ import {
   ChevronRight,
   ChevronLeft,
   FileDown,
+  FileSpreadsheet,
   Send,
   RefreshCw,
 } from "lucide-react"
@@ -647,7 +648,7 @@ export function MultiStepForm({
 
   // ── Botão de submit ───────────────────────────────────────────────────────
   const SUBMIT_CONFIG = {
-    backlog: { label: "Salvar e Gerar PDF", icon: FileDown,  cls: "bg-blue-600 hover:bg-blue-700"    },
+    backlog: { label: "Salvar e Gerar Planilha", icon: FileSpreadsheet, cls: "bg-blue-600 hover:bg-blue-700" },
     omie:    { label: "Enviar ao Omie",     icon: Send,      cls: "bg-purple-600 hover:bg-purple-700" },
     update:  { label: "Atualizar no Omie",  icon: RefreshCw, cls: "bg-emerald-600 hover:bg-emerald-700" },
   }
