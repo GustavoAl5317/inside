@@ -2103,6 +2103,7 @@ export async function getStockComparisonAction(branch: 'barueri' | 'es' = 'barue
         casados:        rows.filter(r => r.match !== 'nenhum').length,
         soNoCatalogo:   rows.filter(r => r.partnumber && r.match === 'nenhum').length,
         soNoOmie:       rows.filter(r => !r.partnumber).length,
+        excedemOmie:    rows.filter(r => r.excedeOmie).length,
       },
     }
   } catch (error) {

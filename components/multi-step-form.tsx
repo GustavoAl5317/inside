@@ -63,6 +63,9 @@ const companySchema = z.object({
 
 const productSchema = z.object({
   id:          z.number(),
+  // SKU do catalogo (PROPERTY_503/319 no Bitrix). E o identificador principal
+  // exibido; partnumber e description continuam como estao.
+  sku:         z.string().optional(),
   partnumber:  z.string(),
   description: z.string(),
   cfop:        z.string().optional(),
@@ -140,7 +143,10 @@ const formSchema = z.object({
     salePaymentCondition:     z.string().min(1, "Condição de pagamento de venda é obrigatória"),
     hasInteratellService:     z.boolean().default(false),
   }),
-  interatellBranches: z.array(z.enum(['barueri', 'es'])).min(1, "Selecione pelo menos uma filial Interatell"),
+  // Derivado das filiais dos grupos de fornecedor ("Faturamento via"), nao mais
+  // escolhido a mao na etapa Negocio. Mantido no payload porque PDF, diff e o
+  // envio ao Omie leem esse campo.
+  interatellBranches: z.array(z.enum(['barueri', 'es'])).default([]),
   supplierGroups: z.array(supplierGroupSchema).min(1, "Adicione pelo menos um fornecedor"),
   customers:      z.array(customerEntrySchema).min(1, "Adicione pelo menos um cliente"),
   serviceCustomers: z.array(serviceCustomerSchema).default([]),
@@ -156,6 +162,13 @@ const formSchema = z.object({
 type FormValues = z.infer<typeof formSchema>
 // Tipo de entrada do schema (campos com .default() são opcionais antes do parse)
 type FormInput = z.input<typeof formSchema>
+
+/** Filiais efetivamente usadas, a partir do "Faturamento via" de cada fornecedor. */
+function deriveBranches(groups: any[] | undefined): ('barueri' | 'es')[] {
+  const set = new Set<'barueri' | 'es'>()
+  for (const g of groups ?? []) set.add(g?.branch === 'es' ? 'es' : 'barueri')
+  return [...set]
+}
 
 function normalizeFormCNPJs(form: UseFormReturn<FormInput, any, FormValues>) {
   const fmt = (path: `supplierGroups.${number}.supplier.cnpj` | `customers.${number}.customer.cnpj`) => {
@@ -412,7 +425,7 @@ export function MultiStepForm({
   const currentIdx = tabs.findIndex(t => t.id === activeTab)
 
   const validateTab = async (tabId: string): Promise<boolean> => {
-    if (tabId === "business") return form.trigger(["business", "interatellBranches"])
+    if (tabId === "business") return form.trigger(["business"])
     if (tabId === "suppliers") {
       const groups = form.getValues("supplierGroups")
       if (!groups?.length) { toast.error("Adicione pelo menos um fornecedor com produtos."); return false }
@@ -493,7 +506,7 @@ export function MultiStepForm({
       }
       collect(errors)
       const tabFieldMap: Record<string, string[]> = {
-        business: ["business", "interatellBranches"], suppliers: ["supplierGroups"],
+        business: ["business"], suppliers: ["supplierGroups", "interatellBranches"],
         customers: ["customers"],             notes: ["notes"],
         serviceCustomers: ["serviceCustomers"],
       }
@@ -510,6 +523,10 @@ export function MultiStepForm({
 
     try {
       const values = form.getValues()
+      // "Faturamento via" passou a viver em cada grupo de fornecedor. O campo do
+      // negocio vira derivado e e gravado no proprio values porque saveDraftAction
+      // recebe values (nao o payload) e PDF, diff e historico leem esse campo.
+      values.interatellBranches = deriveBranches(values.supplierGroups)
       const payload = {
         bitrixDealId:       values.bitrixDealId || null,
         business:           values.business,
@@ -675,10 +692,6 @@ export function MultiStepForm({
           <div className="mt-6">
             <TabsContent value="business">
               <BusinessTab form={form} />
-              <div className="mt-6 border-t pt-6">
-                <h3 className="font-semibold mb-4 text-gray-700">Empresa Interatell</h3>
-                <InteratellSection form={form} />
-              </div>
             </TabsContent>
             <TabsContent value="suppliers"><SupplierGroupsTab form={form} /></TabsContent>
             <TabsContent value="customers"><CustomersTab form={form} /></TabsContent>
@@ -856,48 +869,3 @@ export function MultiStepForm({
   )
 }
 
-// ─── Empresas Interatell ────────────────────────────────────────────────────────
-function InteratellSection({ form }: { form: any }) {
-  const branches: string[] = form.watch("interatellBranches") || []
-
-  const toggleBranch = (key: 'barueri' | 'es') => {
-    const current: string[] = form.getValues("interatellBranches") || []
-    const next = current.includes(key) ? current.filter(b => b !== key) : [...current, key]
-    form.setValue("interatellBranches", next, { shouldValidate: true })
-  }
-
-  return (
-    <div className="space-y-3">
-      <p className="text-xs text-gray-500">Selecione uma ou ambas as filiais para este negócio.</p>
-      <div className="flex flex-col gap-2">
-        {(["barueri", "es"] as const).map(key => {
-          const c = INTERATELL_COMPANIES[key === 'es' ? 'filial' : 'matriz']
-          const checked = branches.includes(key)
-          return (
-            <label
-              key={key}
-              className={`flex items-start gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${
-                checked ? "bg-blue-50 border-blue-300" : "hover:bg-gray-50 border-gray-200"
-              }`}
-            >
-              <input
-                type="checkbox"
-                checked={checked}
-                onChange={() => toggleBranch(key)}
-                className="mt-0.5 w-4 h-4 accent-blue-600 shrink-0"
-              />
-              <div>
-                <p className="font-medium text-sm">
-                  {key === 'barueri' ? "Interatell — Matriz (Barueri, SP)" : "Interatell — Filial (Serra, ES)"}
-                </p>
-                <p className="text-xs text-gray-500">
-                  CNPJ: {c.cnpj.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5")} · {c.address}, {c.number} — {c.city}/{c.state}
-                </p>
-              </div>
-            </label>
-          )
-        })}
-      </div>
-    </div>
-  )
-}

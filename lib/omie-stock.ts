@@ -109,6 +109,12 @@ export async function listOmieStock(
 
 export type MatchKind = 'integracao' | 'descricao' | 'nenhum'
 
+/**
+ * Limite do campo de descricao do produto no Omie. Descricao mais longa que
+ * isso e recusada/truncada no envio, entao o painel avisa antes.
+ */
+export const OMIE_DESCRICAO_MAX = 120
+
 export interface CatalogEntry {
   partnumber: string
   description: string
@@ -123,6 +129,9 @@ export interface StockComparisonRow {
   origemCatalogo?: 'bitrix' | 'local'
   omie: OmieStockItem | null
   match: MatchKind
+  /** Tamanho da descricao do catalogo — o Omie corta acima de OMIE_DESCRICAO_MAX. */
+  descricaoLen: number
+  excedeOmie: boolean
 }
 
 /** Normaliza para comparar: caixa alta, sem acento e sem separadores. */
@@ -174,12 +183,15 @@ export function compareStockWithCatalog(
     }
     if (achado) usados.add(achado.codProduto)
 
+    const descricaoLen = (c.description ?? '').length
     rows.push({
       partnumber: c.partnumber,
       descricaoCatalogo: c.description,
       origemCatalogo: c.origem,
       omie: achado,
       match,
+      descricaoLen,
+      excedeOmie: descricaoLen > OMIE_DESCRICAO_MAX,
     })
   }
 
@@ -191,6 +203,8 @@ export function compareStockWithCatalog(
       descricaoCatalogo: '',
       omie: s,
       match: 'nenhum',
+      descricaoLen: 0,
+      excedeOmie: false,
     })
   }
 

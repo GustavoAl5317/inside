@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Loader2, RefreshCw, Search, PackageSearch } from 'lucide-react'
 
-type Filtro = 'todos' | 'casados' | 'soCatalogo' | 'soOmie' | 'comSaldo'
+type Filtro = 'todos' | 'casados' | 'soCatalogo' | 'soOmie' | 'comSaldo' | 'excedeOmie'
 
 const FILTROS: { id: Filtro; label: string }[] = [
   { id: 'todos',      label: 'Todos' },
@@ -14,6 +14,7 @@ const FILTROS: { id: Filtro; label: string }[] = [
   { id: 'soCatalogo', label: 'Só no catálogo' },
   { id: 'soOmie',     label: 'Só no Omie' },
   { id: 'comSaldo',   label: 'Com saldo' },
+  { id: 'excedeOmie', label: 'Descrição > 120' },
 ]
 
 const MATCH_BADGE: Record<string, { label: string; cls: string }> = {
@@ -50,6 +51,7 @@ export function EstoqueView() {
     if (filtro === 'soCatalogo' && !(r.partnumber && r.match === 'nenhum')) return false
     if (filtro === 'soOmie'     && r.partnumber) return false
     if (filtro === 'comSaldo'   && !(r.omie?.saldo > 0)) return false
+    if (filtro === 'excedeOmie' && !r.excedeOmie) return false
     if (!q) return true
     return [r.partnumber, r.descricaoCatalogo, r.omie?.codigo, r.omie?.descricao]
       .some((v: any) => String(v ?? '').toLowerCase().includes(q))
@@ -92,7 +94,7 @@ export function EstoqueView() {
       )}
 
       {resumo && (
-        <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
+        <div className="grid grid-cols-2 md:grid-cols-7 gap-2">
           {[
             { label: 'No Omie',        v: num(resumo.omieCarregados) },
             { label: 'Catálogo Bitrix', v: num(resumo.catalogoBitrix) },
@@ -100,6 +102,7 @@ export function EstoqueView() {
             { label: 'Nos dois',        v: num(resumo.casados) },
             { label: 'Só no catálogo',  v: num(resumo.soNoCatalogo) },
             { label: 'Só no Omie',      v: num(resumo.soNoOmie) },
+            { label: 'Descrição > 120', v: num(resumo.excedemOmie) },
           ].map(c => (
             <div key={c.label} className="rounded-xl border bg-white px-3 py-2">
               <p className="text-[11px] uppercase text-gray-500 font-semibold">{c.label}</p>
@@ -141,10 +144,11 @@ export function EstoqueView() {
               <thead className="bg-gray-50 text-gray-600">
                 <tr>
                   <th className="text-left p-2">Part number</th>
-                  <th className="text-left p-2">Descrição (catálogo)</th>
+                  <th className="text-left p-2">Partnumber / Descrição (catálogo)</th>
                   <th className="text-left p-2">Código Omie</th>
                   <th className="text-left p-2">Descrição (Omie)</th>
                   <th className="text-center p-2">Casamento</th>
+                  <th className="text-center p-2">Descrição Omie</th>
                   <th className="text-right p-2">Saldo</th>
                   <th className="text-right p-2">Reservado</th>
                   <th className="text-right p-2">Custo médio</th>
@@ -161,13 +165,29 @@ export function EstoqueView() {
                           <span className="ml-1.5 text-[10px] text-gray-400">{r.origemCatalogo}</span>
                         )}
                       </td>
-                      <td className="p-2 text-gray-600 max-w-[220px] truncate">{r.descricaoCatalogo || '—'}</td>
+                      <td
+                        className={`p-2 max-w-[220px] truncate ${r.excedeOmie ? 'text-red-600' : 'text-gray-600'}`}
+                        title={r.descricaoCatalogo}
+                      >
+                        {r.descricaoCatalogo || '—'}
+                      </td>
                       <td className="p-2">{r.omie?.codigo || <span className="text-gray-400">—</span>}</td>
                       <td className="p-2 text-gray-600 max-w-[260px] truncate">{r.omie?.descricao || '—'}</td>
                       <td className="p-2 text-center">
                         <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ring-1 ${badge.cls}`}>
                           {badge.label}
                         </span>
+                      </td>
+                      <td className="p-2 text-center whitespace-nowrap">
+                        {!r.partnumber ? (
+                          <span className="text-gray-300">—</span>
+                        ) : r.excedeOmie ? (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full ring-1 bg-red-50 text-red-700 ring-red-200">
+                            {r.descricaoLen} — excede 120
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-gray-400">{r.descricaoLen}</span>
+                        )}
                       </td>
                       <td className={`p-2 text-right font-medium ${r.omie?.saldo > 0 ? 'text-emerald-600' : 'text-gray-400'}`}>
                         {r.omie ? num(r.omie.saldo) : '—'}
