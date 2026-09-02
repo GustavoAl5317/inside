@@ -367,12 +367,19 @@ function ProductDialog({
       return pn && !localCodes.has(pn)
     })
 
+    // O local tem prioridade porque carrega NCM, CFOP e familia, mas o SKU so
+    // existe no Bitrix — entao os dois sao combinados em vez de um descartar o
+    // outro. Sem isso, produto presente nas duas fontes vinha sem SKU.
+    const bitrixPorPn = new Map<string, any>(
+      bitrixList.map((p: any) => [String(p.partnumber || "").toLowerCase(), p]),
+    )
+
     const merged = [
       ...localList.map((p: any) => ({
         id:          p.id,
         partnumber:  p.partnumber,
         description: p.description,
-        sku:         "",
+        sku:         bitrixPorPn.get(String(p.partnumber || "").toLowerCase())?.sku || "",
         ncm:         p.ncm || "",
         cfop:        p.cfop || "",
         nature:      p.nature || "HW",
@@ -651,6 +658,12 @@ function ProductRow({
         <>
           <div className="grid grid-cols-2 gap-2">
             <div>
+              <label className="text-[10px] font-semibold text-gray-500 uppercase">SKU</label>
+              <Input className="h-7 text-xs mt-0.5"
+                value={product?.sku || ""}
+                onChange={e => form.setValue(`${basePath}.sku`, e.target.value)} />
+            </div>
+            <div>
               <label className="text-[10px] font-semibold text-gray-500 uppercase">Partnumber</label>
               <Input className="h-7 text-xs mt-0.5"
                 value={product?.partnumber || ""}
@@ -663,7 +676,7 @@ function ProductRow({
                 onChange={e => form.setValue(`${basePath}.ncm`, e.target.value)} />
             </div>
             <div className="col-span-2">
-              <label className="text-[10px] font-semibold text-gray-500 uppercase">Descrição</label>
+              <label className="text-[10px] font-semibold text-gray-500 uppercase">Partnumber / Descrição</label>
               <Input className="h-7 text-xs mt-0.5"
                 value={product?.description || ""}
                 onChange={e => form.setValue(`${basePath}.description`, e.target.value)} />
@@ -692,7 +705,7 @@ function ProductRow({
         </>
       ) : (
       <><div className="col-span-4">
-        <p className="font-medium truncate">{product?.partnumber}</p>
+        <p className="font-medium truncate">{product?.sku || product?.partnumber}</p>
         <p className="text-xs text-gray-500 truncate">{product?.description}</p>
         {/* Seletor de família — codigo_familia do Omie */}
         <Select
@@ -806,6 +819,7 @@ function SupplierGroupCard({
   const handleAddProduct = (p: any) => {
     appendProduct({
       id:          p.id,
+      sku:         p.sku || "",
       // partnumber vem de NAME no catálogo do Bitrix; CODE é só o slug interno.
       partnumber:  p.partnumber || "",
       description: p.description || "",
@@ -827,20 +841,31 @@ function SupplierGroupCard({
     <div className="border rounded-xl overflow-hidden shadow-sm">
       {/* Header do grupo */}
       <div className="flex items-center justify-between px-4 py-3 bg-blue-50 border-b border-blue-100">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-sm">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-sm shrink-0">
             {groupIndex + 1}
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <p className="font-semibold text-blue-900">{supplier?.name || "Fornecedor"}</p>
-              <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${
-                groupBranch === 'es'
-                  ? 'bg-green-100 text-green-700 border-green-300'
-                  : 'bg-blue-100 text-blue-700 border-blue-300'
-              }`}>
-                {groupBranch === 'es' ? 'Serra/ES' : 'Barueri/SP'}
-              </span>
+          <div className="min-w-0">
+            <div className="min-w-0">
+              <p className="font-semibold text-blue-900 truncate" title={supplier?.name}>
+                {supplier?.name || "Fornecedor"}
+              </p>
+              {/* Faturamento via — define o CNPJ da Interatell usado nos pedidos
+                  deste fornecedor. Antes era escolhido uma vez para o negocio
+                  inteiro, na etapa Negocio. */}
+              <div className="flex items-center gap-1.5 mt-1">
+                <span className="text-[10px] font-semibold uppercase text-blue-700/70 shrink-0">Faturamento via</span>
+                <Select
+                  value={groupBranch}
+                  onValueChange={v => form.setValue(`supplierGroups.${groupIndex}.branch`, v, { shouldDirty: true })}
+                >
+                  <SelectTrigger className="h-6 text-[11px] w-[210px] bg-white"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="barueri" className="text-xs">Interatell Barueri / SP</SelectItem>
+                    <SelectItem value="es" className="text-xs">Interatell Espírito Santo / ES</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <p className="text-xs text-blue-600">{supplier?.cnpj} — {productFields.length} produto(s) · Custo total: {formatCurrency(totalCusto)}</p>
           </div>

@@ -859,13 +859,14 @@ export class BitrixService {
       P.ncm, P.cfop, P.sku, P.skuLegacy, P.tipo, P.origem, P.fornecedor,
     ]
 
-    // Um filtro por campo pesquisável; o Bitrix trata cada chamada de forma independente.
+    // So campos nativos podem ser filtrados aqui: crm.product.list IGNORA filtro
+    // por PROPERTY_x e devolve o catalogo inteiro (verificado no portal —
+    // {PROPERTY_319: 'C9200'} retorna 9 itens, inclusive os que nao casam).
+    // Por isso o SKU e casado em codigo, mais abaixo.
     const filters: Record<string, any>[] = [
       { '%NAME': q },
       { '%CODE': q },
       { '%DESCRIPTION': q },
-      { [P.sku]: q },
-      { [P.skuLegacy]: q },
     ]
 
     try {
@@ -882,6 +883,21 @@ export class BitrixService {
       for (const r of responses as any[]) {
         for (const p of (Array.isArray(r?.result) ? r.result : [])) {
           if (p?.ID != null) byId.set(String(p.ID), p)
+        }
+      }
+
+      // Busca por SKU: como o filtro do Bitrix nao funciona em propriedade, a
+      // lista e varrida em codigo. Hoje o catalogo acessivel tem poucos itens;
+      // se crescer muito, esta varredura vira o gargalo da busca.
+      const alvo = q.toUpperCase().replace(/[^A-Z0-9]/g, '')
+      if (alvo) {
+        const todos: any = await bPost('/crm.product.list.json', { select, start: 0 })
+          .catch(() => ({ result: [] as any[] }))
+        for (const p of (Array.isArray(todos?.result) ? todos.result : [])) {
+          if (p?.ID == null || byId.has(String(p.ID))) continue
+          const sku = `${BitrixService.propValue(p[P.sku])}${BitrixService.propValue(p[P.skuLegacy])}`
+            .toUpperCase().replace(/[^A-Z0-9]/g, '')
+          if (sku && sku.includes(alvo)) byId.set(String(p.ID), p)
         }
       }
 
