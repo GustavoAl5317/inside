@@ -1,6 +1,8 @@
 import 'server-only'
 import path from 'node:path'
 import ExcelJS from 'exceljs'
+import { companyForBranch } from './interatell-companies'
+import { BitrixService } from './bitrix-service'
 
 /**
  * Gera a Ordem de Compra em Excel a partir do modelo da Interatell.
@@ -78,6 +80,27 @@ function nomeArquivo(proposta: string, negocio: string, fornecedor: string): str
   return `OC ${partes.join(' - ')}.xlsx`
 }
 
+/**
+ * Condicoes de pagamento: o formulario guarda so o codigo ("S30"), mas a
+ * planilha precisa do rotulo completo ("S30 - 30/60/90 Dias"). O mapa e montado
+ * uma vez por geracao; se o Bitrix nao responder, o codigo segue como estava.
+ */
+async function mapaCondicoes(): Promise<Map<string, string>> {
+  const mapa = new Map<string, string>()
+  const listId = Number(process.env.BITRIX_LIST_PAYMENT_ID)
+  if (!listId) return mapa
+  try {
+    for (const c of await BitrixService.getPaymentConditions(listId)) {
+      const cod = String(c.code || '').trim()
+      const rotulo = String(c.name || '').trim()
+      if (cod && rotulo && !mapa.has(cod)) mapa.set(cod, rotulo)
+    }
+  } catch (err) {
+    console.error('Erro ao carregar condições de pagamento para a planilha:', err)
+  }
+  return mapa
+}
+
 /** Itens que este cliente recebe deste grupo de fornecedor. */
 function itensDoPar(group: any, customer: any) {
   const itens: any[] = []
@@ -91,7 +114,7 @@ function itensDoPar(group: any, customer: any) {
   return itens
 }
 
-async function montaArquivo(values: any, group: any, entry: any): Promise<OcExcelFile | null> {
+async function montaArquivo(values: any, group: any, entry: any, condicoes: Map<string, string>): Promise<OcExcelFile | null> {
   const itens = itensDoPar(group, entry)
   if (!itens.length) return null
 
@@ -112,11 +135,17 @@ async function montaArquivo(values: any, group: any, entry: any): Promise<OcExce
   set('J3', paraData(business.purchaseOrderDate))
   set('J4', paraData(business.deliveryDeadline))
   set('N4', paraData(business.expectedBillingDate))
-  set('J6', txt(business.purchasePaymentCondition))
-  set('N6', txt(business.salePaymentCondition))
+  const condicao = (v: unknown) => { const c = txt(v); return condicoes.get(c) || c }
+  set('J6', condicao(business.purchasePaymentCondition))
+  set('N6', condicao(business.salePaymentCondition))
 
   // ── Distribuidor / Fornecedor ──────────────────────────────────────────────
+  // G9 e G10 traziam =VLOOKUP(...Fornecedores_Pasta...), que vira #NOME? porque
+  // o nome aponta para uma tabela que nao sobrevive ao round-trip. Sao escritos
+  // como valor, igual ao resto do bloco.
   set('A9',  txt(forn.name))
+  set('G9',  txt(forn.cnpj))
+  set('G10', txt(forn.stateRegistration))
   set('B10', txt(forn.zipCode))
   set('B11', txt(forn.city));         set('D11', txt(forn.state))
   set('B12', txt(forn.neighborhood))
@@ -126,8 +155,23 @@ async function montaArquivo(values: any, group: any, entry: any): Promise<OcExce
   set('G12', txt(forn.phone))
   set('G14', txt(forn.email))
 
-  // ── Interatell: o "Faturamento via" do grupo decide a empresa ──────────────
-  set('H9', filialES ? 'SERRA' : 'BARUERI')
+  // ── Interatell ─────────────────────────────────────────────────────────────
+  // O bloco inteiro vinha de =VLOOKUP($H$9,INTERATELL,...) e caia em #N/D. Os
+  // dados das duas empresas ja estao no codigo, entao vao como valor.
+  const itl = companyForBranch(filialES ? 'es' : 'barueri')
+  set('H9',  filialES ? 'SERRA' : 'BARUERI')
+  set('N9',  txt(itl.cnpj))
+  set('I10', txt(itl.zipCode));       set('N10', txt(itl.stateRegistration))
+  set('I11', txt(itl.city));          set('K11', txt(itl.state))
+  set('I12', txt(itl.neighborhood))
+  set('I13', txt(itl.address));       set('K13', txt(itl.number))
+  set('I14', txt(itl.complement))
+  // N11/N12 sao os dois telefones e N13/N14 contato e e-mail no modelo; sem
+  // esses dados no cadastro, ficam vazios em vez de #N/D.
+  for (const ref of ['N11', 'N12', 'N13', 'N14']) set(ref, '')
+  // AJ9 e uma celula auxiliar rotulada "FORMULA PROCV" fora da area visivel, com
+  // o mesmo VLOOKUP. Fica de fora da tela, mas guardaria um #N/D no arquivo.
+  set('AJ9', '')
 
   // ── Cliente final ──────────────────────────────────────────────────────────
   set('A16', txt(cli.name))
@@ -188,9 +232,10 @@ async function montaArquivo(values: any, group: any, entry: any): Promise<OcExce
  */
 export async function generateOcExcelFiles(values: any): Promise<OcExcelFile[]> {
   const arquivos: OcExcelFile[] = []
+  const condicoes = await mapaCondicoes()
   for (const group of (values?.supplierGroups ?? [])) {
     for (const entry of (values?.customers ?? [])) {
-      const f = await montaArquivo(values, group, entry)
+      const f = await montaArquivo(values, group, entry, condicoes)
       if (f) arquivos.push(f)
     }
   }
