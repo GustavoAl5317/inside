@@ -184,9 +184,13 @@ async function montaArquivo(values: any, group: any, entry: any, condicoes: Map<
   set('I12', txt(itl.neighborhood))
   set('I13', txt(itl.address));       set('K13', txt(itl.number))
   set('I14', txt(itl.complement))
-  // N11/N12 sao os dois telefones e N13/N14 contato e e-mail no modelo; sem
-  // esses dados no cadastro, ficam vazios em vez de #N/D.
-  for (const ref of ['N11', 'N12', 'N13', 'N14']) set(ref, '')
+  // Ordem das colunas da tabela INTERATELL do modelo: N11 contato (col 5),
+  // N12 telefone 1 (col 6), N13 telefone 2 (col 7) e N14 e-mail (col 4).
+  // Ha um unico telefone no cadastro, entao N13 fica vazio em vez de repeti-lo.
+  set('N11', txt(itl.contactName))
+  set('N12', txt(itl.phone))
+  set('N13', '')
+  set('N14', txt(itl.email))
   // AJ9 e uma celula auxiliar rotulada "FORMULA PROCV" fora da area visivel, com
   // o mesmo VLOOKUP (coluna 14, "NATUREZA"). Fica de fora da tela, mas guardaria
   // um #N/D no arquivo; recebe o valor que o modelo espera.
