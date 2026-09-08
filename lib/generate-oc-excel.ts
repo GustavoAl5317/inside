@@ -192,7 +192,10 @@ async function montaArquivo(values: any, group: any, entry: any, condicoes: Map<
   set('B19', txt(cli.neighborhood))
   set('B20', txt(cli.address));       set('D20', txt(cli.number))
   set('B21', txt(cli.complement))
-  set('B22', txt(cli.purchaseOrder) || txt(business.commercialProposal))
+  // A22 no modelo e o rotulo "P.O :"; B22 leva so a PO informada pelo cliente.
+  // Antes caia para o numero do negocio quando a PO estava vazia, e ai a
+  // planilha mostrava um numero que nao era PO nenhuma.
+  set('B22', txt(cli.purchaseOrder))
   set('G16', txt(cli.cnpj))
   set('G17', cli.isTaxpayer ? 'SIM' : 'NÃO')
   set('G18', txt(cli.stateRegistration))
