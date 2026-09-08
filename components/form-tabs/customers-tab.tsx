@@ -706,6 +706,23 @@ function CustomerCard({
         </span>
       </div>
 
+      {/* PO informada pelo cliente. Diferente do "Pedido do cliente" acima:
+          este é o dado que o cliente mandou (número da PO, e-mail de quem
+          informou etc.) e sai só na planilha da OC, no campo "Pedido do
+          cliente" do modelo. Não é enviado ao Omie. */}
+      <div className="px-4 py-2 border-b border-gray-100 bg-white flex items-center gap-2">
+        <label className="text-[11px] font-semibold uppercase shrink-0 text-gray-500">
+          PO do cliente
+        </label>
+        <Input
+          className="h-7 text-xs flex-1 max-w-md"
+          placeholder="Número da PO, e-mail que informou, etc."
+          value={customer?.purchaseOrder || ""}
+          onChange={e => form.setValue(`${basePath}.customer.purchaseOrder`, e.target.value, { shouldDirty: true })}
+        />
+        <span className="text-[11px] text-gray-400 hidden sm:inline">sai na planilha da OC</span>
+      </div>
+
       {/* Alocação de produtos por fornecedor */}
       {expanded && (
         <div className="p-4 bg-gray-50 space-y-4">

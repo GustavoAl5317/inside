@@ -101,6 +101,18 @@ async function mapaCondicoes(): Promise<Map<string, string>> {
   return mapa
 }
 
+/**
+ * Codigo do produto na coluna B da planilha — o SKU do catalogo.
+ *
+ * partnumber so entra quando nao ha SKU (produto digitado a mao). Antes a
+ * coluna saia sempre com o partnumber, que vem do NAME do catalogo Bitrix e
+ * costuma ser o texto da descricao — dai codigo e descricao aparecerem iguais.
+ * Mesma regra usada no envio ao Omie (codigoProduto em api/omie/send).
+ */
+function codigoProduto(p: any): string {
+  return txt(p?.sku) || txt(p?.partnumber)
+}
+
 /** Itens que este cliente recebe deste grupo de fornecedor. */
 function itensDoPar(group: any, customer: any) {
   const itens: any[] = []
@@ -203,8 +215,12 @@ async function montaArquivo(values: any, group: any, entry: any, condicoes: Map<
 
   itens.forEach((p, i) => {
     const l = LINHA_ITENS + i
-    set(`B${l}`, txt(p.sku) || txt(p.partnumber))
-    set(`C${l}`, txt(p.description))
+    const codigo = codigoProduto(p)
+    const descricao = txt(p.description)
+    set(`B${l}`, codigo)
+    // Sem descricao propria no catalogo, o partnumber ao menos identifica o
+    // item; repetir o codigo nas duas colunas nao acrescenta nada.
+    set(`C${l}`, descricao === codigo ? txt(p.partnumber) : descricao)
     set(`F${l}`, filialES ? 'ES' : 'SP')
     set(`G${l}`, txt(p.cfop))
     set(`H${l}`, txt(p.nature))

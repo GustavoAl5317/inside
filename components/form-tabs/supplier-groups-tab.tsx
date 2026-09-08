@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
-import { Trash2, Plus, Search, Package, ChevronDown, ChevronUp, Building2, Pencil } from "lucide-react"
+import { Trash2, Plus, Search, Package, ChevronDown, ChevronUp, Building2, Pencil, Truck } from "lucide-react"
 import { getBitrixSuppliersAction, searchBitrixProductsAction, searchProductsAction, getBitrixFamiliesFullAction } from "@/lib/actions"
 import { formatCurrency, isCNPJComplete, formatCNPJ } from "@/lib/utils"
 import { CurrencyInput } from "@/components/ui/currency-input"
@@ -813,8 +813,34 @@ function SupplierGroupCard({
 
   const supplier = form.watch(`supplierGroups.${groupIndex}.supplier`)
   const groupBranch: string = form.watch(`supplierGroups.${groupIndex}.branch`) || 'barueri'
+  const hasFreight: boolean = !!form.watch(`supplierGroups.${groupIndex}.hasFreight`)
+  const freightValue: number = form.watch(`supplierGroups.${groupIndex}.freightValue`) || 0
   const totalCusto = (form.watch(`supplierGroups.${groupIndex}.products`) || [])
     .reduce((s: number, p: any) => s + (p.totalCost || 0), 0)
+
+  /**
+   * Remove o produto do grupo e limpa as alocações que apontavam para ele.
+   *
+   * productAllocations referencia o produto pelo índice dentro do grupo. Sem
+   * reindexar aqui, o produto excluído continuava alocado no rascunho e os
+   * itens seguintes passavam a apontar para o produto errado.
+   */
+  const handleRemoveProduct = (pIdx: number) => {
+    const groupLocalId = form.getValues(`supplierGroups.${groupIndex}.localId`)
+    removeProduct(pIdx)
+    const entries = form.getValues('customers') ?? []
+    entries.forEach((entry: any, cIdx: number) => {
+      const allocs: any[] = entry?.productAllocations ?? []
+      if (!allocs.length) return
+      const next = allocs
+        .filter(a => !(a.groupLocalId === groupLocalId && a.productIndex === pIdx))
+        .map(a => (a.groupLocalId === groupLocalId && a.productIndex > pIdx
+          ? { ...a, productIndex: a.productIndex - 1 }
+          : a))
+      const mudou = next.length !== allocs.length || next.some((a, i) => a !== allocs[i])
+      if (mudou) form.setValue(`customers.${cIdx}.productAllocations`, next, { shouldDirty: true })
+    })
+  }
 
   const handleAddProduct = (p: any) => {
     appendProduct({
@@ -866,6 +892,44 @@ function SupplierGroupCard({
                   </SelectContent>
                 </Select>
               </div>
+
+              {/* Frete da compra — vai para o Omie em frete_upsert.nValFrete
+                  do Pedido de Compra deste fornecedor. */}
+              <div className="flex items-center gap-1.5 mt-1">
+                {!hasFreight ? (
+                  <Button
+                    type="button" size="sm" variant="outline"
+                    className="h-6 text-[11px] px-2 border-dashed bg-white"
+                    onClick={() => {
+                      form.setValue(`supplierGroups.${groupIndex}.hasFreight`, true, { shouldDirty: true })
+                      form.setValue(`supplierGroups.${groupIndex}.freightValue`, 0, { shouldDirty: true })
+                    }}
+                  >
+                    <Truck className="w-3 h-3 mr-1" /> Adicionar Frete?
+                  </Button>
+                ) : (
+                  <>
+                    <span className="text-[10px] font-semibold uppercase text-blue-700/70 shrink-0">Valor do frete</span>
+                    <CurrencyInput
+                      className="h-6 text-[11px] w-[130px] bg-white"
+                      resetKey={`frete:${groupIndex}:${freightValue}`}
+                      value={freightValue}
+                      onChange={v => form.setValue(`supplierGroups.${groupIndex}.freightValue`, v, { shouldDirty: true })}
+                    />
+                    <Button
+                      type="button" size="sm" variant="ghost"
+                      className="h-6 px-1.5 text-[11px] text-gray-400 hover:text-red-600"
+                      title="Remover frete"
+                      onClick={() => {
+                        form.setValue(`supplierGroups.${groupIndex}.hasFreight`, false, { shouldDirty: true })
+                        form.setValue(`supplierGroups.${groupIndex}.freightValue`, 0, { shouldDirty: true })
+                      }}
+                    >
+                      remover
+                    </Button>
+                  </>
+                )}
+              </div>
             </div>
             <p className="text-xs text-blue-600">{supplier?.cnpj} — {productFields.length} produto(s) · Custo total: {formatCurrency(totalCusto)}</p>
           </div>
@@ -916,7 +980,7 @@ function SupplierGroupCard({
                   groupIndex={groupIndex}
                   productIndex={pIdx}
                   form={form}
-                  onRemove={() => removeProduct(pIdx)}
+                  onRemove={() => handleRemoveProduct(pIdx)}
                   families={families}
                 />
               ))}
@@ -966,6 +1030,23 @@ export function SupplierGroupsTab({ form }: SupplierGroupsTabProps) {
     name: "supplierGroups",
   })
 
+  /**
+   * Remove o grupo e as alocações dos clientes que vinham dele — senão o
+   * fornecedor excluído continuava alocado no rascunho.
+   */
+  const handleRemoveGroup = (gIdx: number) => {
+    const groupLocalId = form.getValues(`supplierGroups.${gIdx}.localId`)
+    removeGroup(gIdx)
+    const entries = form.getValues('customers') ?? []
+    entries.forEach((entry: any, cIdx: number) => {
+      const allocs: any[] = entry?.productAllocations ?? []
+      const next = allocs.filter(a => a.groupLocalId !== groupLocalId)
+      if (next.length !== allocs.length) {
+        form.setValue(`customers.${cIdx}.productAllocations`, next, { shouldDirty: true })
+      }
+    })
+  }
+
   const handleEditSupplier = (company: any) => {
     if (editingSupplierIdx === null) return
     const current = form.getValues(`supplierGroups.${editingSupplierIdx}`)
@@ -995,6 +1076,8 @@ export function SupplierGroupsTab({ form }: SupplierGroupsTabProps) {
     appendGroup({
       localId:  crypto.randomUUID(),
       branch:   company.branch || 'barueri',
+      hasFreight:   false,
+      freightValue: 0,
       supplier: {
         cnpj:             company.cnpj,
         name:             company.name,
@@ -1046,7 +1129,7 @@ export function SupplierGroupsTab({ form }: SupplierGroupsTabProps) {
             key={gIdx}
             groupIndex={gIdx}
             form={form}
-            onRemoveGroup={() => removeGroup(gIdx)}
+            onRemoveGroup={() => handleRemoveGroup(gIdx)}
             onEditSupplier={() => setEditingSupplierIdx(gIdx)}
             families={families}
           />

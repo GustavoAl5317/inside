@@ -85,6 +85,10 @@ const productSchema = z.object({
 const supplierGroupSchema = z.object({
   localId:  z.string(),
   branch:   z.enum(['barueri', 'es']).default('barueri'),
+  // Frete da compra, ligado pelo botão "Adicionar Frete?" no card do fornecedor.
+  // Vai para o Omie em frete_upsert.nValFrete do Pedido de Compra.
+  hasFreight:   z.boolean().default(false),
+  freightValue: z.number().min(0).default(0),
   supplier: companySchema,
   products: z.array(productSchema),
 })
@@ -164,6 +168,25 @@ const formSchema = z.object({
 type FormValues = z.infer<typeof formSchema>
 // Tipo de entrada do schema (campos com .default() são opcionais antes do parse)
 type FormInput = z.input<typeof formSchema>
+
+/**
+ * Descarta alocações que apontam para produto ou fornecedor que não existe mais.
+ *
+ * A exclusão na aba de fornecedores já reindexa as alocações, mas rascunhos
+ * gravados antes disso ficaram com referências órfãs — e como a alocação aponta
+ * o produto por índice, uma órfã acaba resolvendo para o produto errado no
+ * envio ao Omie. A limpeza roda a cada gravação.
+ */
+function pruneAllocations(values: any) {
+  const groups: any[] = values?.supplierGroups ?? []
+  for (const entry of (values?.customers ?? [])) {
+    const allocs: any[] = entry?.productAllocations ?? []
+    entry.productAllocations = allocs.filter(a => {
+      const g = groups.find(x => x?.localId === a?.groupLocalId)
+      return !!g?.products?.[a?.productIndex]
+    })
+  }
+}
 
 /** Filiais efetivamente usadas, a partir do "Faturamento via" de cada fornecedor. */
 function deriveBranches(groups: any[] | undefined): ('barueri' | 'es')[] {
@@ -529,6 +552,7 @@ export function MultiStepForm({
       // negocio vira derivado e e gravado no proprio values porque saveDraftAction
       // recebe values (nao o payload) e PDF, diff e historico leem esse campo.
       values.interatellBranches = deriveBranches(values.supplierGroups)
+      pruneAllocations(values)
       const payload = {
         bitrixDealId:       values.bitrixDealId || null,
         business:           values.business,

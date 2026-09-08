@@ -254,8 +254,11 @@ async function omieCall(interatellCnpj: string, url: string, call: string, param
     // Passos de verificação (check*) retornam 500 com "não cadastrado" quando o pedido
     // simplesmente ainda não existe — isso é esperado e não é um erro de fato.
     const isCheckStep = step.startsWith('check')
+    // "Não existem registros" é a resposta do ListarClientes quando o CNPJ ainda
+    // não está no Omie — o cadastro é criado logo em seguida. Sem esta linha o
+    // passo aparecia vermelho na tela de processamento, como se fosse falha.
     const isNotFound = typeof data?.faultstring === 'string' &&
-      /não cadastrado|nao cadastrado|not found/i.test(data.faultstring)
+      /não cadastrado|nao cadastrado|not found|n[ãa]o existem registros/i.test(data.faultstring)
     const level: 'success' | 'info' | 'error' =
       httpStatus >= 200 && httpStatus < 300 ? 'success'
       : (isCheckStep && isNotFound) ? 'info'
@@ -308,6 +311,25 @@ function isOmieRateLimitFault(faultstring: unknown): boolean {
     || s.includes('BLOQUEADA')
 }
 
+/**
+ * Avisa que um cadastro não existe no Omie e está sendo criado agora.
+ *
+ * Sai como log 'warning' no passo de verificação, e é isso que a tela de
+ * processamento pinta de amarelo — sem ele o operador não tinha como saber
+ * que o fornecedor/cliente foi cadastrado na hora e precisa de conferência.
+ */
+async function avisaCadastroNovo(
+  dealId: number, step: 'checkFornecedor' | 'checkCliente',
+  tipo: 'Fornecedor' | 'Cliente', nome: string, cnpj: string, interatellCnpj: string,
+) {
+  const empresa = digits(interatellCnpj) === digits(CNPJ_ES) ? 'Interatell ES' : 'Interatell Barueri'
+  await addOmieRawLog({
+    transactionId: dealId, step, level: 'warning', runId: ctx().runId,
+    message: `${tipo} "${nome || cnpj}" não existe na ${empresa} — sendo criado no Omie agora.`,
+    raw: { endpoint: OMIE_URL.CLIENTES, httpStatus: 200, requestBodyRaw: '', responseBodyRaw: '' },
+  }).catch(() => {})
+}
+
 async function ensureCliente(interatellCnpj: string, company: any, dealId: number): Promise<number> {
   const cnpj = digits(company?.cnpj ?? '')
   const key  = `${digits(interatellCnpj)}:${cnpj}`
@@ -326,6 +348,7 @@ async function ensureCliente(interatellCnpj: string, company: any, dealId: numbe
   if (check?.clientes_cadastro?.length) {
     codigo = check.clientes_cadastro[0].codigo_cliente_omie
   } else {
+    await avisaCadastroNovo(dealId, 'checkCliente', 'Cliente', company?.name, cnpj, interatellCnpj)
     const created = await omieCall(interatellCnpj, OMIE_URL.CLIENTES, 'IncluirCliente', {
       // Obrigatório no IncluirCliente; o CNPJ garante um código estável e único.
       codigo_cliente_integracao: `CLI-${cnpj}`,
@@ -368,6 +391,7 @@ async function ensureFornecedor(interatellCnpj: string, supplier: any, dealId: n
   if (check?.clientes_cadastro?.length) {
     codigo = check.clientes_cadastro[0].codigo_cliente_omie
   } else {
+    await avisaCadastroNovo(dealId, 'checkFornecedor', 'Fornecedor', supplier?.name, cnpj, interatellCnpj)
     const created = await omieCall(interatellCnpj, OMIE_URL.CLIENTES, 'IncluirCliente', {
       // Obrigatório no IncluirCliente; o CNPJ garante um código estável e único.
       codigo_cliente_integracao: `FORN-${cnpj}`,
@@ -390,9 +414,23 @@ async function ensureFornecedor(interatellCnpj: string, supplier: any, dealId: n
   return codigo
 }
 
+/**
+ * Código do produto no Omie: o SKU do catálogo.
+ *
+ * partnumber entra só como alternativa — é o que existe quando o produto foi
+ * digitado à mão, sem SKU. Antes o partnumber era sempre o código, e como ele
+ * vem do NAME do catálogo Bitrix (que costuma ser a descrição inteira), o
+ * pedido saía com código e descrição repetindo o mesmo texto.
+ */
+function codigoProduto(item: any): string {
+  return String(item?.sku ?? '').trim() || String(item?.partnumber ?? '').trim()
+}
+
 async function ensureProduto(interatellCnpj: string, item: any, dealId: number): Promise<number | undefined> {
   if (normalizeNatureza(item.nature) === 'SRV') return undefined
-  const sku = String(item.partnumber ?? '')
+  const sku = codigoProduto(item)
+  if (!sku) return undefined
+  const partnumber = String(item.partnumber ?? '').trim()
   const key = `${digits(interatellCnpj)}:${sku}`
   const cache = ctx().produtoCache
   if (cache.has(key)) return cache.get(key)
@@ -401,14 +439,23 @@ async function ensureProduto(interatellCnpj: string, item: any, dealId: number):
   if (check?.faultstring && isOmieRateLimitFault(check.faultstring)) {
     throw new Error(`Omie temporariamente bloqueado por excesso de chamadas — aguarde alguns minutos e reenvie. (${check.faultstring})`)
   }
-  let cod: number | undefined
-  if (check?.codigo_produto) {
-    cod = check.codigo_produto
-  } else {
+  let cod: number | undefined = check?.codigo_produto
+
+  // Produtos cadastrados antes de o código passar a ser o SKU estão no Omie com
+  // o partnumber como código. Reaproveita esse cadastro em vez de duplicar.
+  if (!cod && partnumber && partnumber !== sku) {
+    const legado = await omieCall(interatellCnpj, OMIE_URL.PRODUTOS, 'ConsultarProduto', { codigo: partnumber }, dealId, 'checkProduto')
+    if (legado?.faultstring && isOmieRateLimitFault(legado.faultstring)) {
+      throw new Error(`Omie temporariamente bloqueado por excesso de chamadas — aguarde alguns minutos e reenvie. (${legado.faultstring})`)
+    }
+    if (legado?.codigo_produto) cod = legado.codigo_produto
+  }
+
+  if (!cod) {
     // Garante NCM: usa o do deal; se vazio, busca no banco local pelo partnumber
     let ncm = normalizeNCM(item.ncm)
     if (!ncm || ncm.length < 8) {
-      const [local] = await sql`SELECT ncm, cfop, family FROM products WHERE partnumber = ${sku} LIMIT 1`
+      const [local] = await sql`SELECT ncm, cfop, family FROM products WHERE partnumber = ${partnumber || sku} LIMIT 1`
       if (local?.ncm) ncm = normalizeNCM(local.ncm)
       if (!item.cfop && local?.cfop) item.cfop = local.cfop
       if (!item.family && local?.family) item.family = local.family
@@ -551,7 +598,7 @@ async function upsertOC(
   interatellCnpj: string, codDistribuidor: number, items: any[], business: any,
   obs: { externa: string; interna: string },
   dealId: number, groupIdx: number, opts: { isUpdate: boolean; retryCount: number },
-  codParc: string,
+  codParc: string, valorFrete: number,
 ) {
   const ocItems = items.filter(i => normalizeNatureza(i.nature) !== 'SRV')
   if (!ocItems.length || !codDistribuidor) return null
@@ -562,7 +609,7 @@ async function upsertOC(
     cCodIntItem: String(i + 1),
     ...(e.codigoProdutoOmie
       ? { nCodProd: e.codigoProdutoOmie }
-      : { cCodIntProd: String(e.partnumber ?? '') }),
+      : { cCodIntProd: codigoProduto(e) }),
     cDescricao: e.description,
     cNCM: normalizeNatureza(e.nature) === 'HW' ? normalizeNCM(e.ncm) : '00000000',
     cUnidade: 'UN', nQtde: Number(e.quantity ?? 1),
@@ -583,6 +630,9 @@ async function upsertOC(
       cObs: obs.externa,
       cObsInt: obs.interna,
     },
+    // "Adicionar Frete?" no card do fornecedor. Só vai quando tem valor: mandar
+    // frete_upsert zerado sobrescreveria um frete lançado à mão no Omie.
+    ...(valorFrete > 0 ? { frete_upsert: { nValFrete: valorFrete } } : {}),
     produtos_upsert: produtosUpsert,
   }, dealId, 'createOCResult')
 
@@ -630,7 +680,7 @@ async function upsertOV(
       produto: {
         ...(e.codigoProdutoOmie
           ? { codigo_produto: e.codigoProdutoOmie }
-          : { codigo_produto_integracao: String(e.partnumber ?? '') }),
+          : { codigo_produto_integracao: codigoProduto(e) }),
         cfop: e.cfop ?? '', ncm: normalizeNCM(e.ncm), descricao: e.description,
         quantidade: Number(e.quantity ?? 1), unidade: 'UN',
         valor_unitario: Number(e.unitSale ?? 0), tipo_desconto: 'V', valor_desconto: 0,
@@ -913,7 +963,8 @@ async function processDeal(body: any, dealId: number) {
       const branchCnpj = getBranchCnpj(group.branch, fallbackCnpj)
       const codDistribuidor = ctx().fornecedorCache.get(`${branchCnpj}:${digits(group.supplier?.cnpj)}`)
       if (!codDistribuidor) continue
-      const res = await upsertOC(branchCnpj, codDistribuidor, group.products ?? [], business, obs, dealId, gIdx, upsertOpts, purchaseCodParc)
+      const valorFrete = group.hasFreight ? Number(group.freightValue ?? 0) : 0
+      const res = await upsertOC(branchCnpj, codDistribuidor, group.products ?? [], business, obs, dealId, gIdx, upsertOpts, purchaseCodParc, valorFrete)
       if (res) ocResults.push({ ...res, _supplier: group.supplier?.name })
     }
 

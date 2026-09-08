@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Input } from '@/components/ui/input';
-import { Loader2, CheckCircle, XCircle, Download, RefreshCw, Eye, List, Search, ChevronDown, ChevronRight, Wrench, Trash2 } from 'lucide-react';
+import { Loader2, CheckCircle, XCircle, AlertTriangle, Download, RefreshCw, Eye, List, Search, ChevronDown, ChevronRight, Wrench, Trash2 } from 'lucide-react';
 import { getDealPayloadAction, updateDealPayloadAndStatusAction, clearTransactionLogsAction } from '@/lib/actions';
 import type { PayloadChange } from '@/lib/deal-payload-diff';
 
@@ -237,6 +237,8 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
   const [completedSteps, setCompletedSteps] = useState<Set<StepKey>>(new Set());
   const [failedSteps, setFailedSteps] = useState<Set<StepKey>>(new Set());
   const [touchedSteps, setTouchedSteps] = useState<Set<StepKey>>(new Set());
+  // Passos que concluiram com aviso — hoje: cadastro que nao existia no Omie.
+  const [warnedSteps, setWarnedSteps] = useState<Set<StepKey>>(new Set());
   const [isComplete, setIsComplete] = useState(false);
   const [hasError, setHasError] = useState(false);
   // Falha terminal: a execucao acabou em erro. Diferente de hasError, que fica
@@ -484,6 +486,7 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
       setCompletedSteps(new Set());
       setFailedSteps(new Set());
       setTouchedSteps(new Set());
+      setWarnedSteps(new Set());
       return;
     }
 
@@ -496,6 +499,7 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
     const touched = new Set<StepKey>();
     const lastLevelByStep = new Map<StepKey, Level>();
     const failed = new Set<StepKey>();
+    const warned = new Set<StepKey>();
     const stepLogs = new Map<StepKey, OmieLog[]>();
 
     // Inicializar mapa de logs por step
@@ -527,6 +531,9 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
       // Marcar como falha se houver erro
       if (log.level === 'error') {
         failed.add(t);
+      }
+      if (log.level === 'warning') {
+        warned.add(t);
       }
     }
 
@@ -588,10 +595,13 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
     setCompletedSteps(completed);
     setFailedSteps(failed);
     setTouchedSteps(touched);
+    setWarnedSteps(warned);
   };
 
   const getStepStatus = (stepKey: StepKey) => {
     if (failedSteps.has(stepKey)) return 'error';
+    // Passou, mas com aviso — o cadastro nao existia e foi criado no Omie.
+    if (warnedSteps.has(stepKey) && completedSteps.has(stepKey)) return 'warning';
     if (completedSteps.has(stepKey)) return 'completed';
     if (currentStep === stepKey) return 'current';
     if (touchedSteps.has(stepKey)) return 'touched'; // Novo status para steps que foram tocados mas não completados
@@ -607,6 +617,8 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
         return <CheckCircle className="w-4 h-4 text-green-500" />;
       case 'error':
         return <XCircle className="w-4 h-4 text-red-500" />;
+      case 'warning':
+        return <AlertTriangle className="w-4 h-4 text-yellow-600" />;
       case 'touched':
         return <div className="w-4 h-4 rounded-full bg-yellow-400" />; // Amarelo para tocado mas não completo
       default:
@@ -623,6 +635,8 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
         return 'border-green-500 bg-green-50';
       case 'error':
         return 'border-red-500 bg-red-50';
+      case 'warning':
+        return 'border-yellow-400 bg-yellow-50';
       case 'touched':
         return 'border-yellow-500 bg-yellow-50';
       default:
@@ -639,6 +653,8 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
         return 'Concluído';
       case 'error':
         return 'Erro';
+      case 'warning':
+        return 'Não existia — criado no Omie';
       case 'touched':
         return 'Em andamento';
       default:
@@ -668,6 +684,20 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
+
+  /**
+   * Cadastros que não existiam no Omie e foram criados durante o envio.
+   *
+   * O servidor marca esses casos com level 'warning' nos passos de verificação;
+   * aqui eles viram um aviso amarelo, porque um fornecedor ou cliente criado na
+   * hora entra com o mínimo de dados e precisa ser conferido no Omie depois.
+   */
+  const cadastrosNovos = useMemo(() => {
+    const vistos = new Set<string>();
+    return rawLogs
+      .filter(l => l.level === 'warning' && (l.type === 'checkFornecedor' || l.type === 'checkCliente'))
+      .filter(l => (vistos.has(l.message) ? false : (vistos.add(l.message), true)));
+  }, [rawLogs]);
 
   const filteredLogs = useMemo(() => {
     let arr = selectedLogType === 'all'
@@ -733,6 +763,7 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
     setCompletedSteps(new Set());
     setFailedSteps(new Set());
     setTouchedSteps(new Set());
+    setWarnedSteps(new Set());
     setShowFixPanel(false);
     setRetryError(null);
     setResumo(null);
@@ -904,6 +935,29 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
                       </motion.div>
                     ))}
                   </div>
+
+                  {cadastrosNovos.length > 0 && (
+                    <div className="rounded-lg border-2 border-yellow-300 bg-yellow-50 p-3">
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <span className="text-lg">⚠️</span>
+                        <h3 className="text-sm font-bold text-yellow-800">
+                          Cadastro novo no Omie ({cadastrosNovos.length})
+                        </h3>
+                      </div>
+                      <ul className="space-y-1">
+                        {cadastrosNovos.map(l => (
+                          <li key={l.id} className="text-xs text-yellow-900 flex items-start gap-1.5">
+                            <span className="text-yellow-500 mt-0.5">•</span>
+                            <span>{l.message}</span>
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="text-[11px] text-yellow-700 mt-2">
+                        Cadastros criados pelo envio entram com os dados do formulário. Confira no
+                        Omie antes de faturar.
+                      </p>
+                    </div>
+                  )}
 
                   <AnimatePresence>
                     {isComplete && (
