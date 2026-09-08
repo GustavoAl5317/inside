@@ -2,6 +2,7 @@ import 'server-only'
 import path from 'node:path'
 import ExcelJS from 'exceljs'
 import { companyForBranch } from './interatell-companies'
+import { formatCNPJ } from './utils'
 import { BitrixService } from './bitrix-service'
 
 /**
@@ -171,8 +172,13 @@ async function montaArquivo(values: any, group: any, entry: any, condicoes: Map<
   // O bloco inteiro vinha de =VLOOKUP($H$9,INTERATELL,...) e caia em #N/D. Os
   // dados das duas empresas ja estao no codigo, entao vao como valor.
   const itl = companyForBranch(filialES ? 'es' : 'barueri')
-  set('H9',  filialES ? 'SERRA' : 'BARUERI')
-  set('N9',  txt(itl.cnpj))
+  // H9 e a celula da razao social — no modelo ela vinha com
+  // "INTERATELL INTEGRACOES E TELECOMUNICACOES LTDA- ES". Estava saindo
+  // "BARUERI"/"SERRA", que e a coluna NATUREZA da tabela auxiliar e mora em AJ9.
+  set('H9',  txt(itl.name))
+  // O CNPJ fica sem mascara no cadastro porque multi-step-form compara por
+  // digitos; a mascara e so na planilha, para casar com o bloco do fornecedor.
+  set('N9',  formatCNPJ(txt(itl.cnpj)))
   set('I10', txt(itl.zipCode));       set('N10', txt(itl.stateRegistration))
   set('I11', txt(itl.city));          set('K11', txt(itl.state))
   set('I12', txt(itl.neighborhood))
@@ -182,8 +188,9 @@ async function montaArquivo(values: any, group: any, entry: any, condicoes: Map<
   // esses dados no cadastro, ficam vazios em vez de #N/D.
   for (const ref of ['N11', 'N12', 'N13', 'N14']) set(ref, '')
   // AJ9 e uma celula auxiliar rotulada "FORMULA PROCV" fora da area visivel, com
-  // o mesmo VLOOKUP. Fica de fora da tela, mas guardaria um #N/D no arquivo.
-  set('AJ9', '')
+  // o mesmo VLOOKUP (coluna 14, "NATUREZA"). Fica de fora da tela, mas guardaria
+  // um #N/D no arquivo; recebe o valor que o modelo espera.
+  set('AJ9', filialES ? 'SERRA' : 'BARUERI')
 
   // ── Cliente final ──────────────────────────────────────────────────────────
   set('A16', txt(cli.name))
