@@ -767,7 +767,6 @@ export class BitrixService {
     ncm:        'PROPERTY_175',
     cfop:       'PROPERTY_317',
     sku:        'PROPERTY_503',
-    skuLegacy:  'PROPERTY_319',  // "SKU_old" — ainda é onde o dado real está
     tipo:       'PROPERTY_321',  // lista: Hardware | Software | Licença | Serviço Interatell | Serviços de Terceiros
     origem:     'PROPERTY_323',  // lista: Nacional | Importado
     fornecedor: 'PROPERTY_327',  // lista de fornecedores
@@ -814,6 +813,28 @@ export class BitrixService {
     return String(raw).trim()
   }
 
+  /**
+   * Part number e descrição de um produto do catálogo.
+   *
+   * O padrão do catálogo é NAME = part number e DESCRIPTION = descrição, cada um
+   * na sua variável. Os cadastros antigos, porém, guardam "PN / Descrição" junto
+   * no NAME e deixam o DESCRIPTION vazio — nesses o texto é separado aqui, senão
+   * o part number sai com a descrição colada dentro dele e o produto chega ao
+   * Omie com o texto repetido.
+   */
+  private static splitCatalogName(name: string, description: string): { partnumber: string; description: string } {
+    const nome = String(name || '').trim()
+    const desc = String(description || '').trim()
+    if (desc) return { partnumber: nome, description: desc }
+
+    const sep = nome.indexOf(' / ')
+    if (sep > 0) {
+      return { partnumber: nome.slice(0, sep).trim(), description: nome.slice(sep + 3).trim() }
+    }
+    // Sem descrição em lugar nenhum, o part number responde pelos dois campos.
+    return { partnumber: nome, description: nome }
+  }
+
   /** DESCRIPTION vem com HTML do editor do Bitrix. */
   private static stripHtml(html: string): string {
     return html
@@ -856,7 +877,7 @@ export class BitrixService {
     const P = BitrixService.PRODUCT_PROPS
     const select = [
       'ID', 'NAME', 'CODE', 'XML_ID', 'DESCRIPTION', 'ACTIVE',
-      P.ncm, P.cfop, P.sku, P.skuLegacy, P.tipo, P.origem, P.fornecedor,
+      P.ncm, P.cfop, P.sku, P.tipo, P.origem, P.fornecedor,
     ]
 
     // So campos nativos podem ser filtrados aqui: crm.product.list IGNORA filtro
@@ -895,7 +916,7 @@ export class BitrixService {
           .catch(() => ({ result: [] as any[] }))
         for (const p of (Array.isArray(todos?.result) ? todos.result : [])) {
           if (p?.ID == null || byId.has(String(p.ID))) continue
-          const sku = `${BitrixService.propValue(p[P.sku])}${BitrixService.propValue(p[P.skuLegacy])}`
+          const sku = BitrixService.propValue(p[P.sku])
             .toUpperCase().replace(/[^A-Z0-9]/g, '')
           if (sku && sku.includes(alvo)) byId.set(String(p.ID), p)
         }
@@ -909,15 +930,17 @@ export class BitrixService {
 
       return Array.from(byId.values()).map((p: any) => {
         const tipoLabel = labelOf(P.tipo, p[P.tipo])
-        const sku = BitrixService.propValue(p[P.sku]) || BitrixService.propValue(p[P.skuLegacy])
-        const descricao = BitrixService.stripHtml(String(p.DESCRIPTION || ''))
+        const sku = BitrixService.propValue(p[P.sku])
+        // NAME é o part number no catálogo (ex.: "C9200L-48T-4X-E") e DESCRIPTION
+        // a descrição; CODE é só o slug gerado pelo Bitrix ("c9200l_48t_4x_e__1").
+        const { partnumber, description } = BitrixService.splitCatalogName(
+          String(p.NAME || ''), BitrixService.stripHtml(String(p.DESCRIPTION || '')),
+        )
 
         return {
           id: Number(p.ID),
-          // NAME é o part number no catálogo (ex.: "C9200L-48T-4X-E");
-          // CODE é o slug gerado pelo Bitrix (ex.: "c9200l_48t_4x_e__1").
-          partnumber: String(p.NAME || '').trim(),
-          description: descricao || String(p.NAME || '').trim(),
+          partnumber,
+          description,
           code: String(p.CODE || '').trim() || undefined,
           sku: sku || undefined,
           ncm: BitrixService.propValue(p[P.ncm]) || undefined,
@@ -941,7 +964,7 @@ export class BitrixService {
     id: number; partnumber: string; description: string; sku?: string; ncm?: string
   }>> {
     const P = BitrixService.PRODUCT_PROPS
-    const select = ['ID', 'NAME', 'DESCRIPTION', P.ncm, P.sku, P.skuLegacy]
+    const select = ['ID', 'NAME', 'DESCRIPTION', P.ncm, P.sku]
     const out: Array<{ id: number; partnumber: string; description: string; sku?: string; ncm?: string }> = []
     let start = 0
     try {
@@ -951,9 +974,10 @@ export class BitrixService {
         for (const p of page) {
           out.push({
             id: Number(p.ID),
-            partnumber: String(p.NAME || '').trim(),
-            description: BitrixService.stripHtml(String(p.DESCRIPTION || '')) || String(p.NAME || '').trim(),
-            sku: BitrixService.propValue(p[P.sku]) || BitrixService.propValue(p[P.skuLegacy]) || undefined,
+            ...BitrixService.splitCatalogName(
+              String(p.NAME || ''), BitrixService.stripHtml(String(p.DESCRIPTION || '')),
+            ),
+            sku: BitrixService.propValue(p[P.sku]) || undefined,
             ncm: BitrixService.propValue(p[P.ncm]) || undefined,
           })
         }

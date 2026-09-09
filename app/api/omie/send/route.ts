@@ -14,6 +14,7 @@ import { type NextRequest, NextResponse } from 'next/server'
 import { sql } from '@/lib/db'
 import { addOmieRawLog } from '@/lib/unified-log-service'
 import { BitrixService } from '@/lib/bitrix-service'
+import { descricaoOmie } from '@/lib/omie-descricao'
 import {
   paymentConditionMatches,
   resolveDefaultOmiePaymentCode,
@@ -426,6 +427,17 @@ function codigoProduto(item: any): string {
   return String(item?.sku ?? '').trim() || String(item?.partnumber ?? '').trim()
 }
 
+/**
+ * Descrição do produto no Omie: "Part Number / Descrição", em 120 caracteres.
+ *
+ * Vale para o cadastro do produto e para as linhas do Pedido de Compra e do
+ * Pedido de Venda — os três precisam bater, senão o Omie mostra um texto no
+ * cadastro e outro no pedido.
+ */
+function descricaoProduto(item: any): string {
+  return descricaoOmie(item?.partnumber, item?.description)
+}
+
 async function ensureProduto(interatellCnpj: string, item: any, dealId: number): Promise<number | undefined> {
   if (normalizeNatureza(item.nature) === 'SRV') return undefined
   const sku = codigoProduto(item)
@@ -462,7 +474,7 @@ async function ensureProduto(interatellCnpj: string, item: any, dealId: number):
     }
 
     const created = await omieCall(interatellCnpj, OMIE_URL.PRODUTOS, 'IncluirProduto', {
-      codigo: sku, descricao: item.description, unidade: 'UN',
+      codigo: sku, descricao: descricaoProduto(item), unidade: 'UN',
       ncm, cfop: item.cfop ?? '',
       codigo_produto_integracao: sku,
       codigo_familia: item.family || '',
@@ -610,7 +622,7 @@ async function upsertOC(
     ...(e.codigoProdutoOmie
       ? { nCodProd: e.codigoProdutoOmie }
       : { cCodIntProd: codigoProduto(e) }),
-    cDescricao: e.description,
+    cDescricao: descricaoProduto(e),
     cNCM: normalizeNatureza(e.nature) === 'HW' ? normalizeNCM(e.ncm) : '00000000',
     cUnidade: 'UN', nQtde: Number(e.quantity ?? 1),
     nValUnit: Number(e.unitCost ?? 0), nPesoLiq: 0, nPesoBruto: 0,
@@ -681,7 +693,7 @@ async function upsertOV(
         ...(e.codigoProdutoOmie
           ? { codigo_produto: e.codigoProdutoOmie }
           : { codigo_produto_integracao: codigoProduto(e) }),
-        cfop: e.cfop ?? '', ncm: normalizeNCM(e.ncm), descricao: e.description,
+        cfop: e.cfop ?? '', ncm: normalizeNCM(e.ncm), descricao: descricaoProduto(e),
         quantidade: Number(e.quantity ?? 1), unidade: 'UN',
         valor_unitario: Number(e.unitSale ?? 0), tipo_desconto: 'V', valor_desconto: 0,
       },

@@ -65,7 +65,7 @@ const companySchema = z.object({
 
 const productSchema = z.object({
   id:          z.number(),
-  // SKU do catalogo (PROPERTY_503/319 no Bitrix). E o identificador principal
+  // SKU do catalogo (PROPERTY_503 no Bitrix). E o identificador principal
   // exibido; partnumber e description continuam como estao.
   sku:         z.string().optional(),
   partnumber:  z.string(),

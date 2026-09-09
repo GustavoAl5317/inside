@@ -403,10 +403,13 @@ function ProductDialog({
   const handleAddManual = () => {
     if (!manual.partnumber.trim()) { setManualError("Código é obrigatório"); return }
     if (!manual.description.trim()) { setManualError("Descrição é obrigatória"); return }
+    // Os nomes têm que ser os mesmos que o catálogo devolve — o handler lê
+    // partnumber/description, e com code/name o produto entrava sem código e
+    // sem descrição.
     onAdd({
       id: Date.now(),
-      code: manual.partnumber.trim(),
-      name: manual.description.trim(),
+      partnumber: manual.partnumber.trim(),
+      description: manual.description.trim(),
       nature: manual.nature,
       ncm: manual.ncm.trim(),
       cfop: manual.cfop.trim(),
