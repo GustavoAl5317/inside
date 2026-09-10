@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect } from "react"
 import { useFieldArray, type UseFormReturn } from "react-hook-form"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -316,7 +316,7 @@ function SupplierDialog({
 
 const NATURES = ["HW", "SW", "LC", "ST", "SRV"]
 
-// ── Diálogo: buscar produto (catálogo Bitrix24 ou manual) ─────────────────────
+// ── Diálogo: buscar produto no catálogo Bitrix24 ─────────────────────────────
 function ProductDialog({
   open,
   onClose,
@@ -326,27 +326,10 @@ function ProductDialog({
   onClose: () => void
   onAdd: (product: any) => void
 }) {
-  const [mode, setMode] = useState<"catalog" | "manual">("catalog")
-
-  // ── aba catálogo ──
   const [query, setQuery]     = useState("")
   const [results, setResults] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [catalogError, setCatalogError] = useState("")
-
-  // ── aba manual ──
-  const [manual, setManual] = useState({
-    partnumber: "", description: "", nature: "HW", ncm: "", cfop: "",
-  })
-  const [manualError, setManualError] = useState("")
-  const partnumberRef = useRef<HTMLInputElement>(null)
-
-  // Foca o campo partnumber ao entrar no modo manual
-  useEffect(() => {
-    if (mode === "manual") {
-      setTimeout(() => partnumberRef.current?.focus(), 50)
-    }
-  }, [mode])
 
   const handleSearch = async () => {
     if (!query.trim()) return
@@ -400,30 +383,8 @@ function ProductDialog({
     onClose()
   }
 
-  const handleAddManual = () => {
-    if (!manual.partnumber.trim()) { setManualError("Código é obrigatório"); return }
-    if (!manual.description.trim()) { setManualError("Descrição é obrigatória"); return }
-    // Os nomes têm que ser os mesmos que o catálogo devolve — o handler lê
-    // partnumber/description, e com code/name o produto entrava sem código e
-    // sem descrição.
-    onAdd({
-      id: Date.now(),
-      partnumber: manual.partnumber.trim(),
-      description: manual.description.trim(),
-      nature: manual.nature,
-      ncm: manual.ncm.trim(),
-      cfop: manual.cfop.trim(),
-    })
-    setManual({ partnumber: "", description: "", nature: "HW", ncm: "", cfop: "" })
-    setManualError("")
-    onClose()
-  }
-
   const reset = () => {
     setQuery(""); setResults([]); setCatalogError("")
-    setManual({ partnumber: "", description: "", nature: "HW", ncm: "", cfop: "" })
-    setManualError("")
-    setMode("catalog")
   }
 
   return (
@@ -437,33 +398,8 @@ function ProductDialog({
         </DialogHeader>
 
         <div className="space-y-4 pt-1">
-          {/* Seletor de modo */}
-          <div className="flex gap-2">
-            <button
-              onClick={() => setMode("catalog")}
-              className={`px-3 py-1.5 text-sm rounded border transition-colors ${
-                mode === "catalog"
-                  ? "bg-blue-600 text-white border-blue-600"
-                  : "text-gray-600 border-gray-300 hover:bg-gray-50"
-              }`}
-            >
-              📦 Catálogo Bitrix24
-            </button>
-            <button
-              onClick={() => setMode("manual")}
-              className={`px-3 py-1.5 text-sm rounded border transition-colors ${
-                mode === "manual"
-                  ? "bg-blue-600 text-white border-blue-600"
-                  : "text-gray-600 border-gray-300 hover:bg-gray-50"
-              }`}
-            >
-              ✏️ Entrada Manual
-            </button>
-          </div>
-
           {/* ── Catálogo ── */}
-          {mode === "catalog" && (
-            <>
+          <>
               <div className="flex gap-2">
                 <Input
                   placeholder="Código, partnumber ou nome do produto"
@@ -511,84 +447,6 @@ function ProductDialog({
                 )}
               </div>
             </>
-          )}
-
-          {/* ── Manual ── */}
-          {mode === "manual" && (
-            <div className="space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-medium text-gray-700">Código / Partnumber *</label>
-                  <Input
-                    ref={partnumberRef}
-                    className="mt-1"
-                    placeholder="ex: ABC-12345"
-                    value={manual.partnumber}
-                    onKeyDown={e => e.stopPropagation()}
-                    onChange={e => { setManual(m => ({ ...m, partnumber: e.target.value })); setManualError("") }}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-gray-700">Natureza *</label>
-                  <Select
-                    value={manual.nature}
-                    onValueChange={v => setManual(m => ({ ...m, nature: v }))}
-                  >
-                    <SelectTrigger className="mt-1">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {NATURES.map(n => (
-                        <SelectItem key={n} value={n}>{n}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-medium text-gray-700">Descrição *</label>
-                <Input
-                  className="mt-1"
-                  placeholder="Descrição do produto"
-                  value={manual.description}
-                  onKeyDown={e => e.stopPropagation()}
-                  onChange={e => { setManual(m => ({ ...m, description: e.target.value })); setManualError("") }}
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-medium text-gray-700">NCM</label>
-                  <Input
-                    className="mt-1"
-                    placeholder="ex: 8471.30.19"
-                    value={manual.ncm}
-                    onKeyDown={e => e.stopPropagation()}
-                    onChange={e => setManual(m => ({ ...m, ncm: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-gray-700">CFOP</label>
-                  <Input
-                    className="mt-1"
-                    placeholder="ex: 5102"
-                    value={manual.cfop}
-                    onKeyDown={e => e.stopPropagation()}
-                    onChange={e => setManual(m => ({ ...m, cfop: e.target.value }))}
-                  />
-                </div>
-              </div>
-
-              {manualError && <p className="text-sm text-red-600">{manualError}</p>}
-
-              <div className="flex justify-end pt-1">
-                <Button onClick={handleAddManual}>
-                  Adicionar Produto
-                </Button>
-              </div>
-            </div>
-          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -679,7 +537,7 @@ function ProductRow({
                 onChange={e => form.setValue(`${basePath}.ncm`, e.target.value)} />
             </div>
             <div className="col-span-2">
-              <label className="text-[10px] font-semibold text-gray-500 uppercase">Partnumber / Descrição</label>
+              <label className="text-[10px] font-semibold text-gray-500 uppercase">Descrição</label>
               <Input className="h-7 text-xs mt-0.5"
                 value={product?.description || ""}
                 onChange={e => form.setValue(`${basePath}.description`, e.target.value)} />
