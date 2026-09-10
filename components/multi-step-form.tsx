@@ -251,6 +251,7 @@ export function MultiStepForm({
   const [omieRunId, setOmieRunId] = useState<string>("")
   const [omieChanges, setOmieChanges] = useState<PayloadChange[]>([])
   const loadedDealIdRef = useRef<number | null>(null)
+  const loadedItemCodeRef = useRef<string | null>(null)
 
   const { user } = useCurrentUser()
   const [approval, setApproval] = useState<{ status?: string; review_note?: string; reviewed_by_name?: string } | null>(null)
@@ -350,8 +351,15 @@ export function MultiStepForm({
 
   // ── 1ª passada: campos básicos do card Bitrix ────────────────────────────
   useEffect(() => {
-    if (!selectedItem) return
+    if (!selectedItem) { loadedItemCodeRef.current = null; return }
     const code = selectedItem.xmlId ? String(selectedItem.xmlId) : String(selectedItem.id)
+    // Só reinicia o formulário quando o card muda de fato. Sem esta trava,
+    // qualquer re-render que trocasse a identidade de selectedItem — salvar o
+    // rascunho, por exemplo — disparava o reset e zerava tudo. Os demais campos
+    // voltavam pelas passadas seguintes; as condições de pagamento, que só vêm
+    // do rascunho, não voltavam, e era isso que sumia depois de salvar.
+    if (loadedItemCodeRef.current === code) return
+    loadedItemCodeRef.current = code
     form.reset({
       bitrixDealId: code,
       business: {
