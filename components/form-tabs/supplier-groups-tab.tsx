@@ -314,7 +314,8 @@ function SupplierDialog({
   )
 }
 
-const NATURES = ["HW", "SW", "LC", "ST", "SRV"]
+// Codigos do "Tipo de Part Number" do catalogo Bitrix (HDW - Hardware, etc.).
+const NATURES = ["HDW", "SFW", "LIC", "SVI", "SVT"]
 
 // ── Diálogo: buscar produto no catálogo Bitrix24 ─────────────────────────────
 function ProductDialog({
@@ -365,7 +366,7 @@ function ProductDialog({
         sku:         bitrixPorPn.get(String(p.partnumber || "").toLowerCase())?.sku || "",
         ncm:         p.ncm || "",
         cfop:        p.cfop || "",
-        nature:      p.nature || "HW",
+        nature:      p.nature || "HDW",
         family:      p.family || "",
         source:      "local" as const,
       })),
@@ -478,8 +479,10 @@ function ProductRow({
 
   // Filtra famílias pelo estado do produto e auto-seleciona para serviços
   const productState   = product?.state || 'SP'
-  const productNature  = product?.nature || 'HW'
-  const isSRV = ['SRV', 'LC', 'SW', 'ST'].includes(productNature) // serviços/software → sem estoque físico
+  const productNature  = product?.nature || 'HDW'
+  // Serviços, software e licença não têm estoque físico. Os códigos antigos
+  // continuam na lista por causa de negócios e rascunhos já gravados.
+  const isSRV = ['SVI', 'LIC', 'SFW', 'SVT', 'SRV', 'LC', 'SW', 'ST'].includes(productNature)
 
   // Auto-seleciona família "Outros" quando nature é serviço
   useEffect(() => {
@@ -550,7 +553,7 @@ function ProductRow({
             </div>
             <div>
               <label className="text-[10px] font-semibold text-gray-500 uppercase">Natureza</label>
-              <Select value={product?.nature || "HW"} onValueChange={v => form.setValue(`${basePath}.nature`, v)}>
+              <Select value={product?.nature || "HDW"} onValueChange={v => form.setValue(`${basePath}.nature`, v)}>
                 <SelectTrigger className="h-7 text-xs mt-0.5"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {["HW","SW","LC","ST","SRV"].map(n => <SelectItem key={n} value={n} className="text-xs">{n}</SelectItem>)}
@@ -711,7 +714,7 @@ function SupplierGroupCard({
       partnumber:  p.partnumber || "",
       description: p.description || "",
       cfop:        p.cfop  || "",
-      nature:      p.nature || "HW",
+      nature:      p.nature || "HDW",
       ncm:         p.ncm   || "",
       family:      p.family || "",  // codigo_familia para o Omie
       state:       "SP",

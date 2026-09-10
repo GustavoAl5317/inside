@@ -772,16 +772,31 @@ export class BitrixService {
     fornecedor: 'PROPERTY_327',  // lista de fornecedores
   } as const
 
-  // "Tipo de Part Number" do Bitrix → natureza usada no formulário
+  /**
+   * "Tipo de Part Number" do Bitrix → natureza usada no formulário.
+   *
+   * Os valores da lista já vêm no formato "HDW - Hardware", com o código de três
+   * letras na frente — é ele que o app passou a usar, para bater com o que está
+   * cadastrado no catálogo e com o prefixo do SKU (CIS-HDW-0000). Os rótulos sem
+   * prefixo continuam mapeados por causa de cadastros antigos.
+   */
   private static readonly NATURE_BY_LABEL: Record<string, string> = {
-    'hardware':              'HW',
-    'software':              'SW',
-    'licença':               'LC',
-    'licenca':               'LC',
-    'serviço interatell':    'SRV',
-    'servico interatell':    'SRV',
-    'serviços de terceiros': 'ST',
-    'servicos de terceiros': 'ST',
+    'hardware':              'HDW',
+    'software':              'SFW',
+    'licença':               'LIC',
+    'licenca':               'LIC',
+    'serviço interatell':    'SVI',
+    'servico interatell':    'SVI',
+    'serviços de terceiros': 'SVT',
+    'servicos de terceiros': 'SVT',
+  }
+
+  /** "HDW - Hardware" → "HDW"; rótulo sem prefixo cai no de-para acima. */
+  private static natureFromLabel(label: string): string | undefined {
+    const l = String(label || '').trim()
+    const prefixo = /^([A-Z]{3})\s*-\s*/.exec(l.toUpperCase())
+    if (prefixo) return prefixo[1]
+    return BitrixService.NATURE_BY_LABEL[l.toLowerCase()]
   }
 
   // Valores das propriedades de lista (ID numérico → rótulo). Uma chamada por processo.
@@ -945,7 +960,7 @@ export class BitrixService {
           sku: sku || undefined,
           ncm: BitrixService.propValue(p[P.ncm]) || undefined,
           cfop: BitrixService.propValue(p[P.cfop]) || undefined,
-          nature: BitrixService.NATURE_BY_LABEL[tipoLabel.toLowerCase()] || undefined,
+          nature: BitrixService.natureFromLabel(tipoLabel) || undefined,
           origem: labelOf(P.origem, p[P.origem]) || undefined,
           fornecedor: labelOf(P.fornecedor, p[P.fornecedor]) || undefined,
         }

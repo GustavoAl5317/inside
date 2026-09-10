@@ -25,7 +25,7 @@ const LINHA_ITENS = 30
 const ULTIMA_LINHA_ITEM = 49
 
 /** Colunas de dado da tabela; A guarda a numeracao do item, que fica como esta. */
-const COLUNAS_ITEM = ['B','C','D','E','F','G','H','I','J','K','L','M','N','O'] as const
+const COLUNAS_ITEM = ['B','C','D','E','F','G','H','I','J','K','L','M','N','O','P'] as const
 
 export interface OcExcelFile {
   filename: string
@@ -127,9 +127,16 @@ function itensDoPar(group: any, customer: any) {
   return itens
 }
 
-/** Preenche uma aba ja formatada com os dados de um par fornecedor x cliente. */
+/**
+ * Preenche uma aba ja formatada com os dados de um par fornecedor x cliente.
+ *
+ * As referencias seguem o modelo OC_JUN_25 (templates/ordem-de-compra.xlsx), que
+ * tem a coluna PARTNUMBER entre SKU e Descricao — por isso tudo a partir de C
+ * anda uma coluna em relacao ao modelo antigo.
+ */
 function preencheAba(
-  ws: ExcelJS.Worksheet, values: any, group: any, entry: any, condicoes: Map<string, string>,
+  ws: ExcelJS.Worksheet, values: any, group: any, entry: any,
+  condicoes: Map<string, string>, gerenteDeContas: string,
 ) {
   const itens = itensDoPar(group, entry)
 
@@ -141,103 +148,121 @@ function preencheAba(
   const set = (ref: string, v: unknown) => { ws.getCell(ref).value = (v as any) ?? null }
 
   // ── Cabeçalho ──────────────────────────────────────────────────────────────
-  set('J2', txt(business.commercialProposal))
-  set('J3', paraData(business.purchaseOrderDate))
-  set('J4', paraData(business.deliveryDeadline))
-  set('N4', paraData(business.expectedBillingDate))
+  set('K2', txt(business.commercialProposal))
+  set('K3', paraData(business.purchaseOrderDate))
+  set('K4', paraData(business.deliveryDeadline))
+  set('O4', paraData(business.expectedBillingDate))
   const condicao = (v: unknown) => { const c = txt(v); return condicoes.get(c) || c }
-  set('J6', condicao(business.purchasePaymentCondition))
-  set('N6', condicao(business.salePaymentCondition))
+  set('K6', condicao(business.purchasePaymentCondition))
+  set('O6', condicao(business.salePaymentCondition))
 
   // ── Distribuidor / Fornecedor ──────────────────────────────────────────────
-  // G9 e G10 traziam =VLOOKUP(...Fornecedores_Pasta...), que vira #NOME? porque
-  // o nome aponta para uma tabela que nao sobrevive ao round-trip. Sao escritos
-  // como valor, igual ao resto do bloco.
+  // O bloco inteiro vinha de VLOOKUP em Fornecedores_Pasta, que vira #NOME?
+  // porque o nome aponta para uma tabela que nao sobrevive ao round-trip.
   set('A9',  txt(forn.name))
-  set('G9',  txt(forn.cnpj))
-  set('G10', txt(forn.stateRegistration))
-  set('B10', txt(forn.zipCode))
-  set('B11', txt(forn.city));         set('D11', txt(forn.state))
-  set('B12', txt(forn.neighborhood))
-  set('B13', txt(forn.address));      set('D13', txt(forn.number))
-  set('B14', txt(forn.complement))
-  set('G11', txt(forn.contactName))
-  set('G12', txt(forn.phone))
-  set('G14', txt(forn.email))
+  set('H9',  txt(forn.cnpj))
+  set('H10', txt(forn.stateRegistration))
+  set('C10', txt(forn.zipCode))
+  set('C11', txt(forn.city));         set('E11', txt(forn.state))
+  set('C12', txt(forn.neighborhood))
+  set('C13', txt(forn.address));      set('E13', txt(forn.number))
+  set('C14', txt(forn.complement))
+  set('H11', txt(forn.contactName))
+  set('H12', txt(forn.phone))
+  set('H14', txt(forn.email))
 
   // ── Interatell ─────────────────────────────────────────────────────────────
-  // O bloco inteiro vinha de =VLOOKUP($H$9,INTERATELL,...) e caia em #N/D. Os
-  // dados das duas empresas ja estao no codigo, entao vao como valor.
+  // O bloco vinha de =VLOOKUP($I$9,INTERATELL,...) e caia em #N/D. Os dados das
+  // duas empresas ja estao no codigo, entao vao como valor.
   const itl = companyForBranch(filialES ? 'es' : 'barueri')
-  // H9 e a razao social. Era so "BARUERI"/"SERRA" porque no modelo essa celula
-  // servia de chave do VLOOKUP; sem a formula, ela tem que trazer o nome inteiro.
-  set('H9',  txt(itl.label))
+  // I9 e a razao social. Era so "BARUERI"/"SERRA" porque no modelo essa celula
+  // servia de chave do VLOOKUP; sem a formula, ela traz o nome inteiro.
+  set('I9',  txt(itl.label))
   // CNPJ e CEP saem pontuados, como na tabela INTERATELL do modelo.
-  set('N9',  formatCNPJ(txt(itl.cnpj)))
-  set('I10', formatZipCode(txt(itl.zipCode))); set('N10', txt(itl.stateRegistration))
-  set('I11', txt(itl.city));          set('K11', txt(itl.state))
-  set('I12', txt(itl.neighborhood))
-  set('I13', txt(itl.address));       set('K13', txt(itl.number))
-  set('I14', txt(itl.complement))
+  set('O9',  formatCNPJ(txt(itl.cnpj)))
+  set('J10', formatZipCode(txt(itl.zipCode))); set('O10', txt(itl.stateRegistration))
+  set('J11', txt(itl.city));          set('L11', txt(itl.state))
+  set('J12', txt(itl.neighborhood))
+  set('J13', txt(itl.address));       set('L13', txt(itl.number))
+  set('J14', txt(itl.complement))
   // Contato, telefones e e-mail: as colunas 5, 6, 7 e 4 da tabela INTERATELL.
-  set('N11', txt(itl.contactName))
-  set('N12', txt(itl.phone))
-  set('N13', txt(itl.phone2))
-  set('N14', txt(itl.email))
-  // AJ9 e uma celula auxiliar rotulada "FORMULA PROCV" fora da area visivel, com
-  // o mesmo VLOOKUP. Fica de fora da tela, mas guardaria um #N/D no arquivo.
-  set('AJ9', '')
+  set('O11', txt(itl.contactName))
+  set('O12', txt(itl.phone))
+  set('O13', txt(itl.phone2))
+  set('O14', txt(itl.email))
+  // AK9 e a celula auxiliar "FORMULA PROCV", fora da area visivel, com o mesmo
+  // VLOOKUP. Nao aparece na tela, mas guardaria um #N/D no arquivo.
+  set('AK9', '')
 
   // ── Cliente final ──────────────────────────────────────────────────────────
   set('A16', txt(cli.name))
-  set('B17', txt(cli.zipCode))
-  set('B18', txt(cli.city));          set('D18', txt(cli.state))
-  set('B19', txt(cli.neighborhood))
-  set('B20', txt(cli.address));       set('D20', txt(cli.number))
-  set('B21', txt(cli.complement))
-  set('B22', txt(cli.purchaseOrder) || txt(business.commercialProposal))
-  set('G16', txt(cli.cnpj))
-  set('G17', cli.isTaxpayer ? 'SIM' : 'NÃO')
-  set('G18', txt(cli.stateRegistration))
-  set('G19', txt(cli.contactName))
-  set('G20', txt(cli.phone))
-  set('G22', txt(cli.email))
+  set('C17', txt(cli.zipCode))
+  set('C18', txt(cli.city));          set('E18', txt(cli.state))
+  set('C19', txt(cli.neighborhood))
+  set('C20', txt(cli.address));       set('E20', txt(cli.number))
+  set('C21', txt(cli.complement))
+  set('C22', txt(cli.purchaseOrder) || txt(business.commercialProposal))
+  set('C23', gerenteDeContas)
+  set('H16', txt(cli.cnpj))
+  set('H17', cli.isTaxpayer ? 'SIM' : 'NÃO')
+  set('H18', txt(cli.stateRegistration))
+  set('H19', txt(cli.contactName))
+  set('H20', txt(cli.phone))
+  set('H22', txt(cli.email))
 
   // ── Observações ────────────────────────────────────────────────────────────
-  set('H16', txt(values?.notes?.externalNotes))
-  set('H22', txt(values?.notes?.internalNotes))
+  set('I16', txt(values?.notes?.externalNotes))
+  set('I22', txt(values?.notes?.internalNotes))
 
   // ── Itens ──────────────────────────────────────────────────────────────────
   // Limpa o bloco inteiro antes de escrever. O modelo traz VLOOKUPs como formula
-  // compartilhada (C, G, H, I, J nas linhas 32..49); apagar so algumas linhas
-  // deixaria clones apontando para uma celula-mestre que nao existe mais, e o
-  // ExcelJS recusa o arquivo. A formatacao das celulas nao e afetada.
+  // compartilhada; apagar so algumas linhas deixaria clones apontando para uma
+  // celula-mestre que nao existe mais, e o ExcelJS recusa o arquivo. A formatacao
+  // das celulas nao e afetada.
   for (let l = LINHA_ITENS; l <= ULTIMA_LINHA_ITEM; l++) {
     for (const col of COLUNAS_ITEM) ws.getCell(`${col}${l}`).value = null
   }
 
   itens.forEach((p, i) => {
     const l = LINHA_ITENS + i
-    const codigo = codigoProduto(p)
-    const descricao = txt(p.description)
-    set(`B${l}`, codigo)
-    // Sem descricao propria no catalogo, o partnumber ao menos identifica o
-    // item; repetir o codigo nas duas colunas nao acrescenta nada.
-    set(`C${l}`, descricao === codigo ? txt(p.partnumber) : descricao)
-    set(`F${l}`, filialES ? 'ES' : 'SP')
-    set(`G${l}`, txt(p.cfop))
-    set(`H${l}`, txt(p.nature))
-    set(`I${l}`, txt(p.family))
-    set(`J${l}`, txt(p.ncm))
-    set(`K${l}`, nmb(p.quantity))
-    set(`L${l}`, nmb(p.unitCost))
-    set(`N${l}`, nmb(p.unitSale))
-    // M e O sao os totais; o modelo ja traz =L*K e =N*K nas primeiras linhas.
+    set(`B${l}`, codigoProduto(p))
+    set(`C${l}`, txt(p.partnumber))
+    set(`D${l}`, txt(p.description))
+    set(`G${l}`, filialES ? 'ES' : 'SP')
+    set(`H${l}`, txt(p.cfop))
+    set(`I${l}`, txt(p.nature))
+    set(`J${l}`, txt(p.family))
+    set(`K${l}`, txt(p.ncm))
+    set(`L${l}`, nmb(p.quantity))
+    set(`M${l}`, nmb(p.unitCost))
+    set(`O${l}`, nmb(p.unitSale))
+    // N e P sao os totais; o modelo ja traz =M*L e =O*L nas primeiras linhas.
     // Nas demais a formula e escrita aqui para a planilha continuar recalculando.
-    ws.getCell(`M${l}`).value = { formula: `L${l}*K${l}` } as any
-    ws.getCell(`O${l}`).value = { formula: `N${l}*K${l}` } as any
+    ws.getCell(`N${l}`).value = { formula: `M${l}*L${l}` } as any
+    ws.getCell(`P${l}`).value = { formula: `O${l}*L${l}` } as any
   })
+}
 
+/**
+ * Gerente de contas do negocio — o responsavel pelo card no Bitrix.
+ *
+ * Vai na celula "Gerente de Contas" do bloco do cliente. Uma consulta por
+ * geracao; se o Bitrix nao responder, a celula fica vazia em vez de derrubar a
+ * planilha inteira.
+ */
+async function gerenteDoNegocio(values: any): Promise<string> {
+  const id = Number(values?.bitrixDealId)
+  if (!Number.isFinite(id) || id <= 0) return ''
+  try {
+    const item = await BitrixService.getFullInsideSalesItem(id)
+    const assigned = Number(item?.assignedById ?? item?.assignedById ?? 0)
+    if (!assigned) return ''
+    const user = await BitrixService.getBitrixUser(assigned)
+    return String(user?.fullName ?? '').trim()
+  } catch (err) {
+    console.error('Erro ao buscar o gerente de contas do negocio:', err)
+    return ''
+  }
 }
 
 /**
@@ -278,7 +303,7 @@ export async function generateOcExcelFiles(values: any): Promise<OcExcelFile[]> 
   }
   if (!pares.length) return []
 
-  const condicoes = await mapaCondicoes()
+  const [condicoes, gerente] = await Promise.all([mapaCondicoes(), gerenteDoNegocio(values)])
   const wb = new ExcelJS.Workbook()
   await wb.xlsx.readFile(TEMPLATE)
   const modelo = wb.getWorksheet(ABA)
@@ -298,7 +323,7 @@ export async function generateOcExcelFiles(values: any): Promise<OcExcelFile[]> 
       }
     }
     ws.name = nomeAba(txt(group?.supplier?.name), txt(entry?.customer?.name), i, usados)
-    preencheAba(ws, values, group, entry, condicoes)
+    preencheAba(ws, values, group, entry, condicoes, gerente)
   })
 
   const business = values?.business ?? {}

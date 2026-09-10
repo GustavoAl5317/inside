@@ -179,13 +179,21 @@ function toOmieDate(input: any): string {
   return today()
 }
 
+/**
+ * Natureza usada internamente no envio ao Omie.
+ *
+ * O catalogo do Bitrix passou a guardar HDW/SFW/LIC/SVI/SVT, que e o que o app
+ * exibe e escreve na planilha. Aqui eles viram os codigos internos de sempre —
+ * os antigos continuam aceitos porque negocios e rascunhos ja gravados usam
+ * HW/SW/LC/ST/SRV.
+ */
 function normalizeNatureza(raw: any): Natureza {
   const s = String(raw ?? '').toUpperCase().trim()
-  if (['HW','HARDWARE'].includes(s)) return 'HW'
-  if (['SW','SOFTWARE'].includes(s)) return 'SW'
-  if (['LC','LICENSE','LICENCA'].includes(s)) return 'LC'
-  if (['ST','SERV_TER','TERCEIRO'].includes(s)) return 'ST'
-  if (['SRV','SERV','SERVICO'].includes(s)) return 'SRV'
+  if (['HW','HDW','HARDWARE'].includes(s)) return 'HW'
+  if (['SW','SFW','SOFTWARE'].includes(s)) return 'SW'
+  if (['LC','LIC','LICENSE','LICENCA'].includes(s)) return 'LC'
+  if (['ST','SVT','SERV_TER','TERCEIRO'].includes(s)) return 'ST'
+  if (['SRV','SVI','SERV','SERVICO'].includes(s)) return 'SRV'
   return 'HW'
 }
 
