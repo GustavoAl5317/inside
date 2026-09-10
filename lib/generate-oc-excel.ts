@@ -2,6 +2,7 @@ import 'server-only'
 import path from 'node:path'
 import ExcelJS from 'exceljs'
 import { companyForBranch } from './interatell-companies'
+import { formatCNPJ, formatZipCode } from './utils'
 import { BitrixService } from './bitrix-service'
 
 /**
@@ -126,14 +127,11 @@ function itensDoPar(group: any, customer: any) {
   return itens
 }
 
-async function montaArquivo(values: any, group: any, entry: any, condicoes: Map<string, string>): Promise<OcExcelFile | null> {
+/** Preenche uma aba ja formatada com os dados de um par fornecedor x cliente. */
+function preencheAba(
+  ws: ExcelJS.Worksheet, values: any, group: any, entry: any, condicoes: Map<string, string>,
+) {
   const itens = itensDoPar(group, entry)
-  if (!itens.length) return null
-
-  const wb = new ExcelJS.Workbook()
-  await wb.xlsx.readFile(TEMPLATE)
-  const ws = wb.getWorksheet(ABA)
-  if (!ws) throw new Error(`Aba "${ABA}" não encontrada no modelo`)
 
   const business = values?.business ?? {}
   const forn = group?.supplier ?? {}
@@ -171,16 +169,21 @@ async function montaArquivo(values: any, group: any, entry: any, condicoes: Map<
   // O bloco inteiro vinha de =VLOOKUP($H$9,INTERATELL,...) e caia em #N/D. Os
   // dados das duas empresas ja estao no codigo, entao vao como valor.
   const itl = companyForBranch(filialES ? 'es' : 'barueri')
-  set('H9',  filialES ? 'SERRA' : 'BARUERI')
-  set('N9',  txt(itl.cnpj))
-  set('I10', txt(itl.zipCode));       set('N10', txt(itl.stateRegistration))
+  // H9 e a razao social. Era so "BARUERI"/"SERRA" porque no modelo essa celula
+  // servia de chave do VLOOKUP; sem a formula, ela tem que trazer o nome inteiro.
+  set('H9',  txt(itl.label))
+  // CNPJ e CEP saem pontuados, como na tabela INTERATELL do modelo.
+  set('N9',  formatCNPJ(txt(itl.cnpj)))
+  set('I10', formatZipCode(txt(itl.zipCode))); set('N10', txt(itl.stateRegistration))
   set('I11', txt(itl.city));          set('K11', txt(itl.state))
   set('I12', txt(itl.neighborhood))
   set('I13', txt(itl.address));       set('K13', txt(itl.number))
   set('I14', txt(itl.complement))
-  // N11/N12 sao os dois telefones e N13/N14 contato e e-mail no modelo; sem
-  // esses dados no cadastro, ficam vazios em vez de #N/D.
-  for (const ref of ['N11', 'N12', 'N13', 'N14']) set(ref, '')
+  // Contato, telefones e e-mail: as colunas 5, 6, 7 e 4 da tabela INTERATELL.
+  set('N11', txt(itl.contactName))
+  set('N12', txt(itl.phone))
+  set('N13', txt(itl.phone2))
+  set('N14', txt(itl.email))
   // AJ9 e uma celula auxiliar rotulada "FORMULA PROCV" fora da area visivel, com
   // o mesmo VLOOKUP. Fica de fora da tela, mas guardaria um #N/D no arquivo.
   set('AJ9', '')
@@ -235,25 +238,76 @@ async function montaArquivo(values: any, group: any, entry: any, condicoes: Map<
     ws.getCell(`O${l}`).value = { formula: `N${l}*K${l}` } as any
   })
 
-  const buffer = Buffer.from(await wb.xlsx.writeBuffer())
-  return {
-    filename: nomeArquivo(txt(business.commercialProposal), txt(business.name), txt(forn.name)),
-    buffer,
-  }
 }
 
 /**
- * Um arquivo por par fornecedor x cliente que tenha item alocado.
- * A coluna NATUREZA distingue HW, SW, LC, ST e SRV dentro do mesmo arquivo.
+ * Nome da aba: fornecedor x cliente, no limite de 31 caracteres do Excel.
+ *
+ * O Excel tambem recusa : \ / ? * [ ] no nome e nao aceita duas abas iguais,
+ * entao nomes repetidos ganham um sufixo numerico.
+ */
+function nomeAba(fornecedor: string, cliente: string, indice: number, usados: Set<string>): string {
+  const limpa = (v: string, max: number) =>
+    v.replace(/[\\/?*\[\]:]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max).trim()
+
+  const base = limpa(`${limpa(fornecedor, 14)} x ${limpa(cliente, 12)}`, 31) || `OC ${indice + 1}`
+  let nome = base
+  for (let n = 2; usados.has(nome.toLowerCase()); n++) {
+    const sufixo = ` (${n})`
+    nome = base.slice(0, 31 - sufixo.length) + sufixo
+  }
+  usados.add(nome.toLowerCase())
+  return nome
+}
+
+/**
+ * Uma aba por par fornecedor x cliente que tenha item alocado, tudo num arquivo
+ * so. A coluna NATUREZA distingue HW, SW, LC, ST e SRV dentro da mesma aba.
+ *
+ * O modelo tem uma aba de Ordem de Compra so, entao as demais sao clonadas a
+ * partir de um retrato dela tirado antes de qualquer preenchimento. O clone leva
+ * estilos, larguras, formulas e o logo; as mesclagens nao vao no model e sao
+ * reaplicadas na mao.
  */
 export async function generateOcExcelFiles(values: any): Promise<OcExcelFile[]> {
-  const arquivos: OcExcelFile[] = []
-  const condicoes = await mapaCondicoes()
+  const pares: Array<{ group: any; entry: any }> = []
   for (const group of (values?.supplierGroups ?? [])) {
     for (const entry of (values?.customers ?? [])) {
-      const f = await montaArquivo(values, group, entry, condicoes)
-      if (f) arquivos.push(f)
+      if (itensDoPar(group, entry).length) pares.push({ group, entry })
     }
   }
-  return arquivos
+  if (!pares.length) return []
+
+  const condicoes = await mapaCondicoes()
+  const wb = new ExcelJS.Workbook()
+  await wb.xlsx.readFile(TEMPLATE)
+  const modelo = wb.getWorksheet(ABA)
+  if (!modelo) throw new Error(`Aba "${ABA}" não encontrada no modelo`)
+
+  const limpo = structuredClone(modelo.model)
+  const merges = [...(modelo.model.merges ?? [])]
+
+  const usados = new Set<string>()
+  pares.forEach(({ group, entry }, i) => {
+    let ws = modelo
+    if (i > 0) {
+      ws = wb.addWorksheet(`__oc${i}`)
+      ws.model = { ...structuredClone(limpo), name: ws.name, id: ws.id } as any
+      for (const m of merges) {
+        try { ws.mergeCells(m) } catch { /* mesclagem ja existente */ }
+      }
+    }
+    ws.name = nomeAba(txt(group?.supplier?.name), txt(entry?.customer?.name), i, usados)
+    preencheAba(ws, values, group, entry, condicoes)
+  })
+
+  const business = values?.business ?? {}
+  // Com uma aba so, o fornecedor ainda cabe no nome do arquivo; com varias ele
+  // deixa de identificar o conteudo.
+  const fornecedor = pares.length === 1 ? txt(pares[0].group?.supplier?.name) : ''
+  const buffer = Buffer.from(await wb.xlsx.writeBuffer())
+  return [{
+    filename: nomeArquivo(txt(business.commercialProposal), txt(business.name), fornecedor),
+    buffer,
+  }]
 }

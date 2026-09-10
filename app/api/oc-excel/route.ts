@@ -2,11 +2,11 @@ import { type NextRequest, NextResponse } from 'next/server'
 import { generateOcExcelFiles } from '@/lib/generate-oc-excel'
 
 /**
- * Gera as planilhas de Ordem de Compra do negócio.
+ * Gera a planilha de Ordem de Compra do negócio.
  *
- * Devolve a lista em base64 em vez de um arquivo só porque sai uma planilha por
- * par fornecedor × cliente — o mesmo comportamento do gerador de PDF, que baixa
- * um arquivo por documento.
+ * Sai um arquivo só, com uma aba por par fornecedor × cliente. A resposta segue
+ * sendo uma lista em base64 — o front já itera sobre ela, e a lista deixa espaço
+ * para voltar a quebrar em vários arquivos se algum dia for preciso.
  */
 export async function POST(req: NextRequest) {
   try {
