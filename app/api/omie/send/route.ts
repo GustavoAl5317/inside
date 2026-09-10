@@ -438,6 +438,42 @@ function descricaoProduto(item: any): string {
   return descricaoOmie(item?.partnumber, item?.description)
 }
 
+/**
+ * Alinha um produto ja cadastrado no Omie ao padrao atual: codigo = SKU e
+ * descricao = "Part Number / Descricao".
+ *
+ * So chama a API quando algo de fato diverge. Descricao, codigo, unidade e NCM
+ * sao obrigatorios no cadastro do Omie, entao os quatro vao sempre — os que nao
+ * estao mudando repetem o valor que o produto ja tem, para o AlterarProduto nao
+ * esvaziar nada.
+ *
+ * Falha aqui nao interrompe o envio: o produto existente continua valendo, e
+ * duplicar o cadastro seria pior que ficar com o texto antigo. O erro fica no
+ * log da transacao. O passo e o mesmo da criacao para o log ja saber exibi-lo;
+ * o corpo da requisicao mostra que a chamada foi AlterarProduto.
+ */
+async function alinhaProduto(
+  interatellCnpj: string, atual: any, codigo: string, descricao: string, dealId: number,
+): Promise<void> {
+  const codigoAtual = String(atual?.codigo ?? '')
+  const descricaoAtual = String(atual?.descricao ?? '')
+  const mudaCodigo = !!codigo && codigo !== codigoAtual
+  const mudaDescricao = !!descricao && descricao !== descricaoAtual
+  if (!mudaCodigo && !mudaDescricao) return
+
+  const res = await omieCall(interatellCnpj, OMIE_URL.PRODUTOS, 'AlterarProduto', {
+    codigo_produto: atual.codigo_produto,
+    codigo: mudaCodigo ? codigo : codigoAtual,
+    descricao: mudaDescricao ? descricao : descricaoAtual,
+    unidade: String(atual?.unidade ?? '') || 'UN',
+    ncm: String(atual?.ncm ?? ''),
+  }, dealId, 'createProdutoResult')
+
+  if (res?.faultstring && isOmieRateLimitFault(res.faultstring)) {
+    throw new Error(`Omie temporariamente bloqueado por excesso de chamadas — aguarde alguns minutos e reenvie. (${res.faultstring})`)
+  }
+}
+
 async function ensureProduto(interatellCnpj: string, item: any, dealId: number): Promise<number | undefined> {
   if (normalizeNatureza(item.nature) === 'SRV') return undefined
   const sku = codigoProduto(item)
@@ -451,17 +487,20 @@ async function ensureProduto(interatellCnpj: string, item: any, dealId: number):
   if (check?.faultstring && isOmieRateLimitFault(check.faultstring)) {
     throw new Error(`Omie temporariamente bloqueado por excesso de chamadas — aguarde alguns minutos e reenvie. (${check.faultstring})`)
   }
-  let cod: number | undefined = check?.codigo_produto
+  let achado: any = check?.codigo_produto ? check : undefined
 
   // Produtos cadastrados antes de o código passar a ser o SKU estão no Omie com
   // o partnumber como código. Reaproveita esse cadastro em vez de duplicar.
-  if (!cod && partnumber && partnumber !== sku) {
+  if (!achado && partnumber && partnumber !== sku) {
     const legado = await omieCall(interatellCnpj, OMIE_URL.PRODUTOS, 'ConsultarProduto', { codigo: partnumber }, dealId, 'checkProduto')
     if (legado?.faultstring && isOmieRateLimitFault(legado.faultstring)) {
       throw new Error(`Omie temporariamente bloqueado por excesso de chamadas — aguarde alguns minutos e reenvie. (${legado.faultstring})`)
     }
-    if (legado?.codigo_produto) cod = legado.codigo_produto
+    if (legado?.codigo_produto) achado = legado
   }
+
+  let cod: number | undefined = achado?.codigo_produto
+  if (achado) await alinhaProduto(interatellCnpj, achado, sku, descricaoProduto(item), dealId)
 
   if (!cod) {
     // Garante NCM: usa o do deal; se vazio, busca no banco local pelo partnumber
