@@ -983,7 +983,12 @@ async function processDeal(body: any, dealId: number) {
     const fallbackCnpj = digits(interatell?.cnpj ?? '')
 
     // Resolve códigos Omie (aceita "A28", "A28 - Para 28 Dias" ou só "Para 28 Dias")
-    const purchaseCodParc = await resolvePaymentCodeForOmie(business?.purchasePaymentCondition ?? '', 'purchase')
+    // A condição de compra só existe quando há fornecedor — é usada apenas na OC.
+    // Negócio só de serviço Interatell não tem compra, o campo fica vazio, e
+    // resolvê-la aqui derrubava o envio com "Condição de pagamento não informada."
+    const purchaseCodParc = supplierGroups.length
+      ? await resolvePaymentCodeForOmie(business?.purchasePaymentCondition ?? '', 'purchase')
+      : ''
     const saleCodParc = await resolvePaymentCodeForOmie(business?.salePaymentCondition ?? '', 'sale')
 
     // 1a) Garantir FORNECEDORES no Omie — usa credenciais da filial do grupo
