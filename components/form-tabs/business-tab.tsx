@@ -17,6 +17,8 @@ export function BusinessTab({ form }: BusinessTabProps) {
   const [isLoadingConditions, setIsLoadingConditions] = useState(true)
   // false = BX24 disponível, true = fora do Bitrix24 (digitar manualmente)
   const [manualMode, setManualMode] = useState(false)
+  // Negócio só de serviço Interatell não tem compra: some a condição de compra.
+  const onlyService = !!form.watch("business.onlyInteratellService")
 
   /**
    * Garante que o valor salvo no rascunho apareca no Select mesmo quando a opcao
@@ -124,6 +126,7 @@ export function BusinessTab({ form }: BusinessTabProps) {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {!onlyService && (
           <FormField
             control={form.control}
             name="business.purchasePaymentCondition"
@@ -158,6 +161,7 @@ export function BusinessTab({ form }: BusinessTabProps) {
               </FormItem>
             )}
           />
+          )}
 
           <FormField
             control={form.control}
@@ -220,9 +224,10 @@ export function BusinessTab({ form }: BusinessTabProps) {
                 <FormControl>
                   <input
                     type="checkbox"
-                    checked={!!field.value}
+                    checked={!!field.value || onlyService}
+                    disabled={onlyService}
                     onChange={e => field.onChange(e.target.checked)}
-                    className="mt-0.5 h-4 w-4 accent-teal-600 cursor-pointer"
+                    className="mt-0.5 h-4 w-4 accent-teal-600 cursor-pointer disabled:cursor-not-allowed"
                   />
                 </FormControl>
                 <div className="min-w-0">
@@ -232,6 +237,41 @@ export function BusinessTab({ form }: BusinessTabProps) {
                   <p className="text-xs text-teal-700 mt-1">
                     Serviço próprio (natureza SRV) não passa por fornecedor. Ao marcar, abre o
                     step <strong>Cliente Serviço</strong> e o serviço vai em um PDF separado.
+                  </p>
+                </div>
+              </div>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        {/* Negócio só de serviço Interatell: não tem fornecedor nem produto. Pula
+            Fornecedores/Produtos e Clientes e gera só a OS do cliente. */}
+        <FormField
+          control={form.control}
+          name="business.onlyInteratellService"
+          render={({ field }) => (
+            <FormItem className="md:col-span-2">
+              <div className="flex items-start gap-3 rounded-xl border-2 border-amber-200 bg-amber-50/60 p-4">
+                <FormControl>
+                  <input
+                    type="checkbox"
+                    checked={!!field.value}
+                    onChange={e => {
+                      field.onChange(e.target.checked)
+                      if (e.target.checked) form.setValue("business.hasInteratellService", true)
+                    }}
+                    className="mt-0.5 h-4 w-4 accent-amber-600 cursor-pointer"
+                  />
+                </FormControl>
+                <div className="min-w-0">
+                  <FormLabel className="text-sm font-bold text-amber-900 cursor-pointer">
+                    Somente serviço Interatell (sem fornecedor)
+                  </FormLabel>
+                  <p className="text-xs text-amber-800 mt-1">
+                    Serviço da Interatell direto para o cliente, sem compra. Pula as etapas
+                    de <strong>Fornecedores/Produtos</strong> e <strong>Clientes</strong>, vai
+                    direto para <strong>Cliente Serviço</strong> e gera só a OS no Omie.
                   </p>
                 </div>
               </div>
