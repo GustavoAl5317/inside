@@ -4,7 +4,7 @@ import { createTransaction } from "./db"
 import { sql } from "./db"
 import { validateCNPJ, formatZipCode, formatPhoneNumber, normalizeCNPJDigits } from "./utils"
 import { BitrixService } from "./bitrix-service"
-import { camposFinanceirosCard, clientesDoGrupo, observacaoOc, OBSERVACAO_OS_SERVICO, preservaNumerosOc } from "./oc-numbers"
+import { camposFinanceirosCard, clientesDoGrupo, naturezaCatalogo, observacaoOc, OBSERVACAO_OS_SERVICO, preservaNumerosOc } from "./oc-numbers"
 import { listOmieStock, compareStockWithCatalog, type CatalogEntry } from './omie-stock'
 import { ProcessHistoryService } from "./process-history-service"
 import { unifiedLogService } from "./unified-log-service"
@@ -376,7 +376,7 @@ export async function searchBitrixProductsAction(query: string) {
         ...p,
         ncm:    p.ncm    || local?.ncm    || '',
         cfop:   p.cfop   || local?.cfop   || '',
-        nature: p.nature || local?.nature || 'HW',
+        nature: naturezaCatalogo(p.nature || local?.nature),
         family: local?.family || '',
       }
     })

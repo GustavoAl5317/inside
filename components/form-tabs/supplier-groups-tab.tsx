@@ -12,6 +12,7 @@ import { formatCurrency, isCNPJComplete, formatCNPJ } from "@/lib/utils"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { states } from "@/lib/utils"
+import { naturezaCatalogo } from "@/lib/oc-numbers"
 
 interface SupplierGroupsTabProps {
   form: UseFormReturn<any>
@@ -366,7 +367,10 @@ function ProductDialog({
         sku:         bitrixPorPn.get(String(p.partnumber || "").toLowerCase())?.sku || "",
         ncm:         p.ncm || "",
         cfop:        p.cfop || "",
-        nature:      p.nature || "HDW",
+        // Natureza vem do "Tipo de Part Number" do catalogo Bitrix; o banco local
+        // so entra quando o catalogo nao tem. Antes o local vencia e o produto
+        // chegava com a natureza antiga ou com HDW por padrao.
+        nature:      naturezaCatalogo(bitrixPorPn.get(String(p.partnumber || "").toLowerCase())?.nature || p.nature),
         family:      p.family || "",
         source:      "local" as const,
       })),
@@ -480,6 +484,8 @@ function ProductRow({
   // Filtra famílias pelo estado do produto e auto-seleciona para serviços
   const productState   = product?.state || 'SP'
   const productNature  = product?.nature || 'HDW'
+  // Natureza exibida: a do catálogo Bitrix, com códigos antigos já convertidos.
+  const natureza = naturezaCatalogo(product?.nature)
   // Serviços, software e licença não têm estoque físico. Os códigos antigos
   // continuam na lista por causa de negócios e rascunhos já gravados.
   const isSRV = ['SVI', 'LIC', 'SFW', 'SVT', 'SRV', 'LC', 'SW', 'ST'].includes(productNature)
@@ -553,12 +559,17 @@ function ProductRow({
             </div>
             <div>
               <label className="text-[10px] font-semibold text-gray-500 uppercase">Natureza</label>
-              <Select value={product?.nature || "HDW"} onValueChange={v => form.setValue(`${basePath}.nature`, v)}>
-                <SelectTrigger className="h-7 text-xs mt-0.5"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {["HW","SW","LC","ST","SRV"].map(n => <SelectItem key={n} value={n} className="text-xs">{n}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              {/* Vem do "Tipo de Part Number" do catálogo Bitrix — não se escolhe aqui.
+                  A lista antiga tinha HW/SW/LC/ST/SRV e não casava com HDW/LIC do
+                  catálogo, então abria em branco e forçava escolher de novo. */}
+              <div
+                className={`h-7 mt-0.5 px-2 flex items-center rounded-md border text-xs ${
+                  natureza ? "bg-gray-50 text-gray-700" : "bg-amber-50 border-amber-300 text-amber-700"
+                }`}
+                title={natureza ? "Vem do catálogo do Bitrix" : "Produto sem Tipo de Part Number no catálogo do Bitrix"}
+              >
+                {natureza || "Sem natureza no catálogo"}
+              </div>
             </div>
           </div>
           <div className="flex justify-end gap-2">
@@ -569,7 +580,16 @@ function ProductRow({
         </>
       ) : (
       <><div className="col-span-4">
-        <p className="font-medium truncate">{product?.sku || product?.partnumber}</p>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <p className="font-medium truncate">{product?.sku || product?.partnumber}</p>
+          <Badge
+            variant="outline"
+            className={`text-[10px] px-1.5 py-0 shrink-0 ${natureza ? "" : "border-amber-300 text-amber-700"}`}
+            title={natureza ? "Natureza do catálogo do Bitrix" : "Produto sem Tipo de Part Number no catálogo do Bitrix"}
+          >
+            {natureza || "sem natureza"}
+          </Badge>
+        </div>
         <p className="text-xs text-gray-500 truncate">{product?.description}</p>
         {/* Seletor de família — codigo_familia do Omie */}
         <Select
@@ -714,7 +734,7 @@ function SupplierGroupCard({
       partnumber:  p.partnumber || "",
       description: p.description || "",
       cfop:        p.cfop  || "",
-      nature:      p.nature || "HDW",
+      nature:      naturezaCatalogo(p.nature),
       ncm:         p.ncm   || "",
       family:      p.family || "",  // codigo_familia para o Omie
       state:       "SP",

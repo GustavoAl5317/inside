@@ -28,6 +28,19 @@ export function naturezaInterna(raw: unknown): NaturezaInterna {
   return 'HW'
 }
 
+/** Código de três letras do "Tipo de Part Number" do catálogo Bitrix. */
+const CODIGO_CATALOGO: Record<NaturezaInterna, string> = { HW: 'HDW', SW: 'SFW', LC: 'LIC', ST: 'SVT', SRV: 'SVI' }
+
+/**
+ * Natureza no formato do catálogo Bitrix (HDW/SFW/LIC/SVI/SVT), que é o que o
+ * formulário mostra. Converte os códigos antigos de rascunhos e do banco local
+ * (HW, LC, ...). Vazio continua vazio: produto sem natureza no catálogo não pode
+ * virar hardware em silêncio.
+ */
+export function naturezaCatalogo(raw: unknown): string {
+  return String(raw ?? '').trim() ? CODIGO_CATALOGO[naturezaInterna(raw)] : ''
+}
+
 /** Rótulos do card seguem o que o time já escrevia à mão ("HW", "SVT + LIC"). */
 const ROTULO: Record<NaturezaInterna, string> = { HW: 'HW', SW: 'SFW', LC: 'LIC', ST: 'SVT', SRV: 'SVI' }
 
