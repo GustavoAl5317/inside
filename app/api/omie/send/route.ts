@@ -15,6 +15,7 @@ import { sql } from '@/lib/db'
 import { addOmieRawLog } from '@/lib/unified-log-service'
 import { BitrixService } from '@/lib/bitrix-service'
 import { descricaoOmie } from '@/lib/omie-descricao'
+import { naturezaInterna } from '@/lib/oc-numbers'
 import {
   paymentConditionMatches,
   resolveDefaultOmiePaymentCode,
@@ -188,13 +189,8 @@ function toOmieDate(input: any): string {
  * HW/SW/LC/ST/SRV.
  */
 function normalizeNatureza(raw: any): Natureza {
-  const s = String(raw ?? '').toUpperCase().trim()
-  if (['HW','HDW','HARDWARE'].includes(s)) return 'HW'
-  if (['SW','SFW','SOFTWARE'].includes(s)) return 'SW'
-  if (['LC','LIC','LICENSE','LICENCA'].includes(s)) return 'LC'
-  if (['ST','SVT','SERV_TER','TERCEIRO'].includes(s)) return 'ST'
-  if (['SRV','SVI','SERV','SERVICO'].includes(s)) return 'SRV'
-  return 'HW'
+  // A regra mora em lib/oc-numbers, que também monta os campos do card do Bitrix.
+  return naturezaInterna(raw)
 }
 
 function normalizeNCM(ncm: any): string {
@@ -1029,7 +1025,7 @@ async function processDeal(body: any, dealId: number) {
       if (!codDistribuidor) continue
       const valorFrete = group.hasFreight ? Number(group.freightValue ?? 0) : 0
       const res = await upsertOC(branchCnpj, codDistribuidor, group.products ?? [], business, obs, dealId, gIdx, upsertOpts, purchaseCodParc, valorFrete)
-      if (res) ocResults.push({ ...res, _supplier: group.supplier?.name })
+      if (res) ocResults.push({ ...res, _supplier: group.supplier?.name, _groupIdx: gIdx })
     }
 
     // 4) OV + OS: 1 por cliente E por filial de compra. O mesmo cliente gera
@@ -1057,13 +1053,13 @@ async function processDeal(body: any, dealId: number) {
         if (!codCliente) continue
 
         const ov = await upsertOV(branchCnpj, codCliente, itens, business, obs, dealId, cIdx, upsertOpts, saleCodParc, filial)
-        if (ov) ovResults.push({ ...ov, _customer: entry.customer?.name, _filial: filial })
+        if (ov) ovResults.push({ ...ov, _customer: entry.customer?.name, _filial: filial, _clienteIdx: cIdx })
 
         for (const nat of ['SW','LC','ST'] as Natureza[]) {
           const natItems = itens.filter(i => normalizeNatureza(i.nature) === nat)
           if (!natItems.length) continue
           const os = await upsertOS(branchCnpj, codCliente, entry.customer, natItems, nat, business, obs, dealId, cIdx, upsertOpts, saleCodParc, filial)
-          if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: nat, _filial: filial })
+          if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: nat, _filial: filial, _clienteIdx: cIdx })
         }
       }
 
@@ -1071,7 +1067,7 @@ async function processDeal(body: any, dealId: number) {
         const codCliente = ctx().clienteCache.get(`${CNPJ_BARUERI}:${digits(entry.customer?.cnpj)}`)
         if (codCliente) {
           const os = await upsertOS(CNPJ_BARUERI, codCliente, entry.customer, itensSRV, 'SRV', business, obs, dealId, cIdx, upsertOpts, saleCodParc, 'barueri')
-          if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: 'SRV', _filial: 'barueri' })
+          if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: 'SRV', _filial: 'barueri', _clienteIdx: cIdx })
         }
       }
     }
@@ -1092,7 +1088,7 @@ async function processDeal(body: any, dealId: number) {
         CNPJ_BARUERI, codCliente, entry.customer, items, 'SRV',
         business, obs, dealId, customers.length + sIdx, upsertOpts, saleCodParc, 'barueri',
       )
-      if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: 'SRV', _interatellService: true })
+      if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: 'SRV', _interatellService: true, _filial: 'barueri', _servicoIdx: sIdx })
     }
 
     // 5) Resumo com números dos pedidos
@@ -1113,6 +1109,9 @@ async function processDeal(body: any, dealId: number) {
         codigoPedido: r._codigo ?? r?.nCodPed,
         acao: r._action ?? 'created',
         fornecedor: r._supplier,
+        // De qual fornecedor saiu a OC — os campos do card do Bitrix usam para
+        // achar o Número de Ordem de Compra.
+        grupoIdx: r._groupIdx,
         erro: omieFaultMessage(r) ?? undefined,
       })),
       ov: ovResults.map((r, i) => ({
@@ -1122,6 +1121,8 @@ async function processDeal(body: any, dealId: number) {
         codigoPedido: r._codigoPedido ?? r._codigo ?? r?.codigo_pedido,
         acao: r._action ?? 'created',
         cliente: r._customer,
+        clienteIdx: r._clienteIdx,
+        filial: r._filial,
         erro: omieFaultMessage(r) ?? undefined,
       })),
       os: osResults.map((r, i) => ({
@@ -1131,6 +1132,9 @@ async function processDeal(body: any, dealId: number) {
         nat: r._nat,
         // Serviço próprio Interatell (não veio de fornecedor) — o PDF é separado.
         interatellService: r._interatellService ?? undefined,
+        clienteIdx: r._clienteIdx,
+        servicoIdx: r._servicoIdx,
+        filial: r._filial,
         erro: omieFaultMessage(r) ?? undefined,
       })),
       alteracoes,

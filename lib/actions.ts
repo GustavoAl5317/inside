@@ -4,6 +4,7 @@ import { createTransaction } from "./db"
 import { sql } from "./db"
 import { validateCNPJ, formatZipCode, formatPhoneNumber, normalizeCNPJDigits } from "./utils"
 import { BitrixService } from "./bitrix-service"
+import { camposFinanceirosCard, clientesDoGrupo, observacaoOc, OBSERVACAO_OS_SERVICO, preservaNumerosOc } from "./oc-numbers"
 import { listOmieStock, compareStockWithCatalog, type CatalogEntry } from './omie-stock'
 import { ProcessHistoryService } from "./process-history-service"
 import { unifiedLogService } from "./unified-log-service"
@@ -1293,6 +1294,60 @@ export async function getProcessHistoryAction(transactionId: number) {
   }
 }
 
+/**
+ * Garante um Número de Ordem de Compra (lista #35 do Bitrix) em cada OC e em cada
+ * OS de serviço Interatell do negócio. Os já gerados na aba "Nº Ordem de Compra"
+ * — ou digitados — ficam como estão. Muta `values`.
+ *
+ * Um erro não interrompe os demais: o que já foi criado na lista precisa voltar
+ * para o negócio, senão fica órfão e o próximo envio cria outro número.
+ */
+async function garanteNumerosOc(values: any): Promise<{ criados: number; erros: string[] }> {
+  const proposta = String(values?.business?.commercialProposal ?? '').trim()
+  let criados = 0
+  const erros: string[] = []
+  const cria = async (alvo: any, dados: { cliente: string; observacao: string }) => {
+    try {
+      const r = await BitrixService.createOcNumber({ ...dados, proposta })
+      alvo.ocNumber = r.number
+      alvo.ocElementId = r.elementId
+      criados++
+    } catch (err) {
+      erros.push(err instanceof Error ? err.message : String(err))
+    }
+  }
+  for (const g of values?.supplierGroups ?? []) {
+    if (String(g?.ocNumber ?? '').trim() || !(g?.products ?? []).length) continue
+    await cria(g, { cliente: clientesDoGrupo(values, g), observacao: observacaoOc(g) })
+  }
+  for (const sc of values?.serviceCustomers ?? []) {
+    if (String(sc?.ocNumber ?? '').trim() || !(sc?.items ?? []).length) continue
+    await cria(sc, { cliente: String(sc?.customer?.name ?? '').trim(), observacao: OBSERVACAO_OS_SERVICO })
+  }
+  return { criados, erros }
+}
+
+/** Antes de sobrescrever o payload do negócio: ver preservaNumerosOc. */
+async function preservaNumerosDoBanco(dealId: number, payload: any): Promise<void> {
+  const [row] = await sql`SELECT payload FROM deals WHERE id = ${dealId}`
+  const antigo = typeof row?.payload === 'string' ? JSON.parse(row.payload) : row?.payload
+  if (antigo) preservaNumerosOc(payload, antigo)
+}
+
+/** Aba "Nº Ordem de Compra": cria na lista #35 os números que ainda faltam. */
+export async function generateOcNumbersAction(values: any) {
+  const numeros = (lista: any[] | undefined) =>
+    (lista ?? []).map((x: any) => ({ ocNumber: x?.ocNumber ?? '', ocElementId: x?.ocElementId }))
+  const { criados, erros } = await garanteNumerosOc(values)
+  return {
+    success: !erros.length,
+    error: erros.join(' | ') || undefined,
+    criados,
+    supplierGroups: numeros(values?.supplierGroups),
+    serviceCustomers: numeros(values?.serviceCustomers),
+  }
+}
+
 export async function sendApprovedProcessToOmieAction(
   dealId: number,
   options?: { update?: boolean; changes?: Array<{ label: string; before: string; after: string; kind: string }>; runId?: string },
@@ -1324,6 +1379,21 @@ export async function sendApprovedProcessToOmieAction(
       }
     }
 
+    // Número de Ordem de Compra: o que a aba não gerou é criado agora, antes do
+    // envio, para o card sair com "OC 9178/26 - ...". Falha aqui não segura o
+    // envio ao Omie — o card só fica sem o prefixo naquela linha.
+    try {
+      const [row] = await sql`SELECT payload FROM deals WHERE id = ${dealId}`
+      const p = typeof row?.payload === 'string' ? JSON.parse(row.payload) : row?.payload
+      if (p) {
+        const { criados, erros } = await garanteNumerosOc(p)
+        if (criados) await sql`UPDATE deals SET payload = ${JSON.stringify(p)}, updated_at = NOW() WHERE id = ${dealId}`
+        if (erros.length) console.error(`[OC] deal=${dealId} sem Número de Ordem de Compra:`, erros.join(' | '))
+      }
+    } catch (err) {
+      console.error(`[OC] deal=${dealId} erro ao garantir Número de Ordem de Compra:`, err)
+    }
+
     // Chamada INTERNA à própria API: usa loopback, nunca a URL pública (ngrok/Bitrix).
     // A URL pública (NEXT_PUBLIC_APP_URL) depende do túnel ngrok — se ele cai ou troca
     // de endereço, o app chamava a si mesmo por fora e recebia o 404 do ngrok.
@@ -1348,19 +1418,18 @@ export async function sendApprovedProcessToOmieAction(
 
     const responseData = await response.json()
 
-    // Grava números OC/OV/OS de volta no card do Bitrix (best-effort)
+    // Grava os números nos campos "Sistema Financeiro (Omie)" do card do Bitrix.
+    // Best-effort: falha aqui não desfaz o envio, mas fica no log do servidor.
     try {
       const [dealRow] = await sql`SELECT payload, bitrix_deal_id FROM deals WHERE id = ${dealId}`
       const resumo = responseData?.resumo ?? responseData?.data?.resumo
       if (dealRow?.bitrix_deal_id && resumo) {
-        const numbers = {
-          oc: (resumo.oc ?? []).map((o: any) => o.numero).filter(Boolean),
-          ov: (resumo.ov ?? []).map((o: any) => o.numero).filter(Boolean),
-          os: (resumo.os ?? []).map((o: any) => o.numero).filter(Boolean),
-        }
-        await BitrixService.updateDealOmieNumbers(dealRow.bitrix_deal_id, numbers)
+        const payload = typeof dealRow.payload === 'string' ? JSON.parse(dealRow.payload) : dealRow.payload
+        await BitrixService.updateCardFinanceFields(dealRow.bitrix_deal_id, camposFinanceirosCard(payload, resumo))
       }
-    } catch { /* best-effort */ }
+    } catch (err) {
+      console.error(`[Bitrix] deal=${dealId} números do Omie não gravados no card:`, err)
+    }
 
     return { success: true, data: responseData }
   } catch (error) {
@@ -1482,6 +1551,7 @@ export async function saveDraftAction(
     }
 
     if (targetId) {
+      await preservaNumerosDoBanco(targetId, payload)
       await sql`
         UPDATE deals
         SET payload = ${JSON.stringify(payload)}, status = 'pending', updated_at = NOW()
@@ -1991,6 +2061,7 @@ export async function getDealPayloadAction(dealId: number) {
 
 export async function updateDealPayloadAndStatusAction(dealId: number, status: string, payload: any) {
   try {
+    await preservaNumerosDoBanco(dealId, payload)
     await sql`
       UPDATE deals
       SET status = ${status},

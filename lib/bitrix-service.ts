@@ -1,4 +1,5 @@
 import { formatCNPJ, normalizeCNPJDigits } from './utils'
+import { proximoNumeroOc, type CamposFinanceiros } from './oc-numbers'
 
 interface BitrixDeal {
   id: string;
@@ -324,35 +325,69 @@ export class BitrixService {
   }
 
   /**
-   * Grava nos campos UF do card Bitrix os números OC/OV/OS gerados no Omie.
-   * Usa `crm.item.update` para não alterar outros campos.
+   * Grava os campos "Sistema Financeiro (Omie)" do card de Inside Sales.
+   *
+   * Substitui a gravação em ufCrm3OmieNumerosOrdens, campo que não existe nesse
+   * card — o Bitrix ignorava em silêncio e os números nunca apareciam.
    */
-  static async updateDealOmieNumbers(
-    dealId: string,
-    numbers: { oc?: string[]; ov?: string[]; os?: string[] },
-  ): Promise<{ success: boolean }> {
-    try {
-      const deal = await this.getDeal(dealId)
-      if (!deal) return { success: false }
+  static async updateCardFinanceFields(bitrixDealId: string, campos: CamposFinanceiros): Promise<void> {
+    const deal = await this.getDeal(bitrixDealId)
+    if (!deal) throw new Error(`Card do Bitrix não encontrado para o negócio ${bitrixDealId}.`)
+    await bPost('/crm.item.update.json', {
+      entityTypeId: ENTITY_TYPE_ID,
+      id: deal.id,
+      fields: {
+        ufCrm7_1702651646: campos.compra,         // Número Pedido de Compra
+        ufCrm7_1702651690: campos.compraServico,  // Número Pedido de Compra Serviço
+        ufCrm7_1702651668: campos.venda,          // Número Pedido de Venda
+        ufCrm7_1702651712: campos.ordemServico,   // Número Ordem de Serviço
+      },
+    })
+  }
 
-      const parts: string[] = []
-      if (numbers.oc?.length) parts.push(`OC: ${numbers.oc.join(', ')}`)
-      if (numbers.ov?.length) parts.push(`OV: ${numbers.ov.join(', ')}`)
-      if (numbers.os?.length) parts.push(`OS: ${numbers.os.join(', ')}`)
-      if (!parts.length) return { success: true }
+  // ─── Número de Ordem de Compra (lista #35) ───────────────────────────────────
+  // Um item por Ordem de Compra (um por fornecedor) e um por OS de serviço
+  // Interatell. NAME é o número ("9178/26"); IDs confirmados via lists.field.get.
+  private static readonly OC_LIST = {
+    id: 35, cliente: 'PROPERTY_131', proposta: 'PROPERTY_133', observacao: 'PROPERTY_135',
+  } as const
 
-      const obs = parts.join(' | ')
+  /**
+   * Cria o próximo Número de Ordem de Compra na lista #35.
+   *
+   * A sequência sai dos itens mais recentes. Dois cadastros no mesmo instante —
+   * pelo app ou à mão na lista — podem pegar o mesmo número: o Bitrix não trava.
+   */
+  static async createOcNumber(dados: {
+    cliente: string; proposta: string; observacao: string
+  }): Promise<{ number: string; elementId: number }> {
+    const L = BitrixService.OC_LIST
+    const recentes: any = await bPost('/lists.element.get.json', {
+      IBLOCK_TYPE_ID: 'lists', IBLOCK_ID: L.id, ELEMENT_ORDER: { ID: 'DESC' },
+    })
+    const nomes = (Array.isArray(recentes?.result) ? recentes.result : [])
+      .map((e: any) => String(e?.NAME ?? ''))
+    const hoje = new Date()
+    const number = proximoNumeroOc(nomes, hoje.getFullYear())
+    const dd = String(hoje.getDate()).padStart(2, '0')
+    const mm = String(hoje.getMonth() + 1).padStart(2, '0')
 
-      await bPost('/crm.item.update.json', {
-        entityTypeId: ENTITY_TYPE_ID,
-        id: deal.id,
-        fields: { ufCrm3OmieNumerosOrdens: obs },
-      }).catch(() => null)
-
-      return { success: true }
-    } catch {
-      return { success: false }
-    }
+    const criado: any = await bPost('/lists.element.add.json', {
+      IBLOCK_TYPE_ID: 'lists', IBLOCK_ID: L.id,
+      // Obrigatório na API, embora os itens cadastrados à mão não tenham código.
+      ELEMENT_CODE: `oc-${number.replace('/', '-')}-${Date.now()}`,
+      fields: {
+        NAME: number,
+        // Mesmo formato que a lista devolve nos itens criados à mão.
+        ACTIVE_FROM: `${dd}/${mm}/${hoje.getFullYear()} 00:00:00`,
+        [L.cliente]: dados.cliente,
+        [L.proposta]: dados.proposta,
+        [L.observacao]: dados.observacao,
+      },
+    })
+    const elementId = Number(criado?.result)
+    if (!elementId) throw new Error(`Bitrix não devolveu o item criado para a OC ${number}.`)
+    return { number, elementId }
   }
 
   /**

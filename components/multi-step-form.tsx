@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { BusinessTab } from "./form-tabs/business-tab"
 import { NotesTab } from "./form-tabs/notes-tab"
+import { OcNumbersTab } from "./form-tabs/oc-numbers-tab"
 import { SupplierGroupsTab } from "./form-tabs/supplier-groups-tab"
 import { CustomersTab } from "./form-tabs/customers-tab"
 import { generateDealPDFs } from "@/lib/generate-pdf"
@@ -91,6 +92,9 @@ const supplierGroupSchema = z.object({
   freightValue: z.number().min(0).default(0),
   supplier: companySchema,
   products: z.array(productSchema),
+  // Número de Ordem de Compra desta OC na lista #35 do Bitrix, ex. "9178/26".
+  ocNumber:    z.string().optional(),
+  ocElementId: z.number().optional(),
 })
 
 const productAllocationSchema = z.object({
@@ -135,6 +139,9 @@ const serviceCustomerSchema = z.object({
     purchaseOrder: z.string().optional(),
   }),
   items: z.array(serviceItemSchema).min(1, "Adicione pelo menos um serviço"),
+  // Número de Ordem de Compra da OS de serviço Interatell (lista #35 do Bitrix).
+  ocNumber:    z.string().optional(),
+  ocElementId: z.number().optional(),
 })
 
 const formSchema = z.object({
@@ -236,6 +243,7 @@ const TABS = [
   { id: "suppliers",  label: "Fornecedores/Produtos" },
   { id: "customers",  label: "Clientes" },
   { id: "notes",      label: "Observações" },
+  { id: "ocNumbers",  label: "Nº Ordem de Compra" },
 ]
 
 /**
@@ -249,6 +257,7 @@ function buildTabs(hasInteratellService: boolean, onlyInteratellService = false)
       TABS.find(t => t.id === 'business')!,
       { id: 'serviceCustomers', label: 'Cliente Serviço' },
       TABS.find(t => t.id === 'notes')!,
+      TABS.find(t => t.id === 'ocNumbers')!,
     ]
   }
   if (!hasInteratellService) return TABS
@@ -818,6 +827,7 @@ export function MultiStepForm({
               <TabsContent value="serviceCustomers"><ServiceCustomersTab form={form} /></TabsContent>
             )}
             <TabsContent value="notes"><NotesTab form={form} /></TabsContent>
+            <TabsContent value="ocNumbers"><OcNumbersTab form={form} /></TabsContent>
           </div>
         </Tabs>
 
