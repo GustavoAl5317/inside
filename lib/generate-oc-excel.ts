@@ -128,6 +128,40 @@ function itensDoPar(group: any, customer: any) {
 }
 
 /**
+ * Servico Interatell nao tem fornecedor: e da Interatell para o cliente. Na
+ * planilha o bloco do fornecedor sai com a propria Interatell Barueri, que e por
+ * onde esse servico e sempre faturado.
+ */
+function grupoServicoInteratell() {
+  const itl = companyForBranch('barueri')
+  return {
+    branch: 'barueri',
+    supplier: {
+      name: itl.label, cnpj: formatCNPJ(itl.cnpj), stateRegistration: itl.stateRegistration,
+      zipCode: formatZipCode(itl.zipCode), city: itl.city, state: itl.state,
+      neighborhood: itl.neighborhood, address: itl.address, number: itl.number,
+      complement: itl.complement, contactName: itl.contactName, phone: itl.phone, email: itl.email,
+    },
+  }
+}
+
+/** Codigo do servico Interatell no Omie (SERVICO_MAP em api/omie/send). */
+const CODIGO_SERVICO_INTERATELL = 'SRV00001'
+/** Familia "Outros", a mesma que o formulario usa para servico (SRV_FAMILY_CODE). */
+const FAMILIA_SERVICO = '2164790403'
+
+/** Itens do servico Interatell no formato da tabela de itens — sem custo de compra. */
+function itensDoServico(entry: any) {
+  return (entry?.items ?? [])
+    .filter((i: any) => txt(i?.description) && Number(i?.quantity) > 0)
+    .map((i: any) => ({
+      sku: CODIGO_SERVICO_INTERATELL, partnumber: '', description: txt(i.description),
+      nature: 'SVI', ncm: '0000.00.00', family: FAMILIA_SERVICO, cfop: '',
+      quantity: Number(i.quantity), unitCost: 0, unitSale: Number(i.unitSale ?? 0),
+    }))
+}
+
+/**
  * Preenche uma aba ja formatada com os dados de um par fornecedor x cliente.
  *
  * As referencias seguem o modelo OC_JUN_25 (templates/ordem-de-compra.xlsx), que
@@ -135,11 +169,9 @@ function itensDoPar(group: any, customer: any) {
  * anda uma coluna em relacao ao modelo antigo.
  */
 function preencheAba(
-  ws: ExcelJS.Worksheet, values: any, group: any, entry: any,
+  ws: ExcelJS.Worksheet, values: any, group: any, entry: any, itens: any[],
   condicoes: Map<string, string>, gerenteDeContas: string,
 ) {
-  const itens = itensDoPar(group, entry)
-
   const business = values?.business ?? {}
   const forn = group?.supplier ?? {}
   const cli = entry?.customer ?? {}
@@ -286,8 +318,10 @@ function nomeAba(fornecedor: string, cliente: string, indice: number, usados: Se
 }
 
 /**
- * Uma aba por par fornecedor x cliente que tenha item alocado, tudo num arquivo
- * so. A coluna NATUREZA distingue HW, SW, LC, ST e SRV dentro da mesma aba.
+ * Uma aba por par fornecedor x cliente que tenha item alocado e uma por cliente de
+ * servico Interatell, tudo num arquivo so. A coluna NATUREZA distingue as
+ * naturezas dentro da mesma aba. Sem a aba de servico, negocio so de servico nao
+ * gerava planilha nenhuma.
  *
  * O modelo tem uma aba de Ordem de Compra so, entao as demais sao clonadas a
  * partir de um retrato dela tirado antes de qualquer preenchimento. O clone leva
@@ -295,11 +329,16 @@ function nomeAba(fornecedor: string, cliente: string, indice: number, usados: Se
  * reaplicadas na mao.
  */
 export async function generateOcExcelFiles(values: any): Promise<OcExcelFile[]> {
-  const pares: Array<{ group: any; entry: any }> = []
+  const pares: Array<{ group: any; entry: any; itens: any[]; fornecedor: string }> = []
   for (const group of (values?.supplierGroups ?? [])) {
     for (const entry of (values?.customers ?? [])) {
-      if (itensDoPar(group, entry).length) pares.push({ group, entry })
+      const itens = itensDoPar(group, entry)
+      if (itens.length) pares.push({ group, entry, itens, fornecedor: txt(group?.supplier?.name) })
     }
+  }
+  for (const entry of (values?.serviceCustomers ?? [])) {
+    const itens = itensDoServico(entry)
+    if (itens.length) pares.push({ group: grupoServicoInteratell(), entry, itens, fornecedor: 'SERVIÇO' })
   }
   if (!pares.length) return []
 
@@ -313,7 +352,7 @@ export async function generateOcExcelFiles(values: any): Promise<OcExcelFile[]> 
   const merges = [...(modelo.model.merges ?? [])]
 
   const usados = new Set<string>()
-  pares.forEach(({ group, entry }, i) => {
+  pares.forEach(({ group, entry, itens, fornecedor }, i) => {
     let ws = modelo
     if (i > 0) {
       ws = wb.addWorksheet(`__oc${i}`)
@@ -322,14 +361,14 @@ export async function generateOcExcelFiles(values: any): Promise<OcExcelFile[]> 
         try { ws.mergeCells(m) } catch { /* mesclagem ja existente */ }
       }
     }
-    ws.name = nomeAba(txt(group?.supplier?.name), txt(entry?.customer?.name), i, usados)
-    preencheAba(ws, values, group, entry, condicoes, gerente)
+    ws.name = nomeAba(fornecedor, txt(entry?.customer?.name), i, usados)
+    preencheAba(ws, values, group, entry, itens, condicoes, gerente)
   })
 
   const business = values?.business ?? {}
   // Com uma aba so, o fornecedor ainda cabe no nome do arquivo; com varias ele
   // deixa de identificar o conteudo.
-  const fornecedor = pares.length === 1 ? txt(pares[0].group?.supplier?.name) : ''
+  const fornecedor = pares.length === 1 ? pares[0].fornecedor : ''
   const buffer = Buffer.from(await wb.xlsx.writeBuffer())
   return [{
     filename: nomeArquivo(txt(business.commercialProposal), txt(business.name), fornecedor),

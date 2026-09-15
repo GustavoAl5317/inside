@@ -664,16 +664,11 @@ export function MultiStepForm({
         setCompleted(tabs.map(t => t.id))
         // O download automatico do backlog e a planilha no modelo da Interatell;
         // o PDF continua disponivel no botao "Baixar PDF".
-        // Sem produto não há Ordem de Compra — a planilha seria só um aviso vazio.
-        if (values.business.onlyInteratellService) {
-          toast.success("Rascunho salvo!")
-          return
-        }
         toast.success("Rascunho salvo! Gerando planilha...")
         try {
           const n = await downloadOcExcels(values)
           if (n === 0) {
-            toast.warning("Rascunho salvo, mas nenhuma planilha foi gerada — nenhum produto alocado a cliente.")
+            toast.warning("Rascunho salvo, mas nenhuma planilha foi gerada — nenhum produto alocado a cliente nem serviço Interatell com item.")
           } else {
             toast.success(n > 1 ? `${n} planilhas baixadas (uma por fornecedor/cliente)!` : "Planilha baixada com sucesso!")
           }
