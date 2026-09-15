@@ -575,6 +575,16 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
       }
     }
 
+    // Etapas puladas: num reenvio o fornecedor, o cliente e os produtos já
+    // existem no Omie, então "Criando …" nunca gera log e a etapa ficava cinza,
+    // como se não tivesse rodado. Toda etapa anterior à mais adiantada já tocada
+    // conta como concluída; ao terminar com sucesso, todas contam.
+    const maisAdiantada = Math.max(-1, ...touchedOrder.map(k => stepOrder.indexOf(k)));
+    stepOrder.forEach((k, i) => {
+      if (failed.has(k) || touched.has(k)) return;
+      if (finishedOk || i < maisAdiantada) completed.add(k);
+    });
+
     // Determinar step atual
     let current: StepKey | '' = '';
     if (!finishedOk && touchedOrder.length > 0) {
