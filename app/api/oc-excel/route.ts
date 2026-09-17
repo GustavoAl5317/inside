@@ -4,9 +4,8 @@ import { generateOcExcelFiles } from '@/lib/generate-oc-excel'
 /**
  * Gera a planilha de Ordem de Compra do negócio.
  *
- * Sai um arquivo só, com uma aba por par fornecedor × cliente. A resposta segue
- * sendo uma lista em base64 — o front já itera sobre ela, e a lista deixa espaço
- * para voltar a quebrar em vários arquivos se algum dia for preciso.
+ * Sai um arquivo por distribuidor (uma OC), com uma aba por cliente, e um para o
+ * serviço Interatell. A resposta é uma lista em base64 e o front baixa um por um.
  */
 export async function POST(req: NextRequest) {
   try {

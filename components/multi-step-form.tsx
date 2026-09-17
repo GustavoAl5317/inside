@@ -670,7 +670,7 @@ export function MultiStepForm({
           if (n === 0) {
             toast.warning("Rascunho salvo, mas nenhuma planilha foi gerada — nenhum produto alocado a cliente nem serviço Interatell com item.")
           } else {
-            toast.success(n > 1 ? `${n} planilhas baixadas (uma por fornecedor/cliente)!` : "Planilha baixada com sucesso!")
+            toast.success(n > 1 ? `${n} planilhas baixadas (uma por distribuidor)!` : "Planilha baixada com sucesso!")
           }
         } catch (xlsErr: any) {
           toast.error("Rascunho salvo, mas houve erro ao gerar a planilha: " + (xlsErr?.message || ""))

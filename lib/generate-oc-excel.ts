@@ -12,9 +12,9 @@ import { BitrixService } from './bitrix-service'
  * as macros removidas: cores, bordas, mesclagens, larguras, o logo e as formulas
  * de calculo continuam iguais. O codigo so preenche celulas.
  *
- * O modelo tem UM bloco de fornecedor e UM de cliente, entao sai um arquivo por
- * par fornecedor x cliente. As formulas de VLOOKUP das abas ocultas sao
- * substituidas por valores: o app ja tem esses dados em memoria.
+ * O modelo tem UM bloco de fornecedor e UM de cliente, entao cada aba e um par
+ * fornecedor x cliente. As formulas de VLOOKUP das abas ocultas sao substituidas
+ * por valores: o app ja tem esses dados em memoria.
  */
 
 const TEMPLATE = path.join(process.cwd(), 'templates', 'ordem-de-compra.xlsx')
@@ -298,16 +298,17 @@ async function gerenteDoNegocio(values: any): Promise<string> {
 }
 
 /**
- * Nome da aba: fornecedor x cliente, no limite de 31 caracteres do Excel.
+ * Nome da aba: o cliente (filial) que recebe a compra, no limite de 31
+ * caracteres do Excel. O distribuidor ja identifica o arquivo.
  *
  * O Excel tambem recusa : \ / ? * [ ] no nome e nao aceita duas abas iguais,
  * entao nomes repetidos ganham um sufixo numerico.
  */
-function nomeAba(fornecedor: string, cliente: string, indice: number, usados: Set<string>): string {
+function nomeAba(cliente: string, indice: number, usados: Set<string>): string {
   const limpa = (v: string, max: number) =>
     v.replace(/[\\/?*\[\]:]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max).trim()
 
-  const base = limpa(`${limpa(fornecedor, 14)} x ${limpa(cliente, 12)}`, 31) || `OC ${indice + 1}`
+  const base = limpa(cliente, 31) || `OC ${indice + 1}`
   let nome = base
   for (let n = 2; usados.has(nome.toLowerCase()); n++) {
     const sufixo = ` (${n})`
@@ -318,60 +319,77 @@ function nomeAba(fornecedor: string, cliente: string, indice: number, usados: Se
 }
 
 /**
- * Uma aba por par fornecedor x cliente que tenha item alocado e uma por cliente de
- * servico Interatell, tudo num arquivo so. A coluna NATUREZA distingue as
- * naturezas dentro da mesma aba. Sem a aba de servico, negocio so de servico nao
- * gerava planilha nenhuma.
+ * Um arquivo por distribuidor (uma OC) e, dentro dele, uma aba por cliente que
+ * recebe o que se compra dele. Servico Interatell nao tem distribuidor: sai num
+ * arquivo proprio, com uma aba por cliente de servico.
  *
- * O modelo tem uma aba de Ordem de Compra so, entao as demais sao clonadas a
- * partir de um retrato dela tirado antes de qualquer preenchimento. O clone leva
- * estilos, larguras, formulas e o logo; as mesclagens nao vao no model e sao
- * reaplicadas na mao.
+ * Cada arquivo parte do modelo; as abas alem da primeira sao clonadas de um
+ * retrato dela tirado antes de qualquer preenchimento. O clone leva estilos,
+ * larguras, formulas e o logo; as mesclagens nao vao no model e sao reaplicadas
+ * na mao. Os arquivos sao montados um de cada vez, para nao manter varios
+ * workbooks em memoria ao mesmo tempo.
  */
 export async function generateOcExcelFiles(values: any): Promise<OcExcelFile[]> {
-  const pares: Array<{ group: any; entry: any; itens: any[]; fornecedor: string }> = []
+  type Aba = { group: any; entry: any; itens: any[] }
+  const arquivos: Array<{ fornecedor: string; abas: Aba[] }> = []
+
   for (const group of (values?.supplierGroups ?? [])) {
+    const abas: Aba[] = []
     for (const entry of (values?.customers ?? [])) {
       const itens = itensDoPar(group, entry)
-      if (itens.length) pares.push({ group, entry, itens, fornecedor: txt(group?.supplier?.name) })
+      if (itens.length) abas.push({ group, entry, itens })
     }
+    if (abas.length) arquivos.push({ fornecedor: txt(group?.supplier?.name), abas })
   }
+
+  const servico = grupoServicoInteratell()
+  const abasServico: Aba[] = []
   for (const entry of (values?.serviceCustomers ?? [])) {
     const itens = itensDoServico(entry)
-    if (itens.length) pares.push({ group: grupoServicoInteratell(), entry, itens, fornecedor: 'SERVIÇO' })
+    if (itens.length) abasServico.push({ group: servico, entry, itens })
   }
-  if (!pares.length) return []
+  if (abasServico.length) arquivos.push({ fornecedor: 'SERVIÇO INTERATELL', abas: abasServico })
+
+  if (!arquivos.length) return []
 
   const [condicoes, gerente] = await Promise.all([mapaCondicoes(), gerenteDoNegocio(values)])
-  const wb = new ExcelJS.Workbook()
-  await wb.xlsx.readFile(TEMPLATE)
-  const modelo = wb.getWorksheet(ABA)
-  if (!modelo) throw new Error(`Aba "${ABA}" não encontrada no modelo`)
-
-  const limpo = structuredClone(modelo.model)
-  const merges = [...(modelo.model.merges ?? [])]
-
-  const usados = new Set<string>()
-  pares.forEach(({ group, entry, itens, fornecedor }, i) => {
-    let ws = modelo
-    if (i > 0) {
-      ws = wb.addWorksheet(`__oc${i}`)
-      ws.model = { ...structuredClone(limpo), name: ws.name, id: ws.id } as any
-      for (const m of merges) {
-        try { ws.mergeCells(m) } catch { /* mesclagem ja existente */ }
-      }
-    }
-    ws.name = nomeAba(fornecedor, txt(entry?.customer?.name), i, usados)
-    preencheAba(ws, values, group, entry, itens, condicoes, gerente)
-  })
-
   const business = values?.business ?? {}
-  // Com uma aba so, o fornecedor ainda cabe no nome do arquivo; com varias ele
-  // deixa de identificar o conteudo.
-  const fornecedor = pares.length === 1 ? pares[0].fornecedor : ''
-  const buffer = Buffer.from(await wb.xlsx.writeBuffer())
-  return [{
-    filename: nomeArquivo(txt(business.commercialProposal), txt(business.name), fornecedor),
-    buffer,
-  }]
+  const saida: OcExcelFile[] = []
+  const nomesUsados = new Set<string>()
+
+  for (const { fornecedor, abas } of arquivos) {
+    const wb = new ExcelJS.Workbook()
+    await wb.xlsx.readFile(TEMPLATE)
+    const modelo = wb.getWorksheet(ABA)
+    if (!modelo) throw new Error(`Aba "${ABA}" não encontrada no modelo`)
+
+    const limpo = structuredClone(modelo.model)
+    const merges = [...(modelo.model.merges ?? [])]
+
+    const usados = new Set<string>()
+    abas.forEach(({ group, entry, itens }, i) => {
+      let ws = modelo
+      if (i > 0) {
+        ws = wb.addWorksheet(`__oc${i}`)
+        ws.model = { ...structuredClone(limpo), name: ws.name, id: ws.id } as any
+        for (const m of merges) {
+          try { ws.mergeCells(m) } catch { /* mesclagem ja existente */ }
+        }
+      }
+      ws.name = nomeAba(txt(entry?.customer?.name), i, usados)
+      preencheAba(ws, values, group, entry, itens, condicoes, gerente)
+    })
+
+    // O mesmo distribuidor faturado por Barueri e por ES sao duas OCs, e dois
+    // arquivos com o mesmo nome: o navegador sobrescreveria um com o outro.
+    const base = nomeArquivo(txt(business.commercialProposal), txt(business.name), fornecedor)
+    let filename = base
+    for (let n = 2; nomesUsados.has(filename.toLowerCase()); n++) {
+      filename = base.replace(/\.xlsx$/, ` (${n}).xlsx`)
+    }
+    nomesUsados.add(filename.toLowerCase())
+
+    saida.push({ filename, buffer: Buffer.from(await wb.xlsx.writeBuffer()) })
+  }
+  return saida
 }
