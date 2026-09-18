@@ -16,6 +16,7 @@ import { addOmieRawLog } from '@/lib/unified-log-service'
 import { BitrixService } from '@/lib/bitrix-service'
 import { descricaoOmie } from '@/lib/omie-descricao'
 import { naturezaInterna } from '@/lib/oc-numbers'
+import { freioAntes, freioDepois } from '@/lib/omie-freio'
 import {
   paymentConditionMatches,
   resolveDefaultOmiePaymentCode,
@@ -245,6 +246,10 @@ async function omieCall(interatellCnpj: string, url: string, call: string, param
   await addOmieRawLog({ transactionId: dealId, step: step as any, level: 'info', message: `${step}: ${call}`, runId: ctx().runId,
     raw: { endpoint: url, httpStatus: 0, requestBodyRaw: JSON.stringify(body), responseBodyRaw: '' } }).catch(() => {})
 
+  // Para antes de o Omie bloquear a chave, ou enquanto ele ainda estiver
+  // bloqueando: ver lib/omie-freio. Lança e interrompe o envio com a mensagem.
+  freioAntes(app_key, call)
+
   await new Promise(r => setTimeout(r, Number(process.env.OMIE_SLEEP_MS ?? 260)))
 
   let httpStatus = 0, responseText = ''
@@ -255,6 +260,7 @@ async function omieCall(interatellCnpj: string, url: string, call: string, param
     httpStatus = resp.status
     responseText = await resp.text()
     const data = responseText ? JSON.parse(responseText) : null
+    freioDepois(app_key, call, httpStatus, data?.faultstring)
 
     // Passos de verificação (check*) retornam 500 com "não cadastrado" quando o pedido
     // simplesmente ainda não existe — isso é esperado e não é um erro de fato.
@@ -296,6 +302,10 @@ type RunCtx = {
   fornecedorCache: Map<string, number>
   produtoCache: Map<string, number | undefined>
   servicoCache: Map<string, ServicoInfo>
+  /** Produtos que já existem no Omie, por CNPJ da filial: ver mapaProdutosExistentes. */
+  produtosExistentes: Map<string, Map<string, any>>
+  /** Primeiro envio do negócio: não há OC/OV/OS dele no Omie para procurar. */
+  pedidosNovos: boolean
 }
 const runStore = new AsyncLocalStorage<RunCtx>()
 const newRunCtx = (runId: string | null): RunCtx => ({
@@ -304,6 +314,8 @@ const newRunCtx = (runId: string | null): RunCtx => ({
   fornecedorCache: new Map(),
   produtoCache: new Map(),
   servicoCache: new Map(),
+  produtosExistentes: new Map(),
+  pedidosNovos: false,
 })
 const ctx = (): RunCtx => runStore.getStore() ?? newRunCtx(null)
 
@@ -478,6 +490,35 @@ async function alinhaProduto(
   }
 }
 
+/**
+ * Produtos que já existem no Omie, numa chamada só por filial.
+ *
+ * Consultar produto por produto (ConsultarProduto) dá erro "não cadastrado" para
+ * cada um que ainda não existe, e o Omie bloqueia a chave na 10ª resposta com
+ * erro no mesmo método. Com os SKUs novos do catálogo quase todo produto é novo:
+ * pelo SKU e depois pelo partnumber eram 2 erros por produto, e 5 produtos já
+ * bloqueavam. ListarProdutos com a lista de códigos devolve só os que existem,
+ * sem erro; se nenhum existir, é um erro só.
+ */
+async function mapaProdutosExistentes(interatellCnpj: string, codigos: string[], dealId: number): Promise<Map<string, any>> {
+  const mapa = new Map<string, any>()
+  const unicos = [...new Set(codigos.map(c => String(c ?? '').trim()).filter(Boolean))]
+  for (let i = 0; i < unicos.length; i += 50) {
+    const res = await omieCall(interatellCnpj, OMIE_URL.PRODUTOS, 'ListarProdutos', {
+      pagina: 1, registros_por_pagina: 50, apenas_importado_api: 'N', filtrar_apenas_omiepdv: 'N',
+      produtosPorCodigo: unicos.slice(i, i + 50).map(codigo => ({ codigo })),
+    }, dealId, 'checkProduto')
+    if (res?.faultstring && isOmieRateLimitFault(res.faultstring)) {
+      throw new Error(`Omie temporariamente bloqueado por excesso de chamadas — aguarde alguns minutos e reenvie. (${res.faultstring})`)
+    }
+    for (const p of res?.produto_servico_cadastro ?? []) {
+      const cod = String(p?.codigo ?? '').trim().toUpperCase()
+      if (cod && p?.codigo_produto) mapa.set(cod, p)
+    }
+  }
+  return mapa
+}
+
 async function ensureProduto(interatellCnpj: string, item: any, dealId: number): Promise<number | undefined> {
   if (normalizeNatureza(item.nature) === 'SRV') return undefined
   const sku = codigoProduto(item)
@@ -487,21 +528,13 @@ async function ensureProduto(interatellCnpj: string, item: any, dealId: number):
   const cache = ctx().produtoCache
   if (cache.has(key)) return cache.get(key)
 
-  const check = await omieCall(interatellCnpj, OMIE_URL.PRODUTOS, 'ConsultarProduto', { codigo: sku }, dealId, 'checkProduto')
-  if (check?.faultstring && isOmieRateLimitFault(check.faultstring)) {
-    throw new Error(`Omie temporariamente bloqueado por excesso de chamadas — aguarde alguns minutos e reenvie. (${check.faultstring})`)
-  }
-  let achado: any = check?.codigo_produto ? check : undefined
-
+  // Existência vem da consulta em lote feita antes do laço de produtos.
+  const existentes = ctx().produtosExistentes.get(digits(interatellCnpj))
+    ?? await mapaProdutosExistentes(interatellCnpj, [sku, partnumber], dealId)
   // Produtos cadastrados antes de o código passar a ser o SKU estão no Omie com
   // o partnumber como código. Reaproveita esse cadastro em vez de duplicar.
-  if (!achado && partnumber && partnumber !== sku) {
-    const legado = await omieCall(interatellCnpj, OMIE_URL.PRODUTOS, 'ConsultarProduto', { codigo: partnumber }, dealId, 'checkProduto')
-    if (legado?.faultstring && isOmieRateLimitFault(legado.faultstring)) {
-      throw new Error(`Omie temporariamente bloqueado por excesso de chamadas — aguarde alguns minutos e reenvie. (${legado.faultstring})`)
-    }
-    if (legado?.codigo_produto) achado = legado
-  }
+  const achado: any = existentes.get(sku.toUpperCase())
+    ?? (partnumber && partnumber !== sku ? existentes.get(partnumber.toUpperCase()) : undefined)
 
   let cod: number | undefined = achado?.codigo_produto
   if (achado) await alinhaProduto(interatellCnpj, achado, sku, descricaoProduto(item), dealId)
@@ -601,6 +634,7 @@ function parseOCConsultResponse(existing: any, intCode: string) {
 }
 
 async function findExistingOC(interatellCnpj: string, dealId: number, baseCode: string, retryCount: number) {
+  if (ctx().pedidosNovos) return null
   for (const cCodIntPed of integrationLookupCodes(baseCode, retryCount)) {
     const existing = await omieCall(interatellCnpj, OMIE_URL.PEDIDOS_COMPRA, 'ConsultarPedCompra',
       { cCodIntPed }, dealId, 'checkOC')
@@ -611,6 +645,7 @@ async function findExistingOC(interatellCnpj: string, dealId: number, baseCode: 
 }
 
 async function findExistingOV(interatellCnpj: string, dealId: number, baseCode: string, retryCount: number, legacyBase?: string) {
+  if (ctx().pedidosNovos) return null
   // legacyBase: codigo usado antes da OV passar a ser por filial. Sem ele, um
   // negocio ja enviado criaria uma OV nova em vez de atualizar a existente.
   const codigos = [
@@ -630,6 +665,7 @@ async function findExistingOV(interatellCnpj: string, dealId: number, baseCode: 
 }
 
 async function findExistingOS(interatellCnpj: string, dealId: number, baseCode: string, retryCount: number) {
+  if (ctx().pedidosNovos) return null
   for (const cCodIntOS of integrationLookupCodes(baseCode, retryCount)) {
     const existing = await omieCall(interatellCnpj, OMIE_URL.ORDEM_SERVICO, 'ConsultarOS',
       { cCodIntOS }, dealId, 'checkOS')
@@ -975,6 +1011,10 @@ async function processDeal(body: any, dealId: number) {
     const isUpdate = body.update === true || deal.status === 'sent'
     const alteracoes = Array.isArray(body.changes) ? body.changes : []
     const upsertOpts = { isUpdate, retryCount: isUpdate ? 0 : retryCount }
+    // Primeiro envio de verdade — nunca deu certo nem falhou antes: não existe
+    // OC/OV/OS deste negócio no Omie. Procurar dava um erro "não cadastrado" por
+    // pedido (dois por OV, com o código antigo), e erro conta para o bloqueio.
+    ctx().pedidosNovos = !isUpdate && retryCount === 0 && !deal.omie_response && !deal.error_message
     // fallbackCnpj: backward compat for old payloads that stored a single interatell.cnpj
     const fallbackCnpj = digits(interatell?.cnpj ?? '')
 
@@ -1008,7 +1048,23 @@ async function processDeal(body: any, dealId: number) {
       await ensureCliente(CNPJ_BARUERI, entry.customer, dealId)
     }
 
-    // 2) Garantir produtos no Omie (por grupo de fornecedor, na filial correta)
+    // 2) Garantir produtos no Omie (por grupo de fornecedor, na filial correta).
+    //    Antes, uma consulta em lote por filial: ver mapaProdutosExistentes.
+    const codigosPorFilial = new Map<string, string[]>()
+    for (const group of supplierGroups) {
+      const branchCnpj = getBranchCnpj(group.branch, fallbackCnpj)
+      const lista = codigosPorFilial.get(branchCnpj) ?? []
+      for (const p of group.products ?? []) {
+        if (normalizeNatureza(p.nature) === 'SRV') continue
+        lista.push(codigoProduto(p), String(p.partnumber ?? '').trim())
+      }
+      codigosPorFilial.set(branchCnpj, lista)
+    }
+    for (const [branchCnpj, codigos] of codigosPorFilial) {
+      if (!codigos.some(Boolean)) continue
+      ctx().produtosExistentes.set(digits(branchCnpj), await mapaProdutosExistentes(branchCnpj, codigos, dealId))
+    }
+
     for (const group of supplierGroups) {
       const branchCnpj = getBranchCnpj(group.branch, fallbackCnpj)
       for (const product of group.products ?? []) {
