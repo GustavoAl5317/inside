@@ -7,29 +7,27 @@
  * erro durante o bloqueio o prorroga. "Não cadastrado" e "Não existem registros"
  * contam como erro: o Omie responde com HTTP 500.
  *
- * O freio conta os erros por app key + método e para o envio antes do 10º, com
- * uma mensagem clara, em vez de seguir até o bloqueio. Se o Omie já bloqueou, não
- * chama aquele método até o prazo que ele informou — chamar antes só estende.
+ * O freio conta os erros por app key + método e, perto do limite, ESPERA antes da
+ * próxima chamada em vez de interromper — o envio termina inteiro, só mais
+ * devagar. Se o Omie já bloqueou, espera o prazo que ele informou, porque chamar
+ * antes só estende o bloqueio.
  *
  * O estado fica na memória do processo (o pm2 roda um só) e é compartilhado entre
  * envios, porque o limite do Omie é por chave, não por negócio. Ele não enxerga
- * erros de outros sistemas que usem a mesma chave; por isso para com folga.
+ * erros de outros sistemas que usem a mesma chave; por isso segura com folga.
  */
 
-/** O Omie bloqueia no 10º erro; o freio para no 8º. */
+/** O Omie bloqueia no 10º erro; o freio segura no 8º. */
 const LIMITE_ERROS = 8
 /** Janela de contagem. A do Omie não é documentada; 30 min é o lado seguro. */
 const JANELA_MS = 30 * 60_000
+/** Folga depois do prazo, para não bater no Omie um instante antes da liberação. */
+const MARGEM_MS = 5_000
+/** Acima disso o Omie segue bloqueando por outro motivo; o envio desiste e avisa. */
+const ESPERA_MAXIMA_MS = 2 * 60 * 60_000
 
 const erros = new Map<string, number[]>()
 const bloqueadoAte = new Map<string, number>()
-
-export class OmieFreioError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'OmieFreioError'
-  }
-}
 
 const chaveDe = (appKey: string, metodo: string) => `${appKey}:${metodo}`
 
@@ -38,25 +36,61 @@ const emMinutos = (ms: number) => {
   return `${min} minuto${min > 1 ? 's' : ''}`
 }
 
-/** Antes de cada requisição. Lança se o método está bloqueado ou perto do limite. */
-export function freioAntes(appKey: string, metodo: string, agora = Date.now()): void {
+/** Quanto esperar antes da próxima chamada a este método — null quando pode seguir. */
+export function esperaNecessaria(
+  appKey: string, metodo: string, agora = Date.now(),
+): { ms: number; motivo: string } | null {
   const k = chaveDe(appKey, metodo)
 
   const ate = bloqueadoAte.get(k) ?? 0
   if (ate > agora) {
-    throw new OmieFreioError(
-      `O Omie bloqueou ${metodo} por excesso de erros. Aguarde ${emMinutos(ate - agora)} e reenvie — ` +
-      `tentar antes só estende o bloqueio.`,
-    )
+    const ms = ate - agora + MARGEM_MS
+    return {
+      ms,
+      motivo: `O Omie bloqueou ${metodo} por excesso de erros. Aguardando ${emMinutos(ms)} para continuar ` +
+        `o envio sem estender o bloqueio.`,
+    }
   }
 
   const recentes = (erros.get(k) ?? []).filter(t => agora - t < JANELA_MS)
   erros.set(k, recentes)
   if (recentes.length >= LIMITE_ERROS) {
-    throw new OmieFreioError(
-      `Envio pausado para o Omie não bloquear: ${recentes.length} respostas com erro em ${metodo} nos ` +
-      `últimos 30 minutos, e o Omie bloqueia na 10ª. Reenvie em ${emMinutos(recentes[0] + JANELA_MS - agora)}.`,
-    )
+    const ms = recentes[0] + JANELA_MS - agora + MARGEM_MS
+    return {
+      ms,
+      motivo: `${recentes.length} respostas com erro em ${metodo} nos últimos 30 minutos (o Omie bloqueia na ` +
+        `10ª). Aguardando ${emMinutos(ms)} antes da próxima para o Omie não bloquear — o envio continua depois.`,
+    }
+  }
+
+  return null
+}
+
+/**
+ * Antes de cada requisição: espera o que for preciso e só então libera. Avisa o
+ * motivo a cada espera (vai para o log que a tela de processamento mostra).
+ */
+export async function aguardaFreio(
+  appKey: string,
+  metodo: string,
+  avisa?: (motivo: string) => unknown,
+  dorme: (ms: number) => Promise<unknown> = ms => new Promise(r => setTimeout(r, ms)),
+  relogio: () => number = Date.now,
+): Promise<void> {
+  let esperado = 0
+  for (;;) {
+    const espera = esperaNecessaria(appKey, metodo, relogio())
+    if (!espera) return
+    if (esperado + espera.ms > ESPERA_MAXIMA_MS) {
+      throw new Error(
+        `O Omie continua bloqueando ${metodo}` +
+        (esperado ? ` depois de ${emMinutos(esperado)} de espera` : ` por mais de 2 horas`) +
+        `. Envio interrompido — reenvie mais tarde.`,
+      )
+    }
+    await avisa?.(espera.motivo)
+    await dorme(espera.ms)
+    esperado += espera.ms
   }
 }
 

@@ -705,7 +705,7 @@ export function MultiStepForm({
               toast.error(r.error || "Erro ao enviar ao Omie.")
               return
             }
-            toast.success("Enviado ao Omie!")
+            toast.success("Envio ao Omie iniciado — acompanhe o andamento nesta janela.")
           })
           .catch(() => toast.error("Erro inesperado ao enviar ao Omie."))
         return
@@ -745,7 +745,7 @@ export function MultiStepForm({
               toast.error(r.error || "Erro ao atualizar no Omie.")
               return
             }
-            toast.success("Pedidos atualizados no Omie!")
+            toast.success("Atualização no Omie iniciada — acompanhe o andamento nesta janela.")
           })
           .catch(() => toast.error("Erro inesperado ao atualizar no Omie."))
         return

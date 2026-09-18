@@ -4,7 +4,8 @@ import { createTransaction } from "./db"
 import { sql } from "./db"
 import { validateCNPJ, formatZipCode, formatPhoneNumber, normalizeCNPJDigits } from "./utils"
 import { BitrixService } from "./bitrix-service"
-import { camposFinanceirosCard, clientesDoGrupo, naturezaCatalogo, observacaoOc, OBSERVACAO_OS_SERVICO, preservaNumerosOc } from "./oc-numbers"
+import { naturezaCatalogo, preservaNumerosOc } from "./oc-numbers"
+import { garanteNumerosOc } from "./oc-numbers-bitrix"
 import { listOmieStock, compareStockWithCatalog, type CatalogEntry } from './omie-stock'
 import { ProcessHistoryService } from "./process-history-service"
 import { unifiedLogService } from "./unified-log-service"
@@ -1294,39 +1295,6 @@ export async function getProcessHistoryAction(transactionId: number) {
   }
 }
 
-/**
- * Garante um Número de Ordem de Compra (lista #35 do Bitrix) em cada OC e em cada
- * OS de serviço Interatell do negócio. Os já gerados na aba "Nº Ordem de Compra"
- * — ou digitados — ficam como estão. Muta `values`.
- *
- * Um erro não interrompe os demais: o que já foi criado na lista precisa voltar
- * para o negócio, senão fica órfão e o próximo envio cria outro número.
- */
-async function garanteNumerosOc(values: any): Promise<{ criados: number; erros: string[] }> {
-  const proposta = String(values?.business?.commercialProposal ?? '').trim()
-  let criados = 0
-  const erros: string[] = []
-  const cria = async (alvo: any, dados: { cliente: string; observacao: string }) => {
-    try {
-      const r = await BitrixService.createOcNumber({ ...dados, proposta })
-      alvo.ocNumber = r.number
-      alvo.ocElementId = r.elementId
-      criados++
-    } catch (err) {
-      erros.push(err instanceof Error ? err.message : String(err))
-    }
-  }
-  for (const g of values?.supplierGroups ?? []) {
-    if (String(g?.ocNumber ?? '').trim() || !(g?.products ?? []).length) continue
-    await cria(g, { cliente: clientesDoGrupo(values, g), observacao: observacaoOc(g) })
-  }
-  for (const sc of values?.serviceCustomers ?? []) {
-    if (String(sc?.ocNumber ?? '').trim() || !(sc?.items ?? []).length) continue
-    await cria(sc, { cliente: String(sc?.customer?.name ?? '').trim(), observacao: OBSERVACAO_OS_SERVICO })
-  }
-  return { criados, erros }
-}
-
 /** Antes de sobrescrever o payload do negócio: ver preservaNumerosOc. */
 async function preservaNumerosDoBanco(dealId: number, payload: any): Promise<void> {
   const [row] = await sql`SELECT payload FROM deals WHERE id = ${dealId}`
@@ -1379,21 +1347,6 @@ export async function sendApprovedProcessToOmieAction(
       }
     }
 
-    // Número de Ordem de Compra: o que a aba não gerou é criado agora, antes do
-    // envio, para o card sair com "OC 9178/26 - ...". Falha aqui não segura o
-    // envio ao Omie — o card só fica sem o prefixo naquela linha.
-    try {
-      const [row] = await sql`SELECT payload FROM deals WHERE id = ${dealId}`
-      const p = typeof row?.payload === 'string' ? JSON.parse(row.payload) : row?.payload
-      if (p) {
-        const { criados, erros } = await garanteNumerosOc(p)
-        if (criados) await sql`UPDATE deals SET payload = ${JSON.stringify(p)}, updated_at = NOW() WHERE id = ${dealId}`
-        if (erros.length) console.error(`[OC] deal=${dealId} sem Número de Ordem de Compra:`, erros.join(' | '))
-      }
-    } catch (err) {
-      console.error(`[OC] deal=${dealId} erro ao garantir Número de Ordem de Compra:`, err)
-    }
-
     // Chamada INTERNA à própria API: usa loopback, nunca a URL pública (ngrok/Bitrix).
     // A URL pública (NEXT_PUBLIC_APP_URL) depende do túnel ngrok — se ele cai ou troca
     // de endereço, o app chamava a si mesmo por fora e recebia o 404 do ngrok.
@@ -1418,19 +1371,9 @@ export async function sendApprovedProcessToOmieAction(
 
     const responseData = await response.json()
 
-    // Grava os números nos campos "Sistema Financeiro (Omie)" do card do Bitrix.
-    // Best-effort: falha aqui não desfaz o envio, mas fica no log do servidor.
-    try {
-      const [dealRow] = await sql`SELECT payload, bitrix_deal_id FROM deals WHERE id = ${dealId}`
-      const resumo = responseData?.resumo ?? responseData?.data?.resumo
-      if (dealRow?.bitrix_deal_id && resumo) {
-        const payload = typeof dealRow.payload === 'string' ? JSON.parse(dealRow.payload) : dealRow.payload
-        await BitrixService.updateCardFinanceFields(dealRow.bitrix_deal_id, camposFinanceirosCard(payload, resumo))
-      }
-    } catch (err) {
-      console.error(`[Bitrix] deal=${dealId} números do Omie não gravados no card:`, err)
-    }
-
+    // O envio roda em segundo plano (a rota responde 202 na hora): Número de Ordem
+    // de Compra, pedidos e campos do card do Bitrix acontecem lá, e o andamento
+    // aparece na tela de processamento.
     return { success: true, data: responseData }
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) }

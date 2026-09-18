@@ -15,8 +15,9 @@ import { sql } from '@/lib/db'
 import { addOmieRawLog } from '@/lib/unified-log-service'
 import { BitrixService } from '@/lib/bitrix-service'
 import { descricaoOmie } from '@/lib/omie-descricao'
-import { naturezaInterna } from '@/lib/oc-numbers'
-import { freioAntes, freioDepois } from '@/lib/omie-freio'
+import { camposFinanceirosCard, naturezaInterna } from '@/lib/oc-numbers'
+import { garanteNumerosOc } from '@/lib/oc-numbers-bitrix'
+import { aguardaFreio, freioDepois } from '@/lib/omie-freio'
 import {
   paymentConditionMatches,
   resolveDefaultOmiePaymentCode,
@@ -240,55 +241,71 @@ function ovResultMeta(res: any, found: { cab: any; intCode: string } | null, bas
 async function omieCall(interatellCnpj: string, url: string, call: string, param: object, dealId: number, step: string) {
   const { app_key, app_secret } = getCredentials(interatellCnpj)
   const body = { call, app_key, app_secret, param: [param] }
+  // Espera do freio vai para o log como aviso: a tela de processamento mostra o
+  // motivo em amarelo enquanto o envio aguarda.
+  const avisaEspera = (motivo: string) => {
+    console.warn(`[Omie][deal=${dealId}][${step}] ${motivo}`)
+    return addOmieRawLog({ transactionId: dealId, step: step as any, level: 'warning', message: `${step}: ${motivo}`,
+      runId: ctx().runId, raw: { endpoint: url, httpStatus: 0, requestBodyRaw: '', responseBodyRaw: '' } }).catch(() => {})
+  }
 
   console.log(`[Omie][deal=${dealId}][${step}] → ${call}`, JSON.stringify(param))
 
   await addOmieRawLog({ transactionId: dealId, step: step as any, level: 'info', message: `${step}: ${call}`, runId: ctx().runId,
     raw: { endpoint: url, httpStatus: 0, requestBodyRaw: JSON.stringify(body), responseBodyRaw: '' } }).catch(() => {})
 
-  // Para antes de o Omie bloquear a chave, ou enquanto ele ainda estiver
-  // bloqueando: ver lib/omie-freio. Lança e interrompe o envio com a mensagem.
-  freioAntes(app_key, call)
+  // Quando o próprio Omie responde com bloqueio (por erros de outro sistema na
+  // mesma chave, ou de antes de um restart), o freio espera o prazo informado e a
+  // mesma chamada é repetida — o envio termina inteiro em vez de parar no meio.
+  for (let tentativa = 1; ; tentativa++) {
+    // Espera antes de o Omie bloquear a chave, ou enquanto ele ainda bloqueia:
+    // ver lib/omie-freio.
+    await aguardaFreio(app_key, call, avisaEspera)
+    await new Promise(r => setTimeout(r, Number(process.env.OMIE_SLEEP_MS ?? 260)))
 
-  await new Promise(r => setTimeout(r, Number(process.env.OMIE_SLEEP_MS ?? 260)))
+    let httpStatus = 0, responseText = ''
+    try {
+      const resp = await fetch(url, { method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(body), cache: 'no-store' })
+      httpStatus = resp.status
+      responseText = await resp.text()
+      const data = responseText ? JSON.parse(responseText) : null
+      freioDepois(app_key, call, httpStatus, data?.faultstring)
 
-  let httpStatus = 0, responseText = ''
-  try {
-    const resp = await fetch(url, { method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify(body), cache: 'no-store' })
-    httpStatus = resp.status
-    responseText = await resp.text()
-    const data = responseText ? JSON.parse(responseText) : null
-    freioDepois(app_key, call, httpStatus, data?.faultstring)
+      if (isOmieRateLimitFault(data?.faultstring) && tentativa < 4) {
+        await avisaEspera(`O Omie respondeu com bloqueio (${String(data.faultstring).slice(0, 160)}). A chamada será repetida quando ele liberar.`)
+        continue
+      }
 
-    // Passos de verificação (check*) retornam 500 com "não cadastrado" quando o pedido
-    // simplesmente ainda não existe — isso é esperado e não é um erro de fato.
-    const isCheckStep = step.startsWith('check')
-    // "Não existem registros" é a resposta do ListarClientes quando o CNPJ ainda
-    // não está no Omie — o cadastro é criado logo em seguida. Sem esta linha o
-    // passo aparecia vermelho na tela de processamento, como se fosse falha.
-    const isNotFound = typeof data?.faultstring === 'string' &&
-      /não cadastrado|nao cadastrado|not found|n[ãa]o existem registros/i.test(data.faultstring)
-    const level: 'success' | 'info' | 'error' =
-      httpStatus >= 200 && httpStatus < 300 ? 'success'
-      : (isCheckStep && isNotFound) ? 'info'
-      : 'error'
+      // Passos de verificação (check*) retornam 500 com "não cadastrado" quando o pedido
+      // simplesmente ainda não existe — isso é esperado e não é um erro de fato.
+      const isCheckStep = step.startsWith('check')
+      // "Não existem registros" é a resposta do ListarClientes quando o CNPJ ainda
+      // não está no Omie — o cadastro é criado logo em seguida. Sem esta linha o
+      // passo aparecia vermelho na tela de processamento, como se fosse falha.
+      const isNotFound = typeof data?.faultstring === 'string' &&
+        /não cadastrado|nao cadastrado|not found|n[ãa]o existem registros/i.test(data.faultstring)
+      const level: 'success' | 'info' | 'error' =
+        httpStatus >= 200 && httpStatus < 300 ? 'success'
+        : (isCheckStep && isNotFound) ? 'info'
+        : 'error'
 
-    if (level === 'error') {
-      console.error(`[Omie][deal=${dealId}][${step}] ← HTTP ${httpStatus}`, responseText.slice(0, 1000))
-    } else {
-      console.log(`[Omie][deal=${dealId}][${step}] ← HTTP ${httpStatus}`, responseText.slice(0, 500))
+      if (level === 'error') {
+        console.error(`[Omie][deal=${dealId}][${step}] ← HTTP ${httpStatus}`, responseText.slice(0, 1000))
+      } else {
+        console.log(`[Omie][deal=${dealId}][${step}] ← HTTP ${httpStatus}`, responseText.slice(0, 500))
+      }
+
+      await addOmieRawLog({ transactionId: dealId, step: step as any, level, message: `${step}: HTTP ${httpStatus}`, runId: ctx().runId,
+        raw: { endpoint: url, httpStatus, requestBodyRaw: JSON.stringify(body), responseBodyRaw: responseText } }).catch(() => {})
+      return data
+    } catch (err: any) {
+      console.error(`[Omie][deal=${dealId}][${step}] ✗ Erro de rede: ${err?.message}`)
+      await addOmieRawLog({ transactionId: dealId, step: step as any, level: 'error', message: `${step}: ${err?.message}`, runId: ctx().runId,
+        raw: { endpoint: url, httpStatus, requestBodyRaw: JSON.stringify(body), responseBodyRaw: responseText } }).catch(() => {})
+      return { faultstring: err?.message, faultcode: 'NETWORK_ERROR' }
     }
-
-    await addOmieRawLog({ transactionId: dealId, step: step as any, level, message: `${step}: HTTP ${httpStatus}`, runId: ctx().runId,
-      raw: { endpoint: url, httpStatus, requestBodyRaw: JSON.stringify(body), responseBodyRaw: responseText } }).catch(() => {})
-    return data
-  } catch (err: any) {
-    console.error(`[Omie][deal=${dealId}][${step}] ✗ Erro de rede: ${err?.message}`)
-    await addOmieRawLog({ transactionId: dealId, step: step as any, level: 'error', message: `${step}: ${err?.message}`, runId: ctx().runId,
-      raw: { endpoint: url, httpStatus, requestBodyRaw: JSON.stringify(body), responseBodyRaw: responseText } }).catch(() => {})
-    return { faultstring: err?.message, faultcode: 'NETWORK_ERROR' }
   }
 }
 
@@ -973,8 +990,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Credenciais Omie não configuradas.' }, { status: 500 })
     }
 
-    // Todo o processamento roda dentro de um contexto isolado por requisição
-    return await runStore.run(newRunCtx(runId), () => processDeal(body, dealId))
+    // Todo o processamento roda dentro de um contexto isolado por requisição, e em
+    // segundo plano: o freio pode esperar minutos para o Omie não bloquear a
+    // chave, e uma requisição aberta esse tempo todo caía por timeout (o fetch do
+    // Node desiste depois de 5 min sem resposta). Andamento e resultado seguem
+    // pelos logs, que a tela de processamento acompanha; processDeal grava o
+    // status do negócio e o erro, se houver.
+    void runStore.run(newRunCtx(runId), () => processDeal(body, dealId))
+      .catch(err => console.error(`[Omie] deal=${dealId} erro fora do envio:`, err))
+    return NextResponse.json({ success: true, started: true, dealId }, { status: 202 })
   } catch (err: any) {
     console.error('omie/send error:', err)
     await addOmieRawLog({
@@ -996,6 +1020,19 @@ async function processDeal(body: any, dealId: number) {
     if (!deal) return NextResponse.json({ success: false, error: 'Deal não encontrado' }, { status: 404 })
 
     const payload = typeof deal.payload === 'string' ? JSON.parse(deal.payload) : deal.payload
+
+    // Número de Ordem de Compra (lista #35 do Bitrix) do que ainda não tem, antes
+    // de qualquer pedido, para o card sair com "OC 9178/26 - ...". Aqui, e não na
+    // action, porque os reenvios da tela de processamento chamam esta rota direto.
+    // Falha aqui não segura o envio: o card só fica sem o prefixo naquela linha.
+    try {
+      const { criados, erros } = await garanteNumerosOc(payload)
+      if (criados) await sql`UPDATE deals SET payload = ${JSON.stringify(payload)}, updated_at = NOW() WHERE id = ${dealId}`
+      if (erros.length) console.error(`[OC] deal=${dealId} sem Número de Ordem de Compra:`, erros.join(' | '))
+    } catch (err) {
+      console.error(`[OC] deal=${dealId} erro ao garantir Número de Ordem de Compra:`, err)
+    }
+
     const { interatell, supplierGroups = [], customers = [], serviceCustomers = [], business, notes } = payload
     // A observação interna sempre carrega o link do negócio no Bitrix, para quem
     // consultar o pedido no Omie conseguir voltar ao card de origem.
@@ -1215,6 +1252,17 @@ async function processDeal(body: any, dealId: number) {
 
     // 7) Atualizar status do deal
     await sql`UPDATE deals SET status = 'sent', omie_response = ${JSON.stringify({ ocResults, ovResults, osResults, resumo })}, updated_at = NOW() WHERE id = ${dealId}`
+
+    // 8) Números nos campos "Sistema Financeiro (Omie)" do card do Bitrix. Aqui, e
+    // não na action que dispara o envio, porque o envio roda em segundo plano.
+    // Best-effort: falha aqui não desfaz os pedidos, mas fica no log do servidor.
+    try {
+      if (deal.bitrix_deal_id) {
+        await BitrixService.updateCardFinanceFields(String(deal.bitrix_deal_id), camposFinanceirosCard(payload, resumo))
+      }
+    } catch (err) {
+      console.error(`[Bitrix] deal=${dealId} números do Omie não gravados no card:`, err)
+    }
 
     console.log(`[Omie] deal=${dealId} enviado com sucesso —`, resumoMsg || 'sem pedidos criados')
     return NextResponse.json({ success: true, dealId, resumo })
