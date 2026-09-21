@@ -321,8 +321,13 @@ type RunCtx = {
   servicoCache: Map<string, ServicoInfo>
   /** Produtos que já existem no Omie, por CNPJ da filial: ver mapaProdutosExistentes. */
   produtosExistentes: Map<string, Map<string, any>>
-  /** Primeiro envio do negócio: não há OC/OV/OS dele no Omie para procurar. */
-  pedidosNovos: boolean
+  /**
+   * Procurar OC/OV/OS antes de criar — só na atualização de negócio já enviado.
+   * Fora dela o app cria direto e busca só se o Omie disser que já existe.
+   */
+  buscarPedidos: boolean
+  /** Maior sufixo -Rn já usado nos códigos de integração deste negócio. */
+  retryMax: number
 }
 const runStore = new AsyncLocalStorage<RunCtx>()
 const newRunCtx = (runId: string | null): RunCtx => ({
@@ -332,7 +337,8 @@ const newRunCtx = (runId: string | null): RunCtx => ({
   produtoCache: new Map(),
   servicoCache: new Map(),
   produtosExistentes: new Map(),
-  pedidosNovos: false,
+  buscarPedidos: false,
+  retryMax: 0,
 })
 const ctx = (): RunCtx => runStore.getStore() ?? newRunCtx(null)
 
@@ -650,8 +656,8 @@ function parseOCConsultResponse(existing: any, intCode: string) {
   }
 }
 
-async function findExistingOC(interatellCnpj: string, dealId: number, baseCode: string, retryCount: number) {
-  if (ctx().pedidosNovos) return null
+async function findExistingOC(interatellCnpj: string, dealId: number, baseCode: string, retryCount: number, forcar = false) {
+  if (!ctx().buscarPedidos && !forcar) return null
   for (const cCodIntPed of integrationLookupCodes(baseCode, retryCount)) {
     const existing = await omieCall(interatellCnpj, OMIE_URL.PEDIDOS_COMPRA, 'ConsultarPedCompra',
       { cCodIntPed }, dealId, 'checkOC')
@@ -661,8 +667,8 @@ async function findExistingOC(interatellCnpj: string, dealId: number, baseCode: 
   return null
 }
 
-async function findExistingOV(interatellCnpj: string, dealId: number, baseCode: string, retryCount: number, legacyBase?: string) {
-  if (ctx().pedidosNovos) return null
+async function findExistingOV(interatellCnpj: string, dealId: number, baseCode: string, retryCount: number, legacyBase?: string, forcar = false) {
+  if (!ctx().buscarPedidos && !forcar) return null
   // legacyBase: codigo usado antes da OV passar a ser por filial. Sem ele, um
   // negocio ja enviado criaria uma OV nova em vez de atualizar a existente.
   const codigos = [
@@ -681,8 +687,8 @@ async function findExistingOV(interatellCnpj: string, dealId: number, baseCode: 
   return null
 }
 
-async function findExistingOS(interatellCnpj: string, dealId: number, baseCode: string, retryCount: number) {
-  if (ctx().pedidosNovos) return null
+async function findExistingOS(interatellCnpj: string, dealId: number, baseCode: string, retryCount: number, forcar = false) {
+  if (!ctx().buscarPedidos && !forcar) return null
   for (const cCodIntOS of integrationLookupCodes(baseCode, retryCount)) {
     const existing = await omieCall(interatellCnpj, OMIE_URL.ORDEM_SERVICO, 'ConsultarOS',
       { cCodIntOS }, dealId, 'checkOS')
@@ -724,7 +730,7 @@ async function upsertOC(
     nValUnit: Number(e.unitCost ?? 0), nPesoLiq: 0, nPesoBruto: 0,
   }))
 
-  const lookupRetry = opts.isUpdate ? Math.max(opts.retryCount, 5) : opts.retryCount
+  const lookupRetry = ctx().retryMax
   const found = await findExistingOC(interatellCnpj, dealId, baseCode, lookupRetry)
   const intCode = found?.intCode ?? (opts.isUpdate ? baseCode : createCode)
 
@@ -812,7 +818,7 @@ async function upsertOV(
     dados_adicionais_nf: obs.externa,
   }
 
-  const lookupRetry = opts.isUpdate ? Math.max(opts.retryCount, 5) : opts.retryCount
+  const lookupRetry = ctx().retryMax
   const found = await findExistingOV(interatellCnpj, dealId, baseCode, lookupRetry, legacyBase)
   if (found) {
     const res = await omieCall(interatellCnpj, OMIE_URL.PEDIDOS_VENDA, 'AlterarPedidoVenda', {
@@ -839,7 +845,7 @@ async function upsertOV(
   }, dealId, 'createOVResult')
 
   if (res?.faultstring && /j[aá] cadastrado|already registered/i.test(String(res.faultstring))) {
-    const retryFound = await findExistingOV(interatellCnpj, dealId, baseCode, Math.max(opts.retryCount, 5), legacyBase)
+    const retryFound = await findExistingOV(interatellCnpj, dealId, baseCode, ctx().retryMax, legacyBase, true)
     if (retryFound) {
       const retryRes = await omieCall(interatellCnpj, OMIE_URL.PEDIDOS_VENDA, 'AlterarPedidoVenda', {
         cabecalho: {
@@ -944,9 +950,7 @@ async function upsertOS(
     .map((e: any) => ({ cAcaoItemPU: 'I', nCodProdutoPU: Number(e.codigoProdutoOmie), nQtdePU: Number(e.quantity ?? 1) }))
   const produtosUtilizados = { cAcaoProdUtilizados: 'EST', cCodCategRem: '', produtoUtilizado }
 
-  const lookupRetry = opts.isUpdate ? Math.max(opts.retryCount, 5) : opts.retryCount
-  const found = await findExistingOS(interatellCnpj, dealId, baseCode, lookupRetry)
-  if (found) {
+  const alteraOS = async (found: any) => {
     // Idempotente: na atualização só INCLUI o produto que a OS ainda não tem, evitando
     // baixa de estoque em duplicidade a cada reenvio. Produtos já presentes ficam intactos.
     const jaPresentes = new Set(
@@ -967,6 +971,9 @@ async function upsertOS(
     return { ...res, _action: 'updated', _numero: found.cab.cNumOS ?? found.cab.nCodOS, _codigo: found.cab.nCodOS }
   }
 
+  const found = await findExistingOS(interatellCnpj, dealId, baseCode, ctx().retryMax)
+  if (found) return alteraOS(found)
+
   const res = await omieCall(interatellCnpj, OMIE_URL.ORDEM_SERVICO, 'IncluirOS', {
     Cabecalho, InformacoesAdicionais,
     Observacoes: { cObsOS: obsOS },
@@ -974,6 +981,14 @@ async function upsertOS(
     ServicosPrestados: await buildServicos(),
     produtosUtilizados,
   }, dealId, 'createOSResult')
+
+  // Fora da atualização o app cria direto, sem procurar antes. Se a OS já existe
+  // com este código — envio anterior que falhou depois de criá-la —, busca e
+  // atualiza em vez de falhar.
+  if (res?.faultstring && /j[aá] cadastrad|j[aá] existe|already registered/i.test(String(res.faultstring))) {
+    const existente = await findExistingOS(interatellCnpj, dealId, baseCode, ctx().retryMax, true)
+    if (existente) return alteraOS(existente)
+  }
   return { ...res, _action: 'created', _numero: res?.cNumOS ?? res?.nCodOS, _codigo: res?.nCodOS }
 }
 
@@ -1048,10 +1063,17 @@ async function processDeal(body: any, dealId: number) {
     const isUpdate = body.update === true || deal.status === 'sent'
     const alteracoes = Array.isArray(body.changes) ? body.changes : []
     const upsertOpts = { isUpdate, retryCount: isUpdate ? 0 : retryCount }
-    // Primeiro envio de verdade — nunca deu certo nem falhou antes: não existe
-    // OC/OV/OS deste negócio no Omie. Procurar dava um erro "não cadastrado" por
-    // pedido (dois por OV, com o código antigo), e erro conta para o bloqueio.
-    ctx().pedidosNovos = !isUpdate && retryCount === 0 && !deal.omie_response && !deal.error_message
+    // Procurar pedido antes de criar dá um erro "não cadastrado" por pedido que
+    // ainda não existe (dois por OV, com o código antigo), e erro conta para o
+    // bloqueio do Omie — num reenvio com 13 clientes o freio esperava 30 min a
+    // cada 8. Fora da atualização o app cria direto: a OC é upsert pelo código, e
+    // OV/OS que já existam (envio anterior que falhou no meio) voltam "já
+    // cadastrado", e só então são buscadas e atualizadas.
+    ctx().buscarPedidos = isUpdate
+    // Os pedidos só podem ter sido criados com o código base ou com -R1..-Rn até
+    // o retry atual. Antes a busca testava sempre até -R5 (e mais seis códigos
+    // antigos na OV), mesmo sem retry nenhum.
+    ctx().retryMax = retryCount
     // fallbackCnpj: backward compat for old payloads that stored a single interatell.cnpj
     const fallbackCnpj = digits(interatell?.cnpj ?? '')
 
