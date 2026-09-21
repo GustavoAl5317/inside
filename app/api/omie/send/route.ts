@@ -981,7 +981,7 @@ async function upsertOS(
       ServicosPrestados: await buildServicos(found.servicos),
       produtosUtilizados: produtosUtilizadosUpdate,
     }, dealId, 'createOSResult')
-    return { ...res, _action: 'updated', _numero: found.cab.cNumOS ?? found.cab.nCodOS, _codigo: found.cab.nCodOS }
+    return { ...res, _action: 'updated', _numero: found.cab.cNumOS ?? found.cab.nCodOS, _codigo: found.cab.nCodOS, _intCode: found.intCode }
   }
 
   const found = await findExistingOS(interatellCnpj, dealId, baseCode, ctx().retryMax)
@@ -1002,7 +1002,7 @@ async function upsertOS(
     const existente = await findExistingOS(interatellCnpj, dealId, baseCode, ctx().retryMax, true)
     if (existente) return alteraOS(existente)
   }
-  return { ...res, _action: 'created', _numero: res?.cNumOS ?? res?.nCodOS, _codigo: res?.nCodOS }
+  return { ...res, _action: 'created', _numero: res?.cNumOS ?? res?.nCodOS, _codigo: res?.nCodOS, _intCode: createCode }
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
@@ -1039,7 +1039,89 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/** Número do pedido na resposta do Omie — cada método devolve num lugar. */
+function pickNumero(r: any, intCode: string) {
+  return r?.cNumero || r?.cNumPed || r?.nCodPed || r?.numero_pedido ||
+    r?.cabecalho_consulta?.cNumero || r?.pedido_venda_produto?.cabecalho?.numero_pedido ||
+    r?.cabecalho_alterar?.cNumero || r?.pedido_venda_produto_response?.cabecalho?.numero_pedido ||
+    r?.Cabecalho?.cNumOS || r?.nCodOS || intCode || '?'
+}
+
+/**
+ * Resumo dos pedidos de um envio. Vai para o log final (que a tela de
+ * processamento mostra), para omie_response e para os campos do card do Bitrix —
+ * também quando o envio falha no meio, com o que chegou a ser criado.
+ */
+function montaResumo(dealId: number, ocResults: any[], ovResults: any[], osResults: any[], alteracoes: any[]) {
+  return {
+    oc: ocResults.map((r, i) => ({
+      numero: r._numero ?? pickNumero(r, `OC-${dealId}-G${i}`),
+      codigoIntegracao: r._intCode ?? `OC-${dealId}-G${r._groupIdx ?? i}`,
+      codigoPedido: r._codigo ?? r?.nCodPed,
+      acao: r._action ?? 'created',
+      fornecedor: r._supplier,
+      // De qual fornecedor saiu a OC — os campos do card do Bitrix usam para
+      // achar o Número de Ordem de Compra.
+      grupoIdx: r._groupIdx,
+      erro: omieFaultMessage(r) ?? undefined,
+    })),
+    ov: ovResults.map((r, i) => ({
+      numero: r._numero ?? pickNumero(r, `OV-${dealId}-C${i}`),
+      numeroCurto: r._numeroCurto,
+      codigoIntegracao: r._intCode ?? `OV-${dealId}-C${i}`,
+      codigoPedido: r._codigoPedido ?? r._codigo ?? r?.codigo_pedido,
+      acao: r._action ?? 'created',
+      cliente: r._customer,
+      clienteIdx: r._clienteIdx,
+      filial: r._filial,
+      erro: omieFaultMessage(r) ?? undefined,
+    })),
+    os: osResults.map((r) => ({
+      numero: r._numero ?? pickNumero(r, r.cCodIntOS || '?'),
+      codigoIntegracao: r._intCode ?? r.cCodIntOS,
+      acao: r._action ?? 'created',
+      cliente: r._customer,
+      nat: r._nat,
+      // Serviço próprio Interatell (não veio de fornecedor) — o PDF é separado.
+      interatellService: r._interatellService ?? undefined,
+      clienteIdx: r._clienteIdx,
+      servicoIdx: r._servicoIdx,
+      filial: r._filial,
+      erro: omieFaultMessage(r) ?? undefined,
+    })),
+    alteracoes,
+  }
+}
+
+/**
+ * Soma o resumo de uma tentativa ao das anteriores, pelo código de integração.
+ * Um envio que falha no meio grava o que criou até ali; o seguinte não pode
+ * apagar isso, nem trocar um pedido criado pela resposta de erro de uma nova
+ * tentativa.
+ */
+function juntaResumos(anterior: any, novo: any) {
+  const junta = (a: any[] = [], b: any[] = []) => {
+    const chave = (x: any) => String(x?.codigoIntegracao ?? x?.numero ?? '')
+    const m = new Map<string, any>(a.map(x => [chave(x), x]))
+    for (const x of b) {
+      const atual = m.get(chave(x))
+      if (x?.erro && atual && !atual.erro) continue
+      m.set(chave(x), x)
+    }
+    return [...m.values()]
+  }
+  return { ...novo, oc: junta(anterior?.oc, novo?.oc), ov: junta(anterior?.ov, novo?.ov), os: junta(anterior?.os, novo?.os) }
+}
+
+/** Só os pedidos que existem no Omie — sem as tentativas que voltaram com erro. */
+function soCriados(resumo: any) {
+  const ok = (l: any[] = []) => l.filter(x => !x?.erro)
+  return { ...resumo, oc: ok(resumo?.oc), ov: ok(resumo?.ov), os: ok(resumo?.os) }
+}
+
 async function processDeal(body: any, dealId: number) {
+  // Fora do try: se o envio falhar no meio, o catch ainda sabe o que foi criado.
+  const ocResults: any[] = [], ovResults: any[] = [], osResults: any[] = []
   try {
     console.log(`[Omie] Iniciando envio do deal=${dealId}${body.update ? ' (atualização)' : ''}`)
 
@@ -1145,7 +1227,6 @@ async function processDeal(body: any, dealId: number) {
     }
 
     // 3) OC: 1 por grupo de fornecedor
-    const ocResults: any[] = []
     for (let gIdx = 0; gIdx < supplierGroups.length; gIdx++) {
       const group = supplierGroups[gIdx]
       const branchCnpj = getBranchCnpj(group.branch, fallbackCnpj)
@@ -1158,7 +1239,6 @@ async function processDeal(body: any, dealId: number) {
 
     // 4) OV + OS: 1 por cliente E por filial de compra. O mesmo cliente gera
     //    dois pedidos quando recebe itens comprados em filiais diferentes.
-    const ovResults: any[] = [], osResults: any[] = []
     for (let cIdx = 0; cIdx < customers.length; cIdx++) {
       const entry = customers[cIdx]
       const porFilial = itensPorFilial(entry, supplierGroups)
@@ -1220,53 +1300,11 @@ async function processDeal(body: any, dealId: number) {
     }
 
     // 5) Resumo com números dos pedidos
-    const pickNumero = (r: any, intCode: string) =>
-      r?.cNumero || r?.cNumPed || r?.nCodPed || r?.numero_pedido ||
-      r?.cabecalho_consulta?.cNumero || r?.pedido_venda_produto?.cabecalho?.numero_pedido ||
-      r?.cabecalho_alterar?.cNumero || r?.pedido_venda_produto_response?.cabecalho?.numero_pedido ||
-      r?.Cabecalho?.cNumOS || r?.nCodOS || intCode || '?'
-
     assertNoOmieErrors(ocResults, 'OC')
     assertNoOmieErrors(ovResults, 'OV')
     assertNoOmieErrors(osResults, 'OS')
 
-    const resumo = {
-      oc: ocResults.map((r, i) => ({
-        numero: r._numero ?? pickNumero(r, `OC-${dealId}-G${i}`),
-        codigoIntegracao: `OC-${dealId}-G${i}`,
-        codigoPedido: r._codigo ?? r?.nCodPed,
-        acao: r._action ?? 'created',
-        fornecedor: r._supplier,
-        // De qual fornecedor saiu a OC — os campos do card do Bitrix usam para
-        // achar o Número de Ordem de Compra.
-        grupoIdx: r._groupIdx,
-        erro: omieFaultMessage(r) ?? undefined,
-      })),
-      ov: ovResults.map((r, i) => ({
-        numero: r._numero ?? pickNumero(r, `OV-${dealId}-C${i}`),
-        numeroCurto: r._numeroCurto,
-        codigoIntegracao: r._intCode ?? `OV-${dealId}-C${i}`,
-        codigoPedido: r._codigoPedido ?? r._codigo ?? r?.codigo_pedido,
-        acao: r._action ?? 'created',
-        cliente: r._customer,
-        clienteIdx: r._clienteIdx,
-        filial: r._filial,
-        erro: omieFaultMessage(r) ?? undefined,
-      })),
-      os: osResults.map((r, i) => ({
-        numero: r._numero ?? pickNumero(r, r.cCodIntOS || '?'),
-        acao: r._action ?? 'created',
-        cliente: r._customer,
-        nat: r._nat,
-        // Serviço próprio Interatell (não veio de fornecedor) — o PDF é separado.
-        interatellService: r._interatellService ?? undefined,
-        clienteIdx: r._clienteIdx,
-        servicoIdx: r._servicoIdx,
-        filial: r._filial,
-        erro: omieFaultMessage(r) ?? undefined,
-      })),
-      alteracoes,
-    }
+    const resumo = montaResumo(dealId, ocResults, ovResults, osResults, alteracoes)
 
     // 6) Log final de resultado — marca conclusão no modal de logs
     const verbo = (a: string) => (a === 'updated' ? 'atualizada' : 'criada')
@@ -1304,12 +1342,42 @@ async function processDeal(body: any, dealId: number) {
 
   } catch (err: any) {
     console.error('omie/send error:', err)
+    const mensagem = err?.message ?? 'Erro inesperado'
+
+    // Pedidos criados antes da falha. Sem isto eles existiam no Omie mas não
+    // apareciam no app nem no card do Bitrix. Soma com as tentativas anteriores.
+    let dealRow: any = null
+    let resumoParcial: any = null
+    if (dealId) {
+      try {
+        ;[dealRow] = await sql`SELECT payload, omie_response, bitrix_deal_id FROM deals WHERE id = ${dealId}`
+        const anterior = typeof dealRow?.omie_response === 'string' ? JSON.parse(dealRow.omie_response) : dealRow?.omie_response
+        resumoParcial = juntaResumos(anterior?.resumo, montaResumo(dealId, ocResults, ovResults, osResults, []))
+      } catch (e) {
+        console.error(`[Omie] deal=${dealId} resumo parcial não montado:`, e)
+      }
+    }
+    const criados = resumoParcial ? soCriados(resumoParcial) : null
+    const temPedido = !!criados && criados.oc.length + criados.ov.length + criados.os.length > 0
+
+    // O log final leva o resumo parcial: a tela de processamento mostra os
+    // pedidos criados junto com o erro.
     await addOmieRawLog({
       transactionId: dealId, step: 'result', level: 'error', runId: ctx().runId,
-      message: `result: Erro — ${err?.message ?? 'Erro inesperado'}`,
-      raw: { endpoint: '', httpStatus: 500, requestBodyRaw: '', responseBodyRaw: err?.message ?? '' },
+      message: `result: Erro — ${mensagem}`,
+      raw: { endpoint: '', httpStatus: 500, requestBodyRaw: '', responseBodyRaw: resumoParcial ? JSON.stringify(resumoParcial) : mensagem },
     }).catch(() => {})
-    if (dealId) await sql`UPDATE deals SET status = 'failed', error_message = ${err?.message ?? String(err)}, updated_at = NOW() WHERE id = ${dealId}`.catch(() => {})
-    return NextResponse.json({ success: false, error: err?.message ?? 'Erro inesperado' }, { status: 500 })
+
+    if (dealId && temPedido) {
+      await sql`UPDATE deals SET status = 'failed', error_message = ${mensagem}, omie_response = ${JSON.stringify({ parcial: true, resumo: resumoParcial })}, updated_at = NOW() WHERE id = ${dealId}`.catch(() => {})
+      if (dealRow?.bitrix_deal_id) {
+        const payloadDeal = typeof dealRow.payload === 'string' ? JSON.parse(dealRow.payload) : dealRow.payload
+        await BitrixService.updateCardFinanceFields(String(dealRow.bitrix_deal_id), camposFinanceirosCard(payloadDeal, criados))
+          .catch(e => console.error(`[Bitrix] deal=${dealId} números parciais não gravados no card:`, e))
+      }
+    } else if (dealId) {
+      await sql`UPDATE deals SET status = 'failed', error_message = ${mensagem}, updated_at = NOW() WHERE id = ${dealId}`.catch(() => {})
+    }
+    return NextResponse.json({ success: false, error: mensagem }, { status: 500 })
   }
 }

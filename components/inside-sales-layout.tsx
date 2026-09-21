@@ -4,6 +4,7 @@ import { useState, useCallback } from 'react'
 import { OmieStageSidebar } from './omie-stage-sidebar'
 import type { StageTab } from './omie-stage-sidebar'
 import { MultiStepForm } from './multi-step-form'
+import { PedidosOmie } from "./pedidos-omie"
 import type { BitrixInsideSalesItem, CardDetails } from '@/lib/bitrix-service'
 import { getInsideSalesCardDetailsAction, getDraftByBitrixDealIdAction } from '@/lib/actions'
 import { Loader2, FileText, Send, Pencil, ClipboardList, ArrowLeft, MousePointerClick } from 'lucide-react'
@@ -36,7 +37,7 @@ export function InsideSalesLayout({ embedded = false }: { embedded?: boolean }) 
   const [cardDetails, setCardDetails]       = useState<CardDetails | null>(null)
   const [loadingDetails, setLoadingDetails] = useState(false)
   const [formMode, setFormMode]             = useState<FormMode>('backlog')
-  const [existingDeal, setExistingDeal]     = useState<{ id: number; payload: any } | null>(null)
+  const [existingDeal, setExistingDeal]     = useState<{ id: number; payload: any; resumo?: any } | null>(null)
 
   const handleBitrixSelect = useCallback(async (item: BitrixInsideSalesItem, stage: StageTab) => {
     setSelectedItem(item)
@@ -162,6 +163,10 @@ export function InsideSalesLayout({ embedded = false }: { embedded?: boolean }) 
                           </span>
                         )}
                       </div>
+                    )}
+
+                    {existingDeal?.resumo && (
+                      <PedidosOmie resumo={existingDeal.resumo} payload={existingDeal.payload} />
                     )}
                   </div>
 

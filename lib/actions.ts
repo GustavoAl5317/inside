@@ -1990,7 +1990,7 @@ export async function getDraftByBitrixDealIdAction(bitrixDealId: string) {
     // duplicava no Omie os pedidos que o anterior já tinha criado.
     console.log(`[getDraft] buscando bitrix_deal_id="${bitrixDealId}" (pendente, aprovado ou com falha)`)
     const [deal] = await sql`
-      SELECT id, status, payload FROM deals
+      SELECT id, status, payload, omie_response FROM deals
       WHERE bitrix_deal_id = ${bitrixDealId}
         AND status IN ('pending', 'approved', 'failed')
       ORDER BY updated_at DESC
@@ -2002,7 +2002,10 @@ export async function getDraftByBitrixDealIdAction(bitrixDealId: string) {
     }
     console.log(`[getDraft] encontrado deal #${deal.id}`)
     const payload = typeof deal.payload === 'string' ? JSON.parse(deal.payload) : deal.payload
-    return { success: true as const, deal: { id: deal.id as number, payload } }
+    const omie = typeof deal.omie_response === 'string' ? JSON.parse(deal.omie_response) : deal.omie_response
+    // Pedidos já criados no Omie, também de envio que falhou no meio: a tela do
+    // card mostra, e o reenvio cria só o que falta.
+    return { success: true as const, deal: { id: deal.id as number, payload, resumo: omie?.resumo ?? null } }
   } catch (error) {
     return { success: false as const, error: error instanceof Error ? error.message : 'Erro desconhecido' }
   }

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { PedidosOmie } from '@/components/pedidos-omie';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -548,13 +549,14 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
     setIsComplete(finishedOk);
     isCompleteRef.current = finishedOk;
 
-    // Extrai o resumo do log result quando concluído com sucesso
-    if (finishedOk) {
-      const resultLog = ordered.find(l => (normalizeType(l.type) || inferStepFromMessage(l.message)) === 'result' && l.level === 'success')
-      if (resultLog) {
-        const raw = resultLog.data?.omie?.responseBodyRaw || resultLog.omieResponseRaw
-        try { if (raw) setResumo(JSON.parse(raw)) } catch {}
-      }
+    // Resumo do log final — no sucesso e também na falha, que traz os pedidos
+    // criados antes do erro.
+    if (lastType === 'result' && (last.level === 'success' || last.level === 'error')) {
+      const raw = last.data?.omie?.responseBodyRaw || last.omieResponseRaw
+      try {
+        const r = raw ? JSON.parse(raw) : null
+        if (r && (r.oc || r.ov || r.os)) setResumo(r)
+      } catch {}
     }
 
     // Lógica melhorada para determinar steps completados
@@ -1073,6 +1075,11 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
                         </motion.div>
                         <h3 className="text-lg font-bold text-red-600 mb-1">Erro no Processamento</h3>
                         <p className="text-gray-600 text-sm">Ocorreu um erro durante o envio para o Omie</p>
+                        {resumo && (
+                          <div className="text-left">
+                            <PedidosOmie resumo={resumo} />
+                          </div>
+                        )}
                       </motion.div>
                     )}
                   </AnimatePresence>
