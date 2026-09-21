@@ -1430,6 +1430,27 @@ export async function createDealAction(data: {
 
     const status = data.status || "pending"
 
+    // Card que já tem negócio não enviado reaproveita o mesmo registro. Um negócio
+    // novo teria outro ID e, com ele, outros códigos de integração (OC-{id}-G0...):
+    // o Omie criaria de novo os pedidos que o anterior já tinha criado.
+    if (data.bitrixDealId) {
+      const [existente] = await sql`
+        SELECT id FROM deals
+        WHERE bitrix_deal_id = ${data.bitrixDealId} AND status IN ('pending', 'approved', 'failed')
+        ORDER BY updated_at DESC
+        LIMIT 1
+      `
+      if (existente) {
+        await preservaNumerosDoBanco(existente.id as number, payload)
+        await sql`
+          UPDATE deals SET payload = ${JSON.stringify(payload)}, status = ${status}, updated_at = NOW()
+          WHERE id = ${existente.id}
+        `
+        console.log(`[createDeal] card ${data.bitrixDealId} já tinha o deal #${existente.id} — reaproveitado`)
+        return { success: true, dealId: existente.id as number }
+      }
+    }
+
     console.log(`[createDeal] bitrix_deal_id="${data.bitrixDealId}" status="${status}"`)
 
     const [row] = await sql`
@@ -1484,10 +1505,12 @@ export async function saveDraftAction(
     let targetId: number | null = existingDealId ?? null
 
     if (!targetId && data.bitrixDealId) {
+      // Mesmo critério de getDraftByBitrixDealIdAction: um envio interrompido ou
+      // que falhou continua sendo este negócio, e não um rascunho novo.
       const [row] = await sql`
         SELECT id FROM deals
-        WHERE bitrix_deal_id = ${data.bitrixDealId} AND status = 'pending'
-        ORDER BY created_at DESC
+        WHERE bitrix_deal_id = ${data.bitrixDealId} AND status IN ('pending', 'approved', 'failed')
+        ORDER BY updated_at DESC
         LIMIT 1
       `
       if (row) targetId = row.id as number
@@ -1960,12 +1983,17 @@ export async function getDealsHistoryAction(limit = 40, offset = 0) {
 
 export async function getDraftByBitrixDealIdAction(bitrixDealId: string) {
   try {
-    console.log(`[getDraft] buscando bitrix_deal_id="${bitrixDealId}" status=pending`)
+    // Pendente, aprovado ou com falha — só o já enviado com sucesso fica de fora.
+    // Carregar apenas 'pending' fazia o card abrir vazio depois de um envio
+    // interrompido ('approved') ou que falhou ('failed'): o negócio seguia no
+    // banco, mas o próximo envio criava outro, com códigos de integração novos, e
+    // duplicava no Omie os pedidos que o anterior já tinha criado.
+    console.log(`[getDraft] buscando bitrix_deal_id="${bitrixDealId}" (pendente, aprovado ou com falha)`)
     const [deal] = await sql`
       SELECT id, status, payload FROM deals
       WHERE bitrix_deal_id = ${bitrixDealId}
-        AND status = 'pending'
-      ORDER BY created_at DESC
+        AND status IN ('pending', 'approved', 'failed')
+      ORDER BY updated_at DESC
       LIMIT 1
     `
     if (!deal) {

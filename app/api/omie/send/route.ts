@@ -195,6 +195,19 @@ function normalizeNatureza(raw: any): Natureza {
   return naturezaInterna(raw)
 }
 
+/**
+ * CFOP enviado ao Omie. Produto sem CFOP no catálogo do Bitrix chega como "0" (a
+ * propriedade é numérica), e o Omie recusava o Pedido de Venda com "CFOP não
+ * cadastrada [0.]" — foi o que derrubou todas as OVs do #114. Vazio, "0" ou sem 4
+ * dígitos vira 5104, o CFOP de todos os hardwares que passaram nos envios
+ * anteriores. CFOP válido que vier do catálogo é mantido.
+ */
+const CFOP_PADRAO = '5104'
+function cfopOmie(raw: unknown): string {
+  const d = String(raw ?? '').replace(/\D/g, '')
+  return d.length === 4 && d !== '0000' ? d : CFOP_PADRAO
+}
+
 function normalizeNCM(ncm: any): string {
   const d = String(ncm ?? '').replace(/\D/g, '')
   return d.length === 8 ? d : String(ncm ?? '')
@@ -574,7 +587,7 @@ async function ensureProduto(interatellCnpj: string, item: any, dealId: number):
 
     const created = await omieCall(interatellCnpj, OMIE_URL.PRODUTOS, 'IncluirProduto', {
       codigo: sku, descricao: descricaoProduto(item), unidade: 'UN',
-      ncm, cfop: item.cfop ?? '',
+      ncm, cfop: cfopOmie(item.cfop),
       codigo_produto_integracao: sku,
       codigo_familia: item.family || '',
     }, dealId, 'createProdutoResult')
@@ -795,7 +808,7 @@ async function upsertOV(
         ...(e.codigoProdutoOmie
           ? { codigo_produto: e.codigoProdutoOmie }
           : { codigo_produto_integracao: codigoProduto(e) }),
-        cfop: e.cfop ?? '', ncm: normalizeNCM(e.ncm), descricao: descricaoProduto(e),
+        cfop: cfopOmie(e.cfop), ncm: normalizeNCM(e.ncm), descricao: descricaoProduto(e),
         quantidade: Number(e.quantity ?? 1), unidade: 'UN',
         valor_unitario: Number(e.unitSale ?? 0), tipo_desconto: 'V', valor_desconto: 0,
       },
