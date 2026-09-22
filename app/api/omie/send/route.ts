@@ -973,9 +973,15 @@ async function upsertOS(
     )
     const produtoUtilizadoNovo = produtoUtilizado.filter(p => !jaPresentes.has(Number(p.nCodProdutoPU)))
     const produtosUtilizadosUpdate = { cAcaoProdUtilizados: 'EST', cCodCategRem: '', produtoUtilizado: produtoUtilizadoNovo }
+    // AlterarOS identifica a OS só pelo nCodOS. Com o cCodIntOS junto o Omie
+    // recusa com "Informe a Tag [nCodOS] ou [cCodIntOS] na alteração!" — foi o
+    // que derrubou o #111. É a mesma regra que a atualização parcial
+    // (lib/omie-order-api) já seguia, com o bloco Email presente.
+    const { cCodIntOS: _codigoIntegracao, ...cabecalhoAlteracao } = Cabecalho
     const res = await omieCall(interatellCnpj, OMIE_URL.ORDEM_SERVICO, 'AlterarOS', {
-      Cabecalho: { ...Cabecalho, cCodIntOS: found.intCode, nCodOS: found.cab.nCodOS },
+      Cabecalho: { ...cabecalhoAlteracao, nCodOS: found.cab.nCodOS },
       InformacoesAdicionais,
+      Email: { cEnvBoleto: 'N', cEnvLink: 'N', cEnvPix: 'N', cEnviarPara: '' },
       Observacoes: { cObsOS: obsOS },
       Departamentos: [],
       ServicosPrestados: await buildServicos(found.servicos),
