@@ -11,7 +11,6 @@ import { getBitrixSuppliersAction, searchBitrixProductsAction, searchProductsAct
 import { formatCurrency, isCNPJComplete, formatCNPJ } from "@/lib/utils"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { states } from "@/lib/utils"
 import { naturezaCatalogo } from "@/lib/oc-numbers"
 
 interface SupplierGroupsTabProps {
@@ -481,8 +480,11 @@ function ProductRow({
   const product = form.watch(basePath)
   const [editing, setEditing] = useState(false)
 
-  // Filtra famílias pelo estado do produto e auto-seleciona para serviços
-  const productState   = product?.state || 'SP'
+  // A UF saiu do card do produto: quem define é o "Faturamento via" do
+  // fornecedor, e ter os dois lugares só dava conflito. Ela segue gravada no
+  // produto — planilha e relatório leem — e é o que filtra as famílias.
+  const branchDoGrupo  = form.watch(`supplierGroups.${groupIndex}.branch`)
+  const productState   = branchDoGrupo === 'es' ? 'ES' : 'SP'
   const productNature  = product?.nature || 'HDW'
   // Natureza exibida: a do catálogo Bitrix, com códigos antigos já convertidos.
   const natureza = naturezaCatalogo(product?.nature)
@@ -497,6 +499,14 @@ function ProductRow({
       if (current !== SRV_FAMILY_CODE) form.setValue(`${basePath}.family`, SRV_FAMILY_CODE)
     }
   }, [productNature, isSRV, basePath, form])
+
+  // Rascunho antigo pode ter ficado com outra UF, e a do fornecedor pode mudar
+  // depois: mantém o produto alinhado.
+  useEffect(() => {
+    if (form.getValues(`${basePath}.state`) !== productState) {
+      form.setValue(`${basePath}.state`, productState)
+    }
+  }, [productState, basePath, form])
 
   // Filtra lista por estado: ES → Espírito Santo, demais → Barueri
   const filteredFamilies = families.length === 0 ? [] : (() => {
@@ -579,7 +589,7 @@ function ProductRow({
           </div>
         </>
       ) : (
-      <><div className="col-span-4">
+      <><div className="col-span-5">
         <div className="flex items-center gap-1.5 min-w-0">
           <p className="font-medium truncate">{product?.sku || product?.partnumber}</p>
           <Badge
@@ -613,21 +623,6 @@ function ProductRow({
                 </SelectItem>
               ))
             )}
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="col-span-1">
-        <Select
-          value={form.watch(`${basePath}.state`) || "SP"}
-          onValueChange={v => form.setValue(`${basePath}.state`, v)}
-        >
-          <SelectTrigger className="h-8 text-xs">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {states.map(s => (
-              <SelectItem key={s.value} value={s.value} className="text-xs">{s.value}</SelectItem>
-            ))}
           </SelectContent>
         </Select>
       </div>
@@ -737,7 +732,7 @@ function SupplierGroupCard({
       nature:      naturezaCatalogo(p.nature),
       ncm:         p.ncm   || "",
       family:      p.family || "",  // codigo_familia para o Omie
-      state:       "SP",
+      state:       form.getValues(`supplierGroups.${groupIndex}.branch`) === 'es' ? 'ES' : 'SP',
       quantity:    1,
       unitCost:    0,
       totalCost:   0,
