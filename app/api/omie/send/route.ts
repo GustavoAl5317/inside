@@ -18,6 +18,7 @@ import { descricaoOmie } from '@/lib/omie-descricao'
 import { camposFinanceirosCard, naturezaInterna } from '@/lib/oc-numbers'
 import { garanteNumerosOc } from '@/lib/oc-numbers-bitrix'
 import { aguardaFreio, freioDepois } from '@/lib/omie-freio'
+import { companyForBranch } from '@/lib/interatell-companies'
 import {
   paymentConditionMatches,
   resolveDefaultOmiePaymentCode,
@@ -332,6 +333,8 @@ type RunCtx = {
   fornecedorCache: Map<string, number>
   produtoCache: Map<string, number | undefined>
   servicoCache: Map<string, ServicoInfo>
+  /** Cidade do cliente como o Omie a tem cadastrada ("SAO PAULO (SP)"): ver cidadeDaOS. */
+  clienteCidade: Map<string, string>
   /** Produtos que já existem no Omie, por CNPJ da filial: ver mapaProdutosExistentes. */
   produtosExistentes: Map<string, Map<string, any>>
   /**
@@ -349,6 +352,7 @@ const newRunCtx = (runId: string | null): RunCtx => ({
   fornecedorCache: new Map(),
   produtoCache: new Map(),
   servicoCache: new Map(),
+  clienteCidade: new Map(),
   produtosExistentes: new Map(),
   buscarPedidos: false,
   retryMax: 0,
@@ -400,6 +404,9 @@ async function ensureCliente(interatellCnpj: string, company: any, dealId: numbe
   let codigo: number
   if (check?.clientes_cadastro?.length) {
     codigo = check.clientes_cadastro[0].codigo_cliente_omie
+    // A cidade do cadastro do Omie já vem como "SAO PAULO (SP)", o formato que a
+    // OS exige — ver cidadeDaOS.
+    ctx().clienteCidade.set(key, String(check.clientes_cadastro[0].cidade ?? '').trim())
   } else {
     await avisaCadastroNovo(dealId, 'checkCliente', 'Cliente', company?.name, cnpj, interatellCnpj)
     const created = await omieCall(interatellCnpj, OMIE_URL.CLIENTES, 'IncluirCliente', {
@@ -900,6 +907,28 @@ function cidadePrestServ(city: unknown, state: unknown): string {
   return uf.length === 2 ? `${nome} (${uf})` : nome
 }
 
+/**
+ * Cidade da prestação do serviço na OS, sempre como "CIDADE (UF)".
+ *
+ * Na ordem: a cidade que o próprio Omie tem no cadastro do cliente (já vem nesse
+ * formato), a do formulário e, por último, a da filial que fatura. O Omie recusa
+ * a OS com "Cidade não cadastrada para o Código [SAO PAULO]" quando falta a UF, e
+ * foi isso que derrubou a OS de um cliente cadastrado sem UF no formulário.
+ */
+function cidadeDaOS(interatellCnpj: string, cliente: any, filial: Filial): { cidade: string; doFilial: boolean } {
+  const temUF = (v: string) => /\([A-Za-z]{2}\)\s*$/.test(v)
+  const candidatos = [
+    ctx().clienteCidade.get(`${digits(interatellCnpj)}:${digits(cliente?.cnpj ?? '')}`) ?? '',
+    cidadePrestServ(cliente?.city, cliente?.state),
+  ].map(v => String(v).trim())
+
+  const escolhido = candidatos.find(temUF)
+  if (escolhido) return { cidade: escolhido, doFilial: false }
+
+  const itl = companyForBranch(filial === 'es' ? 'es' : 'barueri')
+  return { cidade: `${itl.city} (${itl.state})`, doFilial: true }
+}
+
 // ─── Upsert OS (busca pelo código de integração → atualiza ou cria) ──────────
 async function upsertOS(
   interatellCnpj: string, codCliente: number, cliente: any, items: any[], nat: Natureza,
@@ -924,8 +953,20 @@ async function upsertOS(
     dDtPrevisao: toOmieDate(business?.deliveryDeadline ?? business?.expectedBillingDate),
     cCodParc: codParc, nQtdeParc: 1,
   }
+  // Cidade da prestação: sem UF o Omie recusa a OS inteira. Quando nem o cadastro
+  // do Omie nem o formulário têm a UF, vai a cidade da Interatell — e isso muda o
+  // município da prestação, então fica avisado no log.
+  const { cidade: cidadePrestacao, doFilial: cidadeDaFilial } = cidadeDaOS(interatellCnpj, cliente, filial)
+  if (cidadeDaFilial) {
+    await addOmieRawLog({
+      transactionId: dealId, step: 'createOSResult', level: 'warning', runId: ctx().runId,
+      message: `createOSResult: cliente "${cliente?.name ?? ''}" sem cidade com UF — a OS vai com ${cidadePrestacao}, a cidade da Interatell. Confira a UF do cliente.`,
+      raw: { endpoint: OMIE_URL.ORDEM_SERVICO, httpStatus: 0, requestBodyRaw: '', responseBodyRaw: '' },
+    }).catch(() => {})
+  }
+
   const InformacoesAdicionais = {
-    cCidPrestServ: cidadePrestServ(cliente?.city, cliente?.state), cCodCateg: '1.01.02',
+    cCidPrestServ: cidadePrestacao, cCodCateg: '1.01.02',
     // Numero do pedido do cliente; cai no codigo de integracao so quando o
     // cliente nao informou o dele.
     cNumPedido: pedidoCliente || createCode, nCodCC: contaCorrente(interatellCnpj),
