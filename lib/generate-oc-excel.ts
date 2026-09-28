@@ -4,6 +4,10 @@ import ExcelJS from 'exceljs'
 import { companyForBranch } from './interatell-companies'
 import { formatCNPJ } from './utils'
 import { BitrixService } from './bitrix-service'
+import {
+  buildOmiePlan, resolvePaymentCodeForOmie,
+  type OmiePlan, type OmiePlanDoc,
+} from './omie-order-plan'
 
 /**
  * Gera a Ordem de Compra em Excel a partir do modelo da Interatell.
@@ -114,6 +118,203 @@ function codigoProduto(p: any): string {
   return txt(p?.sku) || txt(p?.partnumber)
 }
 
+// ─── Aba "Resumo Omie" ────────────────────────────────────────────────────────
+
+const ABA_RESUMO = 'Resumo Omie'
+
+const AZUL       = 'FF1E40AF'
+const CINZA_BG   = 'FFF1F5F9'
+const CINZA_LINHA = 'FFCBD5E1'
+const MOEDA      = '#,##0.00'
+
+/**
+ * Última aba da planilha: tudo que o envio vai gravar no Omie.
+ *
+ * Existe para o financeiro conferir o pedido contra o Omie sem abrir o payload:
+ * um documento por linha no resumo e, abaixo, os itens de cada documento com os
+ * campos exatos que vão na chamada da API. Os dados vêm de buildOmiePlan, a
+ * mesma função que descreve as regras usadas no envio — a aba e o pedido não
+ * podem divergir.
+ *
+ * O recorte é o do arquivo: só a compra deste fornecedor e as vendas que saem
+ * dela. A OC aparece inteira, porque é o documento real do Omie; a OV e a OS
+ * levam os itens vindos deste fornecedor e, quando o documento no Omie é maior
+ * do que isso, a linha "Atenção" diz quantos itens ficaram de fora.
+ */
+function montaAbaResumo(wb: ExcelJS.Workbook, plan: OmiePlan) {
+  const ws = wb.addWorksheet(ABA_RESUMO, {
+    views: [{ state: 'frozen', ySplit: 1 }],
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  })
+  ws.columns = [
+    { width: 6 }, { width: 22 }, { width: 46 }, { width: 12 }, { width: 8 },
+    { width: 10 }, { width: 8 }, { width: 9 }, { width: 15 }, { width: 15 },
+    { width: 18 },
+  ]
+
+  let l = 0
+  const linha = () => ++l
+
+  const titulo = (texto: string) => {
+    const r = ws.getRow(linha())
+    r.getCell(1).value = texto
+    r.font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } }
+    r.height = 20
+    for (let c = 1; c <= 11; c++) {
+      r.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: AZUL } }
+      r.getCell(c).alignment = { vertical: 'middle' }
+    }
+    ws.mergeCells(l, 1, l, 11)
+  }
+
+  const campo = (rotulo: string, valor: unknown, opts: { moeda?: boolean; largo?: boolean } = {}) => {
+    const r = ws.getRow(linha())
+    r.getCell(1).value = rotulo
+    r.getCell(1).font = { bold: true, size: 9, color: { argb: 'FF475569' } }
+    ws.mergeCells(l, 1, l, 2)
+    const c = r.getCell(3)
+    c.value = (valor as any) ?? ''
+    c.font = { size: 9 }
+    if (opts.moeda) c.numFmt = MOEDA
+    if (opts.largo) {
+      c.alignment = { wrapText: true, vertical: 'top' }
+      ws.mergeCells(l, 3, l, 11)
+      // Textarea longa: o Excel não cresce a linha sozinho em célula mesclada.
+      const linhas = Math.min(8, Math.max(1, Math.ceil(String(valor ?? '').length / 90)))
+      r.height = 13 * linhas
+    } else {
+      ws.mergeCells(l, 3, l, 6)
+    }
+  }
+
+  const cabecalhoTabela = (colunas: string[], larguraTotal: number) => {
+    const r = ws.getRow(linha())
+    colunas.forEach((t, i) => {
+      const c = r.getCell(i + 1)
+      c.value = t
+      c.font = { bold: true, size: 9 }
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CINZA_BG } }
+      c.border = { bottom: { style: 'thin', color: { argb: CINZA_LINHA } } }
+      c.alignment = { wrapText: true, vertical: 'middle' }
+    })
+    for (let c = colunas.length + 1; c <= larguraTotal; c++) {
+      r.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CINZA_BG } }
+    }
+    r.height = 24
+  }
+
+  const branco = () => { linha() }
+
+  // ── Negócio ────────────────────────────────────────────────────────────────
+  titulo('RESUMO DO QUE SERÁ ENVIADO AO OMIE')
+  campo('Negócio', plan.negocio)
+  if (plan.escopoFornecedor) campo('Fornecedor desta OC', plan.escopoFornecedor)
+  if (plan.escopoCliente) campo('Cliente desta OC', plan.escopoCliente)
+  campo('Nº do negócio / proposta', plan.proposta)
+  campo('Processo (id no app)', plan.dealId ?? 'rascunho ainda sem id')
+  campo('Data da OC', plan.dataOc)
+  campo('Prazo de entrega', plan.prazoEntrega)
+  campo('Previsão de faturamento', plan.previsaoFaturamento)
+  campo('Cond. pagamento compra', `${plan.condicaoCompra} — ${plan.condicaoCompraLabel}`)
+  campo('Cond. pagamento venda', `${plan.condicaoVenda} — ${plan.condicaoVendaLabel}`)
+  campo('Observação externa (sai na NF)', plan.obsExterna, { largo: true })
+  campo('Observação interna', plan.obsInterna, { largo: true })
+  branco()
+
+  // ── Documentos ─────────────────────────────────────────────────────────────
+  titulo(`DOCUMENTOS NO OMIE (${plan.docs.length})`)
+  cabecalhoTabela(
+    ['Tipo', 'Código de integração', 'Empresa emissora (Omie)', 'CNPJ emissor',
+     'Conta cor.', 'Etapa', 'Cond. pgto', 'Previsão', 'Fornecedor / Cliente',
+     'CNPJ da parte', 'Total (R$)'],
+    11,
+  )
+  for (const d of plan.docs) {
+    const r = ws.getRow(linha())
+    const vals: unknown[] = [
+      d.natureza ? `${d.tipo} ${d.natureza}` : d.tipo,
+      d.codigoIntegracao, d.empresaEmissora, formatCNPJ(d.cnpjEmissor),
+      d.contaCorrente, d.etapa || '—', d.condicaoPagamento, d.dataPrevisao,
+      d.parteNome, d.parteCnpj, d.total,
+    ]
+    vals.forEach((v, i) => {
+      const c = r.getCell(i + 1)
+      c.value = (v as any) ?? ''
+      c.font = { size: 9 }
+      c.alignment = { vertical: 'top', wrapText: i === 2 || i === 8 }
+      c.border = { bottom: { style: 'hair', color: { argb: CINZA_LINHA } } }
+    })
+    r.getCell(1).font = { size: 9, bold: true }
+    r.getCell(11).numFmt = MOEDA
+  }
+  branco()
+
+  // ── Itens por documento ────────────────────────────────────────────────────
+  for (const d of plan.docs) {
+    titulo(`${d.natureza ? `${d.tipo} ${d.natureza}` : d.tipo} · ${d.codigoIntegracao} · ${d.parteNome}`)
+    campo('Chamada no Omie', d.chamada)
+    campo('Empresa emissora', `${d.empresaEmissora} · ${formatCNPJ(d.cnpjEmissor)}`)
+    campo(d.parteTipo, `${d.parteNome} · ${d.parteCnpj}`)
+    campo('Condição de pagamento', `${d.condicaoPagamento} — ${d.condicaoPagamentoLabel}`)
+    campo('Data de previsão', d.dataPrevisao)
+    if (d.numeroPedidoCliente) campo('Nº do pedido do cliente', d.numeroPedidoCliente)
+    // Frete zerado nao e enviado (frete_upsert so vai com valor), entao a aba
+    // diz que nao ha frete em vez de mostrar um campo com 0.
+    if (d.tipo === 'OC') {
+      if (d.valorFrete > 0) campo('Valor do frete (frete_upsert.nValFrete)', d.valorFrete, { moeda: true })
+      else campo('Valor do frete', 'sem frete — o campo não é enviado')
+    }
+    if (d.recorte) campo('Atenção', d.recorte, { largo: true })
+    campo(`Obs. externa (${d.campoObsExterna})`, d.obsExterna, { largo: true })
+    campo(`Obs. interna (${d.campoObsInterna})`, d.obsInterna, { largo: true })
+
+    cabecalhoTabela(
+      ['Item', d.tipo === 'OS' ? 'Cód. serviço' : 'Cód. produto', 'Descrição',
+       'NCM', 'CFOP', 'Natureza', 'Unid.', 'Qtd', 'Valor unit. (R$)', 'Total (R$)'],
+      10,
+    )
+    for (const it of d.itens) {
+      const r = ws.getRow(linha())
+      const vals: unknown[] = [
+        it.seq, it.codigo, it.descricao, it.ncm || '—', it.cfop || '—',
+        it.natureza, it.unidade, it.quantidade, it.valorUnitario, it.valorTotal,
+      ]
+      vals.forEach((v, i) => {
+        const c = r.getCell(i + 1)
+        c.value = (v as any) ?? ''
+        c.font = { size: 9 }
+        c.alignment = { vertical: 'top', wrapText: i === 2 }
+        c.border = { bottom: { style: 'hair', color: { argb: CINZA_LINHA } } }
+      })
+      r.getCell(9).numFmt = MOEDA
+      r.getCell(10).numFmt = MOEDA
+    }
+
+    const r = ws.getRow(linha())
+    r.getCell(9).value = 'Total'
+    r.getCell(9).font = { bold: true, size: 9 }
+    r.getCell(9).alignment = { horizontal: 'right' }
+    const totalDoc = d.tipo === 'OC' ? d.total + d.valorFrete : d.total
+    r.getCell(10).value = totalDoc
+    r.getCell(10).numFmt = MOEDA
+    r.getCell(10).font = { bold: true, size: 9, color: { argb: AZUL } }
+    if (d.tipo === 'OC' && d.valorFrete > 0) {
+      const f = ws.getRow(linha())
+      f.getCell(9).value = 'Itens + frete'
+      f.getCell(9).font = { size: 8, italic: true }
+      f.getCell(9).alignment = { horizontal: 'right' }
+      f.getCell(10).value = `${d.total.toFixed(2)} + ${d.valorFrete.toFixed(2)}`
+      f.getCell(10).font = { size: 8, italic: true }
+    }
+    branco()
+  }
+
+  if (!plan.docs.length) {
+    campo('Atenção', 'Nenhum documento a enviar — nenhum produto alocado a cliente.')
+  }
+  return ws
+}
+
 /** Itens que este cliente recebe deste grupo de fornecedor. */
 function itensDoPar(group: any, customer: any) {
   const itens: any[] = []
@@ -127,7 +328,7 @@ function itensDoPar(group: any, customer: any) {
   return itens
 }
 
-async function montaArquivo(values: any, group: any, entry: any, condicoes: Map<string, string>): Promise<OcExcelFile | null> {
+async function montaArquivo(values: any, group: any, entry: any, condicoes: Map<string, string>, plan: OmiePlan): Promise<OcExcelFile | null> {
   const itens = itensDoPar(group, entry)
   if (!itens.length) return null
 
@@ -249,6 +450,9 @@ async function montaArquivo(values: any, group: any, entry: any, condicoes: Map<
     ws.getCell(`O${l}`).value = { formula: `N${l}*K${l}` } as any
   })
 
+  // Ultima aba: o pedido como ele vai para o Omie, para o financeiro conferir.
+  montaAbaResumo(wb, plan)
+
   const buffer = Buffer.from(await wb.xlsx.writeBuffer())
   return {
     filename: nomeArquivo(txt(business.commercialProposal), txt(business.name), txt(forn.name)),
@@ -260,12 +464,30 @@ async function montaArquivo(values: any, group: any, entry: any, condicoes: Map<
  * Um arquivo por par fornecedor x cliente que tenha item alocado.
  * A coluna NATUREZA distingue HW, SW, LC, ST e SRV dentro do mesmo arquivo.
  */
-export async function generateOcExcelFiles(values: any): Promise<OcExcelFile[]> {
+export async function generateOcExcelFiles(values: any, dealId?: number | null): Promise<OcExcelFile[]> {
   const arquivos: OcExcelFile[] = []
   const condicoes = await mapaCondicoes()
+  const rotulo = (v: unknown) => { const c = txt(v); return condicoes.get(c) || c }
+
+  // Os codigos que o Omie recebe ("A28", "S30"): o formulario guarda o rotulo ou
+  // o codigo do Bitrix, e a resolucao e a mesma do envio. Se falhar, a aba mostra
+  // o que esta no formulario em vez de derrubar a planilha inteira.
+  const codigoCond = async (raw: unknown, kind: 'purchase' | 'sale') => {
+    try { return await resolvePaymentCodeForOmie(txt(raw), kind) } catch { return txt(raw) || '—' }
+  }
+  const condicoesOmie = {
+    condicaoCompra: await codigoCond(values?.business?.purchasePaymentCondition, 'purchase'),
+    condicaoVenda:  await codigoCond(values?.business?.salePaymentCondition, 'sale'),
+    rotulo,
+  }
+
   for (const group of (values?.supplierGroups ?? [])) {
     for (const entry of (values?.customers ?? [])) {
-      const f = await montaArquivo(values, group, entry, condicoes)
+      // Um plano por arquivo: cada planilha resume a compra do seu fornecedor.
+      const plan = buildOmiePlan(values, dealId ?? null, condicoesOmie, {
+        groupLocalId: group.localId, customerLocalId: entry.localId,
+      })
+      const f = await montaArquivo(values, group, entry, condicoes, plan)
       if (f) arquivos.push(f)
     }
   }

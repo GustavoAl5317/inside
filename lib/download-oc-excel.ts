@@ -4,11 +4,12 @@
  * A geração roda no servidor porque depende do modelo em templates/ e do
  * ExcelJS; aqui só disparamos o download de cada arquivo devolvido.
  */
-export async function downloadOcExcels(values: any): Promise<number> {
+export async function downloadOcExcels(values: any, dealId?: number | null): Promise<number> {
   const resp = await fetch('/api/oc-excel', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(values),
+    // dealId entra nos codigos de integracao mostrados na aba "Resumo Omie".
+    body: JSON.stringify({ values, dealId: dealId ?? null }),
   })
   const json = await resp.json().catch(() => null)
   if (!resp.ok || !json?.success) {

@@ -10,8 +10,11 @@ import { generateOcExcelFiles } from '@/lib/generate-oc-excel'
  */
 export async function POST(req: NextRequest) {
   try {
-    const values = await req.json()
-    const arquivos = await generateOcExcelFiles(values)
+    const body = await req.json()
+    // O corpo novo e { values, dealId }; payloads antigos mandavam values na raiz.
+    const values = body?.values ?? body
+    const dealId = Number(body?.dealId) || null
+    const arquivos = await generateOcExcelFiles(values, dealId)
     return NextResponse.json({
       success: true,
       files: arquivos.map(a => ({ filename: a.filename, base64: a.buffer.toString('base64') })),

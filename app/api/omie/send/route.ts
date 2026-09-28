@@ -15,12 +15,12 @@ import { sql } from '@/lib/db'
 import { addOmieRawLog } from '@/lib/unified-log-service'
 import { BitrixService } from '@/lib/bitrix-service'
 import {
-  paymentConditionMatches,
-  resolveDefaultOmiePaymentCode,
-  resolveOmiePaymentCode,
-  tryParseOmiePaymentCode,
-  type PaymentConditionKind,
-} from '@/lib/payment-condition-utils'
+  CC_BARUERI, CC_ES, CNPJ_BARUERI, CNPJ_ES, SERVICO_MAP,
+  branchesDoCliente, codigoProduto, contaCorrente, digits, filialDoGrupo,
+  getBranchCnpj, itensPorFilial, normalizeNCM, normalizeNatureza,
+  resolvePaymentCodeForOmie, toOmieDate,
+  type Filial, type Natureza,
+} from '@/lib/omie-order-plan'
 
 // ─── Endpoints Omie ───────────────────────────────────────────────────────────
 const OMIE_URL = {
@@ -32,11 +32,6 @@ const OMIE_URL = {
   ORDEM_SERVICO:  'https://app.omie.com.br/api/v1/servicos/os/',
   SERVICOS:       'https://app.omie.com.br/api/v1/servicos/servico/',
 }
-
-const CC_BARUERI  = '1807556622'
-const CC_ES       = '5097263320'
-const CNPJ_ES     = '03969530000211'
-const CNPJ_BARUERI = '03969530000130'
 
 const BITRIX_BASE = 'https://interatell.bitrix24.com.br'
 const BITRIX_ENTITY_TYPE_ID = 129
@@ -69,91 +64,7 @@ function prefixDealLink(texto: string, link: string): string {
   return [`Negocio: ${link}`, texto].filter(Boolean).join('\n')
 }
 
-type Filial = 'barueri' | 'es'
-
-/** Filial do grupo de fornecedor — e ela que decide onde a compra acontece. */
-function filialDoGrupo(group: any): Filial {
-  return group?.branch === 'es' ? 'es' : 'barueri'
-}
-
-/**
- * Agrupa as alocacoes de um cliente pela filial do fornecedor de origem.
- *
- * Regra do negocio: a venda segue a compra. Comprou por ES, vende por ES. Um
- * mesmo cliente pode receber itens comprados nas duas filiais (ex.: importados
- * por ES e nacionais por Barueri) — nesse caso saem duas OVs, uma por empresa.
- */
-function itensPorFilial(entry: any, supplierGroups: any[]): Map<Filial, any[]> {
-  const porFilial = new Map<Filial, any[]>()
-  for (const alloc of (entry?.productAllocations ?? [])) {
-    if (!(Number(alloc.quantity) > 0)) continue
-    const group = supplierGroups.find((g: any) => g.localId === alloc.groupLocalId)
-    if (!group) continue
-    const product = group.products?.[alloc.productIndex]
-    if (!product) continue
-    const filial = filialDoGrupo(group)
-    const lista = porFilial.get(filial) ?? []
-    // unitSale vem da alocação do cliente (preço de venda definido por cliente)
-    lista.push({ ...product, quantity: Number(alloc.quantity), unitSale: Number(alloc.unitSale ?? 0) })
-    porFilial.set(filial, lista)
-  }
-  return porFilial
-}
-
-function branchesDoCliente(entry: any, supplierGroups: any[]): Filial[] {
-  const porFilial = itensPorFilial(entry, supplierGroups)
-  const filiais = new Set<Filial>(porFilial.keys())
-
-  // SRV e sempre faturado por Barueri. Se o cliente tem item SRV comprado so
-  // por ES, ele precisa existir tambem no Omie de Barueri — senao a OS de
-  // servico nao encontra o cliente e some sem erro.
-  for (const [, lista] of porFilial) {
-    if (lista.some(i => normalizeNatureza(i.nature) === 'SRV')) { filiais.add('barueri'); break }
-  }
-
-  // Sem alocacao ainda: mantem o comportamento antigo para nao quebrar o cadastro.
-  if (!filiais.size) filiais.add(entry?.branch === 'es' ? 'es' : 'barueri')
-  return [...filiais]
-}
-
-function getBranchCnpj(branch: string | undefined, fallbackCnpj: string): string {
-  if (branch === 'es') return CNPJ_ES
-  if (branch === 'barueri') return CNPJ_BARUERI
-  return fallbackCnpj || CNPJ_BARUERI
-}
-
-type Natureza = 'HW' | 'SW' | 'LC' | 'ST' | 'SRV'
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-const digits = (v: any) => String(v ?? '').replace(/\D/g, '')
-
-async function resolvePaymentCodeForOmie(raw: string, kind: PaymentConditionKind): Promise<string> {
-  const value = String(raw ?? '').trim()
-  if (!value) throw new Error('Condição de pagamento não informada.')
-
-  const direct = tryParseOmiePaymentCode(value)
-  if (direct) return direct
-
-  const fromDefault = resolveDefaultOmiePaymentCode(value, kind)
-  if (fromDefault) return fromDefault
-
-  const listId = process.env.BITRIX_LIST_PAYMENT_ID
-  if (listId) {
-    try {
-      const tipoFilter = kind === 'purchase' ? 'compra' : 'venda'
-      const all = await BitrixService.getPaymentConditions(Number(listId), tipoFilter)
-      for (const item of all) {
-        if (item.code && paymentConditionMatches(raw, item.name, item.code)) {
-          return item.code.toUpperCase()
-        }
-      }
-    } catch {
-      /* fallback para tabela padrão / erro acima */
-    }
-  }
-
-  return resolveOmiePaymentCode(raw, kind)
-}
 
 function omieFaultMessage(res: any): string | null {
   if (!res?.faultstring) return null
@@ -169,38 +80,10 @@ function assertNoOmieErrors(results: any[], label: string): void {
   }
 }
 
-function toOmieDate(input: any): string {
-  const today = () => { const dt = new Date(); return `${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}/${dt.getFullYear()}` }
-  if (!input) return today()
-  let s = String(input).split('T')[0].split(' ')[0].trim()
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return s
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) { const [y,m,d]=s.split('-'); return `${d}/${m}/${y}` }
-  return today()
-}
-
-function normalizeNatureza(raw: any): Natureza {
-  const s = String(raw ?? '').toUpperCase().trim()
-  if (['HW','HARDWARE'].includes(s)) return 'HW'
-  if (['SW','SOFTWARE'].includes(s)) return 'SW'
-  if (['LC','LICENSE','LICENCA'].includes(s)) return 'LC'
-  if (['ST','SERV_TER','TERCEIRO'].includes(s)) return 'ST'
-  if (['SRV','SERV','SERVICO'].includes(s)) return 'SRV'
-  return 'HW'
-}
-
-function normalizeNCM(ncm: any): string {
-  const d = String(ncm ?? '').replace(/\D/g, '')
-  return d.length === 8 ? d : String(ncm ?? '')
-}
-
 function getCredentials(interatellCnpj: string) {
   return digits(interatellCnpj) === digits(CNPJ_ES)
     ? { app_key: process.env.OMIE_APP_KEY_2!, app_secret: process.env.OMIE_APP_SECRET_2! }
     : { app_key: process.env.OMIE_APP_KEY_1!, app_secret: process.env.OMIE_APP_SECRET_1! }
-}
-
-function contaCorrente(interatellCnpj: string) {
-  return digits(interatellCnpj) === digits(CNPJ_ES) ? CC_ES : CC_BARUERI
 }
 
 /** Formata número de pedido Omie — API retorna com zeros à esquerda (ex: 000002601020200). */
@@ -412,18 +295,6 @@ async function ensureFornecedor(interatellCnpj: string, supplier: any, dealId: n
   }
   cache.set(key, codigo)
   return codigo
-}
-
-/**
- * Código do produto no Omie: o SKU do catálogo.
- *
- * partnumber entra só como alternativa — é o que existe quando o produto foi
- * digitado à mão, sem SKU. Antes o partnumber era sempre o código, e como ele
- * vem do NAME do catálogo Bitrix (que costuma ser a descrição inteira), o
- * pedido saía com código e descrição repetindo o mesmo texto.
- */
-function codigoProduto(item: any): string {
-  return String(item?.sku ?? '').trim() || String(item?.partnumber ?? '').trim()
 }
 
 async function ensureProduto(interatellCnpj: string, item: any, dealId: number): Promise<number | undefined> {
@@ -783,7 +654,6 @@ async function upsertOS(
   if (!items.length || !codCliente) return null
   // Numero do pedido do cliente = numero do negocio (ex.: 2026.12345).
   const pedidoCliente = String(business?.commercialProposal ?? '').trim()
-  const SERVICO_MAP: Record<Natureza, string> = { SW:'SRV00007', LC:'SRV00007', ST:'SRV00016', SRV:'SRV00001', HW:'' }
   // A externa ja vai em cDadosAdicNF (sai na NF), entao cObsOS fica so com a
   // interna e o link. Antes cObsOS levava tudo junto e o texto externo aparecia
   // duplicado, misturado com o interno.

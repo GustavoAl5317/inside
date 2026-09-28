@@ -575,7 +575,7 @@ export function MultiStepForm({
         // o PDF continua disponivel no botao "Baixar PDF".
         toast.success("Rascunho salvo! Gerando planilha...")
         try {
-          const n = await downloadOcExcels(values)
+          const n = await downloadOcExcels(values, result.dealId)
           if (n === 0) {
             toast.warning("Rascunho salvo, mas nenhuma planilha foi gerada — nenhum produto alocado a cliente.")
           } else {
