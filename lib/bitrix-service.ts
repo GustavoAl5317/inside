@@ -1,4 +1,5 @@
 import { formatCNPJ, normalizeCNPJDigits } from './utils'
+import { proximoNumeroOc, type CamposFinanceiros } from './oc-numbers'
 
 interface BitrixDeal {
   id: string;
@@ -324,35 +325,69 @@ export class BitrixService {
   }
 
   /**
-   * Grava nos campos UF do card Bitrix os números OC/OV/OS gerados no Omie.
-   * Usa `crm.item.update` para não alterar outros campos.
+   * Grava os campos "Sistema Financeiro (Omie)" do card de Inside Sales.
+   *
+   * Substitui a gravação em ufCrm3OmieNumerosOrdens, campo que não existe nesse
+   * card — o Bitrix ignorava em silêncio e os números nunca apareciam.
    */
-  static async updateDealOmieNumbers(
-    dealId: string,
-    numbers: { oc?: string[]; ov?: string[]; os?: string[] },
-  ): Promise<{ success: boolean }> {
-    try {
-      const deal = await this.getDeal(dealId)
-      if (!deal) return { success: false }
+  static async updateCardFinanceFields(bitrixDealId: string, campos: CamposFinanceiros): Promise<void> {
+    const deal = await this.getDeal(bitrixDealId)
+    if (!deal) throw new Error(`Card do Bitrix não encontrado para o negócio ${bitrixDealId}.`)
+    await bPost('/crm.item.update.json', {
+      entityTypeId: ENTITY_TYPE_ID,
+      id: deal.id,
+      fields: {
+        ufCrm7_1702651646: campos.compra,         // Número Pedido de Compra
+        ufCrm7_1702651690: campos.compraServico,  // Número Pedido de Compra Serviço
+        ufCrm7_1702651668: campos.venda,          // Número Pedido de Venda
+        ufCrm7_1702651712: campos.ordemServico,   // Número Ordem de Serviço
+      },
+    })
+  }
 
-      const parts: string[] = []
-      if (numbers.oc?.length) parts.push(`OC: ${numbers.oc.join(', ')}`)
-      if (numbers.ov?.length) parts.push(`OV: ${numbers.ov.join(', ')}`)
-      if (numbers.os?.length) parts.push(`OS: ${numbers.os.join(', ')}`)
-      if (!parts.length) return { success: true }
+  // ─── Número de Ordem de Compra (lista #35) ───────────────────────────────────
+  // Um item por Ordem de Compra (um por fornecedor) e um por OS de serviço
+  // Interatell. NAME é o número ("9178/26"); IDs confirmados via lists.field.get.
+  private static readonly OC_LIST = {
+    id: 35, cliente: 'PROPERTY_131', proposta: 'PROPERTY_133', observacao: 'PROPERTY_135',
+  } as const
 
-      const obs = parts.join(' | ')
+  /**
+   * Cria o próximo Número de Ordem de Compra na lista #35.
+   *
+   * A sequência sai dos itens mais recentes. Dois cadastros no mesmo instante —
+   * pelo app ou à mão na lista — podem pegar o mesmo número: o Bitrix não trava.
+   */
+  static async createOcNumber(dados: {
+    cliente: string; proposta: string; observacao: string
+  }): Promise<{ number: string; elementId: number }> {
+    const L = BitrixService.OC_LIST
+    const recentes: any = await bPost('/lists.element.get.json', {
+      IBLOCK_TYPE_ID: 'lists', IBLOCK_ID: L.id, ELEMENT_ORDER: { ID: 'DESC' },
+    })
+    const nomes = (Array.isArray(recentes?.result) ? recentes.result : [])
+      .map((e: any) => String(e?.NAME ?? ''))
+    const hoje = new Date()
+    const number = proximoNumeroOc(nomes, hoje.getFullYear())
+    const dd = String(hoje.getDate()).padStart(2, '0')
+    const mm = String(hoje.getMonth() + 1).padStart(2, '0')
 
-      await bPost('/crm.item.update.json', {
-        entityTypeId: ENTITY_TYPE_ID,
-        id: deal.id,
-        fields: { ufCrm3OmieNumerosOrdens: obs },
-      }).catch(() => null)
-
-      return { success: true }
-    } catch {
-      return { success: false }
-    }
+    const criado: any = await bPost('/lists.element.add.json', {
+      IBLOCK_TYPE_ID: 'lists', IBLOCK_ID: L.id,
+      // Obrigatório na API, embora os itens cadastrados à mão não tenham código.
+      ELEMENT_CODE: `oc-${number.replace('/', '-')}-${Date.now()}`,
+      fields: {
+        NAME: number,
+        // Mesmo formato que a lista devolve nos itens criados à mão.
+        ACTIVE_FROM: `${dd}/${mm}/${hoje.getFullYear()} 00:00:00`,
+        [L.cliente]: dados.cliente,
+        [L.proposta]: dados.proposta,
+        [L.observacao]: dados.observacao,
+      },
+    })
+    const elementId = Number(criado?.result)
+    if (!elementId) throw new Error(`Bitrix não devolveu o item criado para a OC ${number}.`)
+    return { number, elementId }
   }
 
   /**
@@ -767,22 +802,36 @@ export class BitrixService {
     ncm:        'PROPERTY_175',
     cfop:       'PROPERTY_317',
     sku:        'PROPERTY_503',
-    skuLegacy:  'PROPERTY_319',  // "SKU_old" — ainda é onde o dado real está
     tipo:       'PROPERTY_321',  // lista: Hardware | Software | Licença | Serviço Interatell | Serviços de Terceiros
     origem:     'PROPERTY_323',  // lista: Nacional | Importado
     fornecedor: 'PROPERTY_327',  // lista de fornecedores
   } as const
 
-  // "Tipo de Part Number" do Bitrix → natureza usada no formulário
+  /**
+   * "Tipo de Part Number" do Bitrix → natureza usada no formulário.
+   *
+   * Os valores da lista já vêm no formato "HDW - Hardware", com o código de três
+   * letras na frente — é ele que o app passou a usar, para bater com o que está
+   * cadastrado no catálogo e com o prefixo do SKU (CIS-HDW-0000). Os rótulos sem
+   * prefixo continuam mapeados por causa de cadastros antigos.
+   */
   private static readonly NATURE_BY_LABEL: Record<string, string> = {
-    'hardware':              'HW',
-    'software':              'SW',
-    'licença':               'LC',
-    'licenca':               'LC',
-    'serviço interatell':    'SRV',
-    'servico interatell':    'SRV',
-    'serviços de terceiros': 'ST',
-    'servicos de terceiros': 'ST',
+    'hardware':              'HDW',
+    'software':              'SFW',
+    'licença':               'LIC',
+    'licenca':               'LIC',
+    'serviço interatell':    'SVI',
+    'servico interatell':    'SVI',
+    'serviços de terceiros': 'SVT',
+    'servicos de terceiros': 'SVT',
+  }
+
+  /** "HDW - Hardware" → "HDW"; rótulo sem prefixo cai no de-para acima. */
+  private static natureFromLabel(label: string): string | undefined {
+    const l = String(label || '').trim()
+    const prefixo = /^([A-Z]{3})\s*-\s*/.exec(l.toUpperCase())
+    if (prefixo) return prefixo[1]
+    return BitrixService.NATURE_BY_LABEL[l.toLowerCase()]
   }
 
   // Valores das propriedades de lista (ID numérico → rótulo). Uma chamada por processo.
@@ -812,6 +861,28 @@ export class BitrixService {
     if (raw == null) return ''
     if (typeof raw === 'object') return String(raw.value ?? '').trim()
     return String(raw).trim()
+  }
+
+  /**
+   * Part number e descrição de um produto do catálogo.
+   *
+   * O padrão do catálogo é NAME = part number e DESCRIPTION = descrição, cada um
+   * na sua variável. Os cadastros antigos, porém, guardam "PN / Descrição" junto
+   * no NAME e deixam o DESCRIPTION vazio — nesses o texto é separado aqui, senão
+   * o part number sai com a descrição colada dentro dele e o produto chega ao
+   * Omie com o texto repetido.
+   */
+  private static splitCatalogName(name: string, description: string): { partnumber: string; description: string } {
+    const nome = String(name || '').trim()
+    const desc = String(description || '').trim()
+    if (desc) return { partnumber: nome, description: desc }
+
+    const sep = nome.indexOf(' / ')
+    if (sep > 0) {
+      return { partnumber: nome.slice(0, sep).trim(), description: nome.slice(sep + 3).trim() }
+    }
+    // Sem descrição em lugar nenhum, o part number responde pelos dois campos.
+    return { partnumber: nome, description: nome }
   }
 
   /** DESCRIPTION vem com HTML do editor do Bitrix. */
@@ -856,7 +927,7 @@ export class BitrixService {
     const P = BitrixService.PRODUCT_PROPS
     const select = [
       'ID', 'NAME', 'CODE', 'XML_ID', 'DESCRIPTION', 'ACTIVE',
-      P.ncm, P.cfop, P.sku, P.skuLegacy, P.tipo, P.origem, P.fornecedor,
+      P.ncm, P.cfop, P.sku, P.tipo, P.origem, P.fornecedor,
     ]
 
     // So campos nativos podem ser filtrados aqui: crm.product.list IGNORA filtro
@@ -895,7 +966,7 @@ export class BitrixService {
           .catch(() => ({ result: [] as any[] }))
         for (const p of (Array.isArray(todos?.result) ? todos.result : [])) {
           if (p?.ID == null || byId.has(String(p.ID))) continue
-          const sku = `${BitrixService.propValue(p[P.sku])}${BitrixService.propValue(p[P.skuLegacy])}`
+          const sku = BitrixService.propValue(p[P.sku])
             .toUpperCase().replace(/[^A-Z0-9]/g, '')
           if (sku && sku.includes(alvo)) byId.set(String(p.ID), p)
         }
@@ -909,20 +980,22 @@ export class BitrixService {
 
       return Array.from(byId.values()).map((p: any) => {
         const tipoLabel = labelOf(P.tipo, p[P.tipo])
-        const sku = BitrixService.propValue(p[P.sku]) || BitrixService.propValue(p[P.skuLegacy])
-        const descricao = BitrixService.stripHtml(String(p.DESCRIPTION || ''))
+        const sku = BitrixService.propValue(p[P.sku])
+        // NAME é o part number no catálogo (ex.: "C9200L-48T-4X-E") e DESCRIPTION
+        // a descrição; CODE é só o slug gerado pelo Bitrix ("c9200l_48t_4x_e__1").
+        const { partnumber, description } = BitrixService.splitCatalogName(
+          String(p.NAME || ''), BitrixService.stripHtml(String(p.DESCRIPTION || '')),
+        )
 
         return {
           id: Number(p.ID),
-          // NAME é o part number no catálogo (ex.: "C9200L-48T-4X-E");
-          // CODE é o slug gerado pelo Bitrix (ex.: "c9200l_48t_4x_e__1").
-          partnumber: String(p.NAME || '').trim(),
-          description: descricao || String(p.NAME || '').trim(),
+          partnumber,
+          description,
           code: String(p.CODE || '').trim() || undefined,
           sku: sku || undefined,
           ncm: BitrixService.propValue(p[P.ncm]) || undefined,
           cfop: BitrixService.propValue(p[P.cfop]) || undefined,
-          nature: BitrixService.NATURE_BY_LABEL[tipoLabel.toLowerCase()] || undefined,
+          nature: BitrixService.natureFromLabel(tipoLabel) || undefined,
           origem: labelOf(P.origem, p[P.origem]) || undefined,
           fornecedor: labelOf(P.fornecedor, p[P.fornecedor]) || undefined,
         }
@@ -941,7 +1014,7 @@ export class BitrixService {
     id: number; partnumber: string; description: string; sku?: string; ncm?: string
   }>> {
     const P = BitrixService.PRODUCT_PROPS
-    const select = ['ID', 'NAME', 'DESCRIPTION', P.ncm, P.sku, P.skuLegacy]
+    const select = ['ID', 'NAME', 'DESCRIPTION', P.ncm, P.sku]
     const out: Array<{ id: number; partnumber: string; description: string; sku?: string; ncm?: string }> = []
     let start = 0
     try {
@@ -951,9 +1024,10 @@ export class BitrixService {
         for (const p of page) {
           out.push({
             id: Number(p.ID),
-            partnumber: String(p.NAME || '').trim(),
-            description: BitrixService.stripHtml(String(p.DESCRIPTION || '')) || String(p.NAME || '').trim(),
-            sku: BitrixService.propValue(p[P.sku]) || BitrixService.propValue(p[P.skuLegacy]) || undefined,
+            ...BitrixService.splitCatalogName(
+              String(p.NAME || ''), BitrixService.stripHtml(String(p.DESCRIPTION || '')),
+            ),
+            sku: BitrixService.propValue(p[P.sku]) || undefined,
             ncm: BitrixService.propValue(p[P.ncm]) || undefined,
           })
         }

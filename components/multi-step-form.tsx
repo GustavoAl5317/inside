@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { BusinessTab } from "./form-tabs/business-tab"
 import { NotesTab } from "./form-tabs/notes-tab"
+import { OcNumbersTab } from "./form-tabs/oc-numbers-tab"
 import { SupplierGroupsTab } from "./form-tabs/supplier-groups-tab"
 import { CustomersTab } from "./form-tabs/customers-tab"
 import { generateDealPDFs } from "@/lib/generate-pdf"
@@ -65,7 +66,7 @@ const companySchema = z.object({
 
 const productSchema = z.object({
   id:          z.number(),
-  // SKU do catalogo (PROPERTY_503/319 no Bitrix). E o identificador principal
+  // SKU do catalogo (PROPERTY_503 no Bitrix). E o identificador principal
   // exibido; partnumber e description continuam como estao.
   sku:         z.string().optional(),
   partnumber:  z.string(),
@@ -91,6 +92,9 @@ const supplierGroupSchema = z.object({
   freightValue: z.number().min(0).default(0),
   supplier: companySchema,
   products: z.array(productSchema),
+  // Número de Ordem de Compra desta OC na lista #35 do Bitrix, ex. "9178/26".
+  ocNumber:    z.string().optional(),
+  ocElementId: z.number().optional(),
 })
 
 const productAllocationSchema = z.object({
@@ -135,6 +139,9 @@ const serviceCustomerSchema = z.object({
     purchaseOrder: z.string().optional(),
   }),
   items: z.array(serviceItemSchema).min(1, "Adicione pelo menos um serviço"),
+  // Número de Ordem de Compra da OS de serviço Interatell (lista #35 do Bitrix).
+  ocNumber:    z.string().optional(),
+  ocElementId: z.number().optional(),
 })
 
 const formSchema = z.object({
@@ -144,26 +151,52 @@ const formSchema = z.object({
     commercialProposal:       z.string().optional(),
     purchaseOrderDate:        z.string().min(1, "Data da OC é obrigatória"),
     deliveryDeadline:         z.string().min(1, "Prazo de entrega é obrigatório"),
-    purchasePaymentCondition: z.string().min(1, "Condição de pagamento de compra é obrigatória"),
+    // Obrigatória só quando há compra: negócio só de serviço Interatell não tem
+    // fornecedor. A regra fica no superRefine do formSchema.
+    purchasePaymentCondition: z.string().default(""),
     expectedBillingDate:      z.string().min(1, "Data de previsão de faturamento é obrigatória"),
     salePaymentCondition:     z.string().min(1, "Condição de pagamento de venda é obrigatória"),
     hasInteratellService:     z.boolean().default(false),
+    // Negócio só de serviço Interatell: sem fornecedor, sem produto, sem OC/OV.
+    // Vai direto ao cliente do serviço e gera uma OS.
+    onlyInteratellService:    z.boolean().default(false),
   }),
   // Derivado das filiais dos grupos de fornecedor ("Faturamento via"), nao mais
   // escolhido a mao na etapa Negocio. Mantido no payload porque PDF, diff e o
   // envio ao Omie leem esse campo.
   interatellBranches: z.array(z.enum(['barueri', 'es'])).default([]),
-  supplierGroups: z.array(supplierGroupSchema).min(1, "Adicione pelo menos um fornecedor"),
-  customers:      z.array(customerEntrySchema).min(1, "Adicione pelo menos um cliente"),
+  // O mínimo de um fornecedor e um cliente fica no superRefine: não vale para
+  // negócio só de serviço Interatell.
+  supplierGroups: z.array(supplierGroupSchema),
+  customers:      z.array(customerEntrySchema),
   serviceCustomers: z.array(serviceCustomerSchema).default([]),
   notes: z.object({
     internalNotes: z.string().optional(),
     externalNotes: z.string().optional(),
   }),
-}).refine(
-  v => !v.business.hasInteratellService || (v.serviceCustomers?.length ?? 0) > 0,
-  { path: ['serviceCustomers'], message: 'Adicione pelo menos um cliente de serviço Interatell' },
-)
+}).superRefine((v, ctx) => {
+  const semServico = !(v.serviceCustomers?.length ?? 0)
+  const msgServico = 'Adicione pelo menos um cliente de serviço Interatell'
+  if (v.business.onlyInteratellService) {
+    if (semServico) ctx.addIssue({ code: "custom", path: ['serviceCustomers'], message: msgServico })
+    return
+  }
+  if (!v.supplierGroups.length) {
+    ctx.addIssue({ code: "custom", path: ['supplierGroups'], message: 'Adicione pelo menos um fornecedor' })
+  }
+  if (!v.customers.length) {
+    ctx.addIssue({ code: "custom", path: ['customers'], message: 'Adicione pelo menos um cliente' })
+  }
+  if (!String(v.business.purchasePaymentCondition ?? '').trim()) {
+    ctx.addIssue({
+      code: "custom", path: ['business', 'purchasePaymentCondition'],
+      message: 'Condição de pagamento de compra é obrigatória',
+    })
+  }
+  if (v.business.hasInteratellService && semServico) {
+    ctx.addIssue({ code: "custom", path: ['serviceCustomers'], message: msgServico })
+  }
+})
 
 type FormValues = z.infer<typeof formSchema>
 // Tipo de entrada do schema (campos com .default() são opcionais antes do parse)
@@ -210,10 +243,23 @@ const TABS = [
   { id: "suppliers",  label: "Fornecedores/Produtos" },
   { id: "customers",  label: "Clientes" },
   { id: "notes",      label: "Observações" },
+  { id: "ocNumbers",  label: "Nº Ordem de Compra" },
 ]
 
-/** O step de serviço Interatell (SRV) só entra no fluxo se o negócio tiver serviço. */
-function buildTabs(hasInteratellService: boolean) {
+/**
+ * O step de serviço Interatell (SRV) só entra no fluxo se o negócio tiver serviço.
+ * Negócio só de serviço pula Fornecedores/Produtos e Clientes: não há compra nem
+ * produto, só o cliente que recebe o serviço.
+ */
+function buildTabs(hasInteratellService: boolean, onlyInteratellService = false) {
+  if (onlyInteratellService) {
+    return [
+      TABS.find(t => t.id === 'business')!,
+      { id: 'serviceCustomers', label: 'Cliente Serviço' },
+      TABS.find(t => t.id === 'notes')!,
+      TABS.find(t => t.id === 'ocNumbers')!,
+    ]
+  }
   if (!hasInteratellService) return TABS
   const i = TABS.findIndex(t => t.id === 'customers')
   return [
@@ -251,6 +297,7 @@ export function MultiStepForm({
   const [omieRunId, setOmieRunId] = useState<string>("")
   const [omieChanges, setOmieChanges] = useState<PayloadChange[]>([])
   const loadedDealIdRef = useRef<number | null>(null)
+  const loadedItemCodeRef = useRef<string | null>(null)
 
   const { user } = useCurrentUser()
   const [approval, setApproval] = useState<{ status?: string; review_note?: string; reviewed_by_name?: string } | null>(null)
@@ -350,8 +397,15 @@ export function MultiStepForm({
 
   // ── 1ª passada: campos básicos do card Bitrix ────────────────────────────
   useEffect(() => {
-    if (!selectedItem) return
+    if (!selectedItem) { loadedItemCodeRef.current = null; return }
     const code = selectedItem.xmlId ? String(selectedItem.xmlId) : String(selectedItem.id)
+    // Só reinicia o formulário quando o card muda de fato. Sem esta trava,
+    // qualquer re-render que trocasse a identidade de selectedItem — salvar o
+    // rascunho, por exemplo — disparava o reset e zerava tudo. Os demais campos
+    // voltavam pelas passadas seguintes; as condições de pagamento, que só vêm
+    // do rascunho, não voltavam, e era isso que sumia depois de salvar.
+    if (loadedItemCodeRef.current === code) return
+    loadedItemCodeRef.current = code
     form.reset({
       bitrixDealId: code,
       business: {
@@ -445,12 +499,40 @@ export function MultiStepForm({
   }, [existingDeal?.id, existingDeal?.payload, form, mode])
 
   const hasInteratellService = !!form.watch("business.hasInteratellService")
-  const tabs = useMemo(() => buildTabs(hasInteratellService), [hasInteratellService])
+  const onlyInteratellService = !!form.watch("business.onlyInteratellService")
+  const tabs = useMemo(
+    () => buildTabs(hasInteratellService, onlyInteratellService),
+    [hasInteratellService, onlyInteratellService],
+  )
+
+  // Ao marcar "só serviço", o cliente que veio do card Bitrix (pré-carregado na
+  // aba Clientes, que sai do fluxo) passa para Cliente Serviço — é o mesmo cliente.
+  useEffect(() => {
+    if (!onlyInteratellService) return
+    if ((form.getValues("serviceCustomers") ?? []).length) return
+    const origem = (form.getValues("customers") ?? [])[0]?.customer
+    if (!origem?.name) return
+    form.setValue("serviceCustomers", [{
+      localId: crypto.randomUUID(), branch: 'barueri', customer: origem, items: [],
+    }])
+  }, [onlyInteratellService, form])
 
   const currentIdx = tabs.findIndex(t => t.id === activeTab)
 
   const validateTab = async (tabId: string): Promise<boolean> => {
-    if (tabId === "business") return form.trigger(["business"])
+    if (tabId === "business") {
+      if (!(await form.trigger(["business"]))) return false
+      // A condição de compra saiu do schema base (negócio só de serviço não tem
+      // compra); sem esta checagem o campo vazio só apareceria no envio final.
+      const b = form.getValues("business")
+      if (!b.onlyInteratellService && !String(b.purchasePaymentCondition ?? '').trim()) {
+        form.setError("business.purchasePaymentCondition", {
+          type: "manual", message: "Condição de pagamento de compra é obrigatória",
+        })
+        return false
+      }
+      return true
+    }
     if (tabId === "suppliers") {
       const groups = form.getValues("supplierGroups")
       if (!groups?.length) { toast.error("Adicione pelo menos um fornecedor com produtos."); return false }
@@ -551,7 +633,16 @@ export function MultiStepForm({
       // "Faturamento via" passou a viver em cada grupo de fornecedor. O campo do
       // negocio vira derivado e e gravado no proprio values porque saveDraftAction
       // recebe values (nao o payload) e PDF, diff e historico leem esse campo.
-      values.interatellBranches = deriveBranches(values.supplierGroups)
+      if (values.business.onlyInteratellService) {
+        // Só serviço: descarta fornecedor e cliente de produto que tenham ficado de
+        // antes de marcar a opção — senão o envio ainda geraria OC e OV. Serviço
+        // Interatell é sempre faturado por Barueri.
+        values.supplierGroups = []
+        values.customers = []
+        values.interatellBranches = ['barueri']
+      } else {
+        values.interatellBranches = deriveBranches(values.supplierGroups)
+      }
       pruneAllocations(values)
       const payload = {
         bitrixDealId:       values.bitrixDealId || null,
@@ -577,9 +668,9 @@ export function MultiStepForm({
         try {
           const n = await downloadOcExcels(values, result.dealId)
           if (n === 0) {
-            toast.warning("Rascunho salvo, mas nenhuma planilha foi gerada — nenhum produto alocado a cliente.")
+            toast.warning("Rascunho salvo, mas nenhuma planilha foi gerada — nenhum produto alocado a cliente nem serviço Interatell com item.")
           } else {
-            toast.success(n > 1 ? `${n} planilhas baixadas (uma por fornecedor/cliente)!` : "Planilha baixada com sucesso!")
+            toast.success(n > 1 ? `${n} planilhas baixadas (uma por distribuidor)!` : "Planilha baixada com sucesso!")
           }
         } catch (xlsErr: any) {
           toast.error("Rascunho salvo, mas houve erro ao gerar a planilha: " + (xlsErr?.message || ""))
@@ -614,7 +705,7 @@ export function MultiStepForm({
               toast.error(r.error || "Erro ao enviar ao Omie.")
               return
             }
-            toast.success("Enviado ao Omie!")
+            toast.success("Envio ao Omie iniciado — acompanhe o andamento nesta janela.")
           })
           .catch(() => toast.error("Erro inesperado ao enviar ao Omie."))
         return
@@ -654,7 +745,7 @@ export function MultiStepForm({
               toast.error(r.error || "Erro ao atualizar no Omie.")
               return
             }
-            toast.success("Pedidos atualizados no Omie!")
+            toast.success("Atualização no Omie iniciada — acompanhe o andamento nesta janela.")
           })
           .catch(() => toast.error("Erro inesperado ao atualizar no Omie."))
         return
@@ -727,10 +818,11 @@ export function MultiStepForm({
             </TabsContent>
             <TabsContent value="suppliers"><SupplierGroupsTab form={form} /></TabsContent>
             <TabsContent value="customers"><CustomersTab form={form} /></TabsContent>
-            {hasInteratellService && (
+            {(hasInteratellService || onlyInteratellService) && (
               <TabsContent value="serviceCustomers"><ServiceCustomersTab form={form} /></TabsContent>
             )}
             <TabsContent value="notes"><NotesTab form={form} /></TabsContent>
+            <TabsContent value="ocNumbers"><OcNumbersTab form={form} /></TabsContent>
           </div>
         </Tabs>
 

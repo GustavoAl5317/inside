@@ -294,7 +294,8 @@ export default function ProcessApprovalPage() {
     setSendingToOmie(transactionId)
     try {
       const r = await sendApprovedProcessToOmieAction(transactionId, { runId })
-      if (r.success) { toast.success('Enviado ao Omie!'); await loadAll() }
+      // O envio roda em segundo plano: aqui ele só começou.
+      if (r.success) { toast.success('Envio ao Omie iniciado — o status atualiza quando terminar.'); await loadAll() }
       else toast.error(r.error || 'Erro ao enviar ao Omie')
     } finally { setSendingToOmie(null) }
   }

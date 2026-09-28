@@ -4,6 +4,8 @@ import { createTransaction } from "./db"
 import { sql } from "./db"
 import { validateCNPJ, formatZipCode, formatPhoneNumber, normalizeCNPJDigits } from "./utils"
 import { BitrixService } from "./bitrix-service"
+import { naturezaCatalogo, preservaNumerosOc } from "./oc-numbers"
+import { garanteNumerosOc } from "./oc-numbers-bitrix"
 import { listOmieStock, compareStockWithCatalog, type CatalogEntry } from './omie-stock'
 import { ProcessHistoryService } from "./process-history-service"
 import { unifiedLogService } from "./unified-log-service"
@@ -375,7 +377,7 @@ export async function searchBitrixProductsAction(query: string) {
         ...p,
         ncm:    p.ncm    || local?.ncm    || '',
         cfop:   p.cfop   || local?.cfop   || '',
-        nature: p.nature || local?.nature || 'HW',
+        nature: naturezaCatalogo(p.nature || local?.nature),
         family: local?.family || '',
       }
     })
@@ -1293,6 +1295,27 @@ export async function getProcessHistoryAction(transactionId: number) {
   }
 }
 
+/** Antes de sobrescrever o payload do negócio: ver preservaNumerosOc. */
+async function preservaNumerosDoBanco(dealId: number, payload: any): Promise<void> {
+  const [row] = await sql`SELECT payload FROM deals WHERE id = ${dealId}`
+  const antigo = typeof row?.payload === 'string' ? JSON.parse(row.payload) : row?.payload
+  if (antigo) preservaNumerosOc(payload, antigo)
+}
+
+/** Aba "Nº Ordem de Compra": cria na lista #35 os números que ainda faltam. */
+export async function generateOcNumbersAction(values: any) {
+  const numeros = (lista: any[] | undefined) =>
+    (lista ?? []).map((x: any) => ({ ocNumber: x?.ocNumber ?? '', ocElementId: x?.ocElementId }))
+  const { criados, erros } = await garanteNumerosOc(values)
+  return {
+    success: !erros.length,
+    error: erros.join(' | ') || undefined,
+    criados,
+    supplierGroups: numeros(values?.supplierGroups),
+    serviceCustomers: numeros(values?.serviceCustomers),
+  }
+}
+
 export async function sendApprovedProcessToOmieAction(
   dealId: number,
   options?: { update?: boolean; changes?: Array<{ label: string; before: string; after: string; kind: string }>; runId?: string },
@@ -1348,20 +1371,9 @@ export async function sendApprovedProcessToOmieAction(
 
     const responseData = await response.json()
 
-    // Grava números OC/OV/OS de volta no card do Bitrix (best-effort)
-    try {
-      const [dealRow] = await sql`SELECT payload, bitrix_deal_id FROM deals WHERE id = ${dealId}`
-      const resumo = responseData?.resumo ?? responseData?.data?.resumo
-      if (dealRow?.bitrix_deal_id && resumo) {
-        const numbers = {
-          oc: (resumo.oc ?? []).map((o: any) => o.numero).filter(Boolean),
-          ov: (resumo.ov ?? []).map((o: any) => o.numero).filter(Boolean),
-          os: (resumo.os ?? []).map((o: any) => o.numero).filter(Boolean),
-        }
-        await BitrixService.updateDealOmieNumbers(dealRow.bitrix_deal_id, numbers)
-      }
-    } catch { /* best-effort */ }
-
+    // O envio roda em segundo plano (a rota responde 202 na hora): Número de Ordem
+    // de Compra, pedidos e campos do card do Bitrix acontecem lá, e o andamento
+    // aparece na tela de processamento.
     return { success: true, data: responseData }
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) }
@@ -1418,6 +1430,27 @@ export async function createDealAction(data: {
 
     const status = data.status || "pending"
 
+    // Card que já tem negócio não enviado reaproveita o mesmo registro. Um negócio
+    // novo teria outro ID e, com ele, outros códigos de integração (OC-{id}-G0...):
+    // o Omie criaria de novo os pedidos que o anterior já tinha criado.
+    if (data.bitrixDealId) {
+      const [existente] = await sql`
+        SELECT id FROM deals
+        WHERE bitrix_deal_id = ${data.bitrixDealId} AND status IN ('pending', 'approved', 'failed')
+        ORDER BY updated_at DESC
+        LIMIT 1
+      `
+      if (existente) {
+        await preservaNumerosDoBanco(existente.id as number, payload)
+        await sql`
+          UPDATE deals SET payload = ${JSON.stringify(payload)}, status = ${status}, updated_at = NOW()
+          WHERE id = ${existente.id}
+        `
+        console.log(`[createDeal] card ${data.bitrixDealId} já tinha o deal #${existente.id} — reaproveitado`)
+        return { success: true, dealId: existente.id as number }
+      }
+    }
+
     console.log(`[createDeal] bitrix_deal_id="${data.bitrixDealId}" status="${status}"`)
 
     const [row] = await sql`
@@ -1472,16 +1505,19 @@ export async function saveDraftAction(
     let targetId: number | null = existingDealId ?? null
 
     if (!targetId && data.bitrixDealId) {
+      // Mesmo critério de getDraftByBitrixDealIdAction: um envio interrompido ou
+      // que falhou continua sendo este negócio, e não um rascunho novo.
       const [row] = await sql`
         SELECT id FROM deals
-        WHERE bitrix_deal_id = ${data.bitrixDealId} AND status = 'pending'
-        ORDER BY created_at DESC
+        WHERE bitrix_deal_id = ${data.bitrixDealId} AND status IN ('pending', 'approved', 'failed')
+        ORDER BY updated_at DESC
         LIMIT 1
       `
       if (row) targetId = row.id as number
     }
 
     if (targetId) {
+      await preservaNumerosDoBanco(targetId, payload)
       await sql`
         UPDATE deals
         SET payload = ${JSON.stringify(payload)}, status = 'pending', updated_at = NOW()
@@ -1947,12 +1983,17 @@ export async function getDealsHistoryAction(limit = 40, offset = 0) {
 
 export async function getDraftByBitrixDealIdAction(bitrixDealId: string) {
   try {
-    console.log(`[getDraft] buscando bitrix_deal_id="${bitrixDealId}" status=pending`)
+    // Pendente, aprovado ou com falha — só o já enviado com sucesso fica de fora.
+    // Carregar apenas 'pending' fazia o card abrir vazio depois de um envio
+    // interrompido ('approved') ou que falhou ('failed'): o negócio seguia no
+    // banco, mas o próximo envio criava outro, com códigos de integração novos, e
+    // duplicava no Omie os pedidos que o anterior já tinha criado.
+    console.log(`[getDraft] buscando bitrix_deal_id="${bitrixDealId}" (pendente, aprovado ou com falha)`)
     const [deal] = await sql`
-      SELECT id, status, payload FROM deals
+      SELECT id, status, payload, omie_response FROM deals
       WHERE bitrix_deal_id = ${bitrixDealId}
-        AND status = 'pending'
-      ORDER BY created_at DESC
+        AND status IN ('pending', 'approved', 'failed')
+      ORDER BY updated_at DESC
       LIMIT 1
     `
     if (!deal) {
@@ -1961,7 +2002,10 @@ export async function getDraftByBitrixDealIdAction(bitrixDealId: string) {
     }
     console.log(`[getDraft] encontrado deal #${deal.id}`)
     const payload = typeof deal.payload === 'string' ? JSON.parse(deal.payload) : deal.payload
-    return { success: true as const, deal: { id: deal.id as number, payload } }
+    const omie = typeof deal.omie_response === 'string' ? JSON.parse(deal.omie_response) : deal.omie_response
+    // Pedidos já criados no Omie, também de envio que falhou no meio: a tela do
+    // card mostra, e o reenvio cria só o que falta.
+    return { success: true as const, deal: { id: deal.id as number, payload, resumo: omie?.resumo ?? null } }
   } catch (error) {
     return { success: false as const, error: error instanceof Error ? error.message : 'Erro desconhecido' }
   }
@@ -1991,6 +2035,7 @@ export async function getDealPayloadAction(dealId: number) {
 
 export async function updateDealPayloadAndStatusAction(dealId: number, status: string, payload: any) {
   try {
+    await preservaNumerosDoBanco(dealId, payload)
     await sql`
       UPDATE deals
       SET status = ${status},

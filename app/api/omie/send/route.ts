@@ -14,13 +14,18 @@ import { type NextRequest, NextResponse } from 'next/server'
 import { sql } from '@/lib/db'
 import { addOmieRawLog } from '@/lib/unified-log-service'
 import { BitrixService } from '@/lib/bitrix-service'
+import { descricaoOmie } from '@/lib/omie-descricao'
+import { camposFinanceirosCard, naturezaInterna } from '@/lib/oc-numbers'
+import { garanteNumerosOc } from '@/lib/oc-numbers-bitrix'
+import { aguardaFreio, freioDepois } from '@/lib/omie-freio'
+import { companyForBranch } from '@/lib/interatell-companies'
 import {
-  CC_BARUERI, CC_ES, CNPJ_BARUERI, CNPJ_ES, SERVICO_MAP,
-  branchesDoCliente, codigoProduto, contaCorrente, digits, filialDoGrupo,
-  getBranchCnpj, itensPorFilial, normalizeNCM, normalizeNatureza,
-  resolvePaymentCodeForOmie, toOmieDate,
-  type Filial, type Natureza,
-} from '@/lib/omie-order-plan'
+  paymentConditionMatches,
+  resolveDefaultOmiePaymentCode,
+  resolveOmiePaymentCode,
+  tryParseOmiePaymentCode,
+  type PaymentConditionKind,
+} from '@/lib/payment-condition-utils'
 
 // ─── Endpoints Omie ───────────────────────────────────────────────────────────
 const OMIE_URL = {
@@ -32,6 +37,11 @@ const OMIE_URL = {
   ORDEM_SERVICO:  'https://app.omie.com.br/api/v1/servicos/os/',
   SERVICOS:       'https://app.omie.com.br/api/v1/servicos/servico/',
 }
+
+const CC_BARUERI  = '1807556622'
+const CC_ES       = '5097263320'
+const CNPJ_ES     = '03969530000211'
+const CNPJ_BARUERI = '03969530000130'
 
 const BITRIX_BASE = 'https://interatell.bitrix24.com.br'
 const BITRIX_ENTITY_TYPE_ID = 129
@@ -64,7 +74,91 @@ function prefixDealLink(texto: string, link: string): string {
   return [`Negocio: ${link}`, texto].filter(Boolean).join('\n')
 }
 
+type Filial = 'barueri' | 'es'
+
+/** Filial do grupo de fornecedor — e ela que decide onde a compra acontece. */
+function filialDoGrupo(group: any): Filial {
+  return group?.branch === 'es' ? 'es' : 'barueri'
+}
+
+/**
+ * Agrupa as alocacoes de um cliente pela filial do fornecedor de origem.
+ *
+ * Regra do negocio: a venda segue a compra. Comprou por ES, vende por ES. Um
+ * mesmo cliente pode receber itens comprados nas duas filiais (ex.: importados
+ * por ES e nacionais por Barueri) — nesse caso saem duas OVs, uma por empresa.
+ */
+function itensPorFilial(entry: any, supplierGroups: any[]): Map<Filial, any[]> {
+  const porFilial = new Map<Filial, any[]>()
+  for (const alloc of (entry?.productAllocations ?? [])) {
+    if (!(Number(alloc.quantity) > 0)) continue
+    const group = supplierGroups.find((g: any) => g.localId === alloc.groupLocalId)
+    if (!group) continue
+    const product = group.products?.[alloc.productIndex]
+    if (!product) continue
+    const filial = filialDoGrupo(group)
+    const lista = porFilial.get(filial) ?? []
+    // unitSale vem da alocação do cliente (preço de venda definido por cliente)
+    lista.push({ ...product, quantity: Number(alloc.quantity), unitSale: Number(alloc.unitSale ?? 0) })
+    porFilial.set(filial, lista)
+  }
+  return porFilial
+}
+
+function branchesDoCliente(entry: any, supplierGroups: any[]): Filial[] {
+  const porFilial = itensPorFilial(entry, supplierGroups)
+  const filiais = new Set<Filial>(porFilial.keys())
+
+  // SRV e sempre faturado por Barueri. Se o cliente tem item SRV comprado so
+  // por ES, ele precisa existir tambem no Omie de Barueri — senao a OS de
+  // servico nao encontra o cliente e some sem erro.
+  for (const [, lista] of porFilial) {
+    if (lista.some(i => normalizeNatureza(i.nature) === 'SRV')) { filiais.add('barueri'); break }
+  }
+
+  // Sem alocacao ainda: mantem o comportamento antigo para nao quebrar o cadastro.
+  if (!filiais.size) filiais.add(entry?.branch === 'es' ? 'es' : 'barueri')
+  return [...filiais]
+}
+
+function getBranchCnpj(branch: string | undefined, fallbackCnpj: string): string {
+  if (branch === 'es') return CNPJ_ES
+  if (branch === 'barueri') return CNPJ_BARUERI
+  return fallbackCnpj || CNPJ_BARUERI
+}
+
+type Natureza = 'HW' | 'SW' | 'LC' | 'ST' | 'SRV'
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+const digits = (v: any) => String(v ?? '').replace(/\D/g, '')
+
+async function resolvePaymentCodeForOmie(raw: string, kind: PaymentConditionKind): Promise<string> {
+  const value = String(raw ?? '').trim()
+  if (!value) throw new Error('Condição de pagamento não informada.')
+
+  const direct = tryParseOmiePaymentCode(value)
+  if (direct) return direct
+
+  const fromDefault = resolveDefaultOmiePaymentCode(value, kind)
+  if (fromDefault) return fromDefault
+
+  const listId = process.env.BITRIX_LIST_PAYMENT_ID
+  if (listId) {
+    try {
+      const tipoFilter = kind === 'purchase' ? 'compra' : 'venda'
+      const all = await BitrixService.getPaymentConditions(Number(listId), tipoFilter)
+      for (const item of all) {
+        if (item.code && paymentConditionMatches(raw, item.name, item.code)) {
+          return item.code.toUpperCase()
+        }
+      }
+    } catch {
+      /* fallback para tabela padrão / erro acima */
+    }
+  }
+
+  return resolveOmiePaymentCode(raw, kind)
+}
 
 function omieFaultMessage(res: any): string | null {
   if (!res?.faultstring) return null
@@ -80,10 +174,54 @@ function assertNoOmieErrors(results: any[], label: string): void {
   }
 }
 
+function toOmieDate(input: any): string {
+  const today = () => { const dt = new Date(); return `${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}/${dt.getFullYear()}` }
+  if (!input) return today()
+  let s = String(input).split('T')[0].split(' ')[0].trim()
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return s
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) { const [y,m,d]=s.split('-'); return `${d}/${m}/${y}` }
+  return today()
+}
+
+/**
+ * Natureza usada internamente no envio ao Omie.
+ *
+ * O catalogo do Bitrix passou a guardar HDW/SFW/LIC/SVI/SVT, que e o que o app
+ * exibe e escreve na planilha. Aqui eles viram os codigos internos de sempre —
+ * os antigos continuam aceitos porque negocios e rascunhos ja gravados usam
+ * HW/SW/LC/ST/SRV.
+ */
+function normalizeNatureza(raw: any): Natureza {
+  // A regra mora em lib/oc-numbers, que também monta os campos do card do Bitrix.
+  return naturezaInterna(raw)
+}
+
+/**
+ * CFOP enviado ao Omie. Produto sem CFOP no catálogo do Bitrix chega como "0" (a
+ * propriedade é numérica), e o Omie recusava o Pedido de Venda com "CFOP não
+ * cadastrada [0.]" — foi o que derrubou todas as OVs do #114. Vazio, "0" ou sem 4
+ * dígitos vira 5104, o CFOP de todos os hardwares que passaram nos envios
+ * anteriores. CFOP válido que vier do catálogo é mantido.
+ */
+const CFOP_PADRAO = '5104'
+function cfopOmie(raw: unknown): string {
+  const d = String(raw ?? '').replace(/\D/g, '')
+  return d.length === 4 && d !== '0000' ? d : CFOP_PADRAO
+}
+
+function normalizeNCM(ncm: any): string {
+  const d = String(ncm ?? '').replace(/\D/g, '')
+  return d.length === 8 ? d : String(ncm ?? '')
+}
+
 function getCredentials(interatellCnpj: string) {
   return digits(interatellCnpj) === digits(CNPJ_ES)
     ? { app_key: process.env.OMIE_APP_KEY_2!, app_secret: process.env.OMIE_APP_SECRET_2! }
     : { app_key: process.env.OMIE_APP_KEY_1!, app_secret: process.env.OMIE_APP_SECRET_1! }
+}
+
+function contaCorrente(interatellCnpj: string) {
+  return digits(interatellCnpj) === digits(CNPJ_ES) ? CC_ES : CC_BARUERI
 }
 
 /** Formata número de pedido Omie — API retorna com zeros à esquerda (ex: 000002601020200). */
@@ -117,50 +255,71 @@ function ovResultMeta(res: any, found: { cab: any; intCode: string } | null, bas
 async function omieCall(interatellCnpj: string, url: string, call: string, param: object, dealId: number, step: string) {
   const { app_key, app_secret } = getCredentials(interatellCnpj)
   const body = { call, app_key, app_secret, param: [param] }
+  // Espera do freio vai para o log como aviso: a tela de processamento mostra o
+  // motivo em amarelo enquanto o envio aguarda.
+  const avisaEspera = (motivo: string) => {
+    console.warn(`[Omie][deal=${dealId}][${step}] ${motivo}`)
+    return addOmieRawLog({ transactionId: dealId, step: step as any, level: 'warning', message: `${step}: ${motivo}`,
+      runId: ctx().runId, raw: { endpoint: url, httpStatus: 0, requestBodyRaw: '', responseBodyRaw: '' } }).catch(() => {})
+  }
 
   console.log(`[Omie][deal=${dealId}][${step}] → ${call}`, JSON.stringify(param))
 
   await addOmieRawLog({ transactionId: dealId, step: step as any, level: 'info', message: `${step}: ${call}`, runId: ctx().runId,
     raw: { endpoint: url, httpStatus: 0, requestBodyRaw: JSON.stringify(body), responseBodyRaw: '' } }).catch(() => {})
 
-  await new Promise(r => setTimeout(r, Number(process.env.OMIE_SLEEP_MS ?? 260)))
+  // Quando o próprio Omie responde com bloqueio (por erros de outro sistema na
+  // mesma chave, ou de antes de um restart), o freio espera o prazo informado e a
+  // mesma chamada é repetida — o envio termina inteiro em vez de parar no meio.
+  for (let tentativa = 1; ; tentativa++) {
+    // Espera antes de o Omie bloquear a chave, ou enquanto ele ainda bloqueia:
+    // ver lib/omie-freio.
+    await aguardaFreio(app_key, call, avisaEspera)
+    await new Promise(r => setTimeout(r, Number(process.env.OMIE_SLEEP_MS ?? 260)))
 
-  let httpStatus = 0, responseText = ''
-  try {
-    const resp = await fetch(url, { method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify(body), cache: 'no-store' })
-    httpStatus = resp.status
-    responseText = await resp.text()
-    const data = responseText ? JSON.parse(responseText) : null
+    let httpStatus = 0, responseText = ''
+    try {
+      const resp = await fetch(url, { method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(body), cache: 'no-store' })
+      httpStatus = resp.status
+      responseText = await resp.text()
+      const data = responseText ? JSON.parse(responseText) : null
+      freioDepois(app_key, call, httpStatus, data?.faultstring)
 
-    // Passos de verificação (check*) retornam 500 com "não cadastrado" quando o pedido
-    // simplesmente ainda não existe — isso é esperado e não é um erro de fato.
-    const isCheckStep = step.startsWith('check')
-    // "Não existem registros" é a resposta do ListarClientes quando o CNPJ ainda
-    // não está no Omie — o cadastro é criado logo em seguida. Sem esta linha o
-    // passo aparecia vermelho na tela de processamento, como se fosse falha.
-    const isNotFound = typeof data?.faultstring === 'string' &&
-      /não cadastrado|nao cadastrado|not found|n[ãa]o existem registros/i.test(data.faultstring)
-    const level: 'success' | 'info' | 'error' =
-      httpStatus >= 200 && httpStatus < 300 ? 'success'
-      : (isCheckStep && isNotFound) ? 'info'
-      : 'error'
+      if (isOmieRateLimitFault(data?.faultstring) && tentativa < 4) {
+        await avisaEspera(`O Omie respondeu com bloqueio (${String(data.faultstring).slice(0, 160)}). A chamada será repetida quando ele liberar.`)
+        continue
+      }
 
-    if (level === 'error') {
-      console.error(`[Omie][deal=${dealId}][${step}] ← HTTP ${httpStatus}`, responseText.slice(0, 1000))
-    } else {
-      console.log(`[Omie][deal=${dealId}][${step}] ← HTTP ${httpStatus}`, responseText.slice(0, 500))
+      // Passos de verificação (check*) retornam 500 com "não cadastrado" quando o pedido
+      // simplesmente ainda não existe — isso é esperado e não é um erro de fato.
+      const isCheckStep = step.startsWith('check')
+      // "Não existem registros" é a resposta do ListarClientes quando o CNPJ ainda
+      // não está no Omie — o cadastro é criado logo em seguida. Sem esta linha o
+      // passo aparecia vermelho na tela de processamento, como se fosse falha.
+      const isNotFound = typeof data?.faultstring === 'string' &&
+        /não cadastrado|nao cadastrado|not found|n[ãa]o existem registros/i.test(data.faultstring)
+      const level: 'success' | 'info' | 'error' =
+        httpStatus >= 200 && httpStatus < 300 ? 'success'
+        : (isCheckStep && isNotFound) ? 'info'
+        : 'error'
+
+      if (level === 'error') {
+        console.error(`[Omie][deal=${dealId}][${step}] ← HTTP ${httpStatus}`, responseText.slice(0, 1000))
+      } else {
+        console.log(`[Omie][deal=${dealId}][${step}] ← HTTP ${httpStatus}`, responseText.slice(0, 500))
+      }
+
+      await addOmieRawLog({ transactionId: dealId, step: step as any, level, message: `${step}: HTTP ${httpStatus}`, runId: ctx().runId,
+        raw: { endpoint: url, httpStatus, requestBodyRaw: JSON.stringify(body), responseBodyRaw: responseText } }).catch(() => {})
+      return data
+    } catch (err: any) {
+      console.error(`[Omie][deal=${dealId}][${step}] ✗ Erro de rede: ${err?.message}`)
+      await addOmieRawLog({ transactionId: dealId, step: step as any, level: 'error', message: `${step}: ${err?.message}`, runId: ctx().runId,
+        raw: { endpoint: url, httpStatus, requestBodyRaw: JSON.stringify(body), responseBodyRaw: responseText } }).catch(() => {})
+      return { faultstring: err?.message, faultcode: 'NETWORK_ERROR' }
     }
-
-    await addOmieRawLog({ transactionId: dealId, step: step as any, level, message: `${step}: HTTP ${httpStatus}`, runId: ctx().runId,
-      raw: { endpoint: url, httpStatus, requestBodyRaw: JSON.stringify(body), responseBodyRaw: responseText } }).catch(() => {})
-    return data
-  } catch (err: any) {
-    console.error(`[Omie][deal=${dealId}][${step}] ✗ Erro de rede: ${err?.message}`)
-    await addOmieRawLog({ transactionId: dealId, step: step as any, level: 'error', message: `${step}: ${err?.message}`, runId: ctx().runId,
-      raw: { endpoint: url, httpStatus, requestBodyRaw: JSON.stringify(body), responseBodyRaw: responseText } }).catch(() => {})
-    return { faultstring: err?.message, faultcode: 'NETWORK_ERROR' }
   }
 }
 
@@ -174,6 +333,17 @@ type RunCtx = {
   fornecedorCache: Map<string, number>
   produtoCache: Map<string, number | undefined>
   servicoCache: Map<string, ServicoInfo>
+  /** Cidade do cliente como o Omie a tem cadastrada ("SAO PAULO (SP)"): ver cidadeDaOS. */
+  clienteCidade: Map<string, string>
+  /** Produtos que já existem no Omie, por CNPJ da filial: ver mapaProdutosExistentes. */
+  produtosExistentes: Map<string, Map<string, any>>
+  /**
+   * Procurar OC/OV/OS antes de criar — só na atualização de negócio já enviado.
+   * Fora dela o app cria direto e busca só se o Omie disser que já existe.
+   */
+  buscarPedidos: boolean
+  /** Maior sufixo -Rn já usado nos códigos de integração deste negócio. */
+  retryMax: number
 }
 const runStore = new AsyncLocalStorage<RunCtx>()
 const newRunCtx = (runId: string | null): RunCtx => ({
@@ -182,6 +352,10 @@ const newRunCtx = (runId: string | null): RunCtx => ({
   fornecedorCache: new Map(),
   produtoCache: new Map(),
   servicoCache: new Map(),
+  clienteCidade: new Map(),
+  produtosExistentes: new Map(),
+  buscarPedidos: false,
+  retryMax: 0,
 })
 const ctx = (): RunCtx => runStore.getStore() ?? newRunCtx(null)
 
@@ -230,6 +404,9 @@ async function ensureCliente(interatellCnpj: string, company: any, dealId: numbe
   let codigo: number
   if (check?.clientes_cadastro?.length) {
     codigo = check.clientes_cadastro[0].codigo_cliente_omie
+    // A cidade do cadastro do Omie já vem como "SAO PAULO (SP)", o formato que a
+    // OS exige — ver cidadeDaOS.
+    ctx().clienteCidade.set(key, String(check.clientes_cadastro[0].cidade ?? '').trim())
   } else {
     await avisaCadastroNovo(dealId, 'checkCliente', 'Cliente', company?.name, cnpj, interatellCnpj)
     const created = await omieCall(interatellCnpj, OMIE_URL.CLIENTES, 'IncluirCliente', {
@@ -297,6 +474,94 @@ async function ensureFornecedor(interatellCnpj: string, supplier: any, dealId: n
   return codigo
 }
 
+/**
+ * Código do produto no Omie: o SKU do catálogo.
+ *
+ * partnumber entra só como alternativa — é o que existe quando o produto foi
+ * digitado à mão, sem SKU. Antes o partnumber era sempre o código, e como ele
+ * vem do NAME do catálogo Bitrix (que costuma ser a descrição inteira), o
+ * pedido saía com código e descrição repetindo o mesmo texto.
+ */
+function codigoProduto(item: any): string {
+  return String(item?.sku ?? '').trim() || String(item?.partnumber ?? '').trim()
+}
+
+/**
+ * Descrição do produto no Omie: "Part Number / Descrição", em 120 caracteres.
+ *
+ * Vale para o cadastro do produto e para as linhas do Pedido de Compra e do
+ * Pedido de Venda — os três precisam bater, senão o Omie mostra um texto no
+ * cadastro e outro no pedido.
+ */
+function descricaoProduto(item: any): string {
+  return descricaoOmie(item?.partnumber, item?.description)
+}
+
+/**
+ * Alinha um produto ja cadastrado no Omie ao padrao atual: codigo = SKU e
+ * descricao = "Part Number / Descricao".
+ *
+ * So chama a API quando algo de fato diverge. Descricao, codigo, unidade e NCM
+ * sao obrigatorios no cadastro do Omie, entao os quatro vao sempre — os que nao
+ * estao mudando repetem o valor que o produto ja tem, para o AlterarProduto nao
+ * esvaziar nada.
+ *
+ * Falha aqui nao interrompe o envio: o produto existente continua valendo, e
+ * duplicar o cadastro seria pior que ficar com o texto antigo. O erro fica no
+ * log da transacao. O passo e o mesmo da criacao para o log ja saber exibi-lo;
+ * o corpo da requisicao mostra que a chamada foi AlterarProduto.
+ */
+async function alinhaProduto(
+  interatellCnpj: string, atual: any, codigo: string, descricao: string, dealId: number,
+): Promise<void> {
+  const codigoAtual = String(atual?.codigo ?? '')
+  const descricaoAtual = String(atual?.descricao ?? '')
+  const mudaCodigo = !!codigo && codigo !== codigoAtual
+  const mudaDescricao = !!descricao && descricao !== descricaoAtual
+  if (!mudaCodigo && !mudaDescricao) return
+
+  const res = await omieCall(interatellCnpj, OMIE_URL.PRODUTOS, 'AlterarProduto', {
+    codigo_produto: atual.codigo_produto,
+    codigo: mudaCodigo ? codigo : codigoAtual,
+    descricao: mudaDescricao ? descricao : descricaoAtual,
+    unidade: String(atual?.unidade ?? '') || 'UN',
+    ncm: String(atual?.ncm ?? ''),
+  }, dealId, 'createProdutoResult')
+
+  if (res?.faultstring && isOmieRateLimitFault(res.faultstring)) {
+    throw new Error(`Omie temporariamente bloqueado por excesso de chamadas — aguarde alguns minutos e reenvie. (${res.faultstring})`)
+  }
+}
+
+/**
+ * Produtos que já existem no Omie, numa chamada só por filial.
+ *
+ * Consultar produto por produto (ConsultarProduto) dá erro "não cadastrado" para
+ * cada um que ainda não existe, e o Omie bloqueia a chave na 10ª resposta com
+ * erro no mesmo método. Com os SKUs novos do catálogo quase todo produto é novo:
+ * pelo SKU e depois pelo partnumber eram 2 erros por produto, e 5 produtos já
+ * bloqueavam. ListarProdutos com a lista de códigos devolve só os que existem,
+ * sem erro; se nenhum existir, é um erro só.
+ */
+async function mapaProdutosExistentes(interatellCnpj: string, codigos: string[], dealId: number): Promise<Map<string, any>> {
+  const mapa = new Map<string, any>()
+  const unicos = [...new Set(codigos.map(c => String(c ?? '').trim()).filter(Boolean))]
+  for (let i = 0; i < unicos.length; i += 50) {
+    const res = await omieCall(interatellCnpj, OMIE_URL.PRODUTOS, 'ListarProdutos', {
+      pagina: 1, registros_por_pagina: 50, apenas_importado_api: 'N', filtrar_apenas_omiepdv: 'N',
+      produtosPorCodigo: unicos.slice(i, i + 50).map(codigo => ({ codigo })),
+    }, dealId, 'checkProduto')
+    if (res?.faultstring && isOmieRateLimitFault(res.faultstring)) {
+      throw new Error(`Omie temporariamente bloqueado por excesso de chamadas — aguarde alguns minutos e reenvie. (${res.faultstring})`)
+    }
+    for (const p of res?.produto_servico_cadastro ?? []) {
+      const cod = String(p?.codigo ?? '').trim().toUpperCase()
+      if (cod && p?.codigo_produto) mapa.set(cod, p)
+    }
+  }
+  return mapa
+}
+
 async function ensureProduto(interatellCnpj: string, item: any, dealId: number): Promise<number | undefined> {
   if (normalizeNatureza(item.nature) === 'SRV') return undefined
   const sku = codigoProduto(item)
@@ -306,21 +571,16 @@ async function ensureProduto(interatellCnpj: string, item: any, dealId: number):
   const cache = ctx().produtoCache
   if (cache.has(key)) return cache.get(key)
 
-  const check = await omieCall(interatellCnpj, OMIE_URL.PRODUTOS, 'ConsultarProduto', { codigo: sku }, dealId, 'checkProduto')
-  if (check?.faultstring && isOmieRateLimitFault(check.faultstring)) {
-    throw new Error(`Omie temporariamente bloqueado por excesso de chamadas — aguarde alguns minutos e reenvie. (${check.faultstring})`)
-  }
-  let cod: number | undefined = check?.codigo_produto
-
+  // Existência vem da consulta em lote feita antes do laço de produtos.
+  const existentes = ctx().produtosExistentes.get(digits(interatellCnpj))
+    ?? await mapaProdutosExistentes(interatellCnpj, [sku, partnumber], dealId)
   // Produtos cadastrados antes de o código passar a ser o SKU estão no Omie com
   // o partnumber como código. Reaproveita esse cadastro em vez de duplicar.
-  if (!cod && partnumber && partnumber !== sku) {
-    const legado = await omieCall(interatellCnpj, OMIE_URL.PRODUTOS, 'ConsultarProduto', { codigo: partnumber }, dealId, 'checkProduto')
-    if (legado?.faultstring && isOmieRateLimitFault(legado.faultstring)) {
-      throw new Error(`Omie temporariamente bloqueado por excesso de chamadas — aguarde alguns minutos e reenvie. (${legado.faultstring})`)
-    }
-    if (legado?.codigo_produto) cod = legado.codigo_produto
-  }
+  const achado: any = existentes.get(sku.toUpperCase())
+    ?? (partnumber && partnumber !== sku ? existentes.get(partnumber.toUpperCase()) : undefined)
+
+  let cod: number | undefined = achado?.codigo_produto
+  if (achado) await alinhaProduto(interatellCnpj, achado, sku, descricaoProduto(item), dealId)
 
   if (!cod) {
     // Garante NCM: usa o do deal; se vazio, busca no banco local pelo partnumber
@@ -333,8 +593,8 @@ async function ensureProduto(interatellCnpj: string, item: any, dealId: number):
     }
 
     const created = await omieCall(interatellCnpj, OMIE_URL.PRODUTOS, 'IncluirProduto', {
-      codigo: sku, descricao: item.description, unidade: 'UN',
-      ncm, cfop: item.cfop ?? '',
+      codigo: sku, descricao: descricaoProduto(item), unidade: 'UN',
+      ncm, cfop: cfopOmie(item.cfop),
       codigo_produto_integracao: sku,
       codigo_familia: item.family || '',
     }, dealId, 'createProdutoResult')
@@ -416,7 +676,8 @@ function parseOCConsultResponse(existing: any, intCode: string) {
   }
 }
 
-async function findExistingOC(interatellCnpj: string, dealId: number, baseCode: string, retryCount: number) {
+async function findExistingOC(interatellCnpj: string, dealId: number, baseCode: string, retryCount: number, forcar = false) {
+  if (!ctx().buscarPedidos && !forcar) return null
   for (const cCodIntPed of integrationLookupCodes(baseCode, retryCount)) {
     const existing = await omieCall(interatellCnpj, OMIE_URL.PEDIDOS_COMPRA, 'ConsultarPedCompra',
       { cCodIntPed }, dealId, 'checkOC')
@@ -426,7 +687,8 @@ async function findExistingOC(interatellCnpj: string, dealId: number, baseCode: 
   return null
 }
 
-async function findExistingOV(interatellCnpj: string, dealId: number, baseCode: string, retryCount: number, legacyBase?: string) {
+async function findExistingOV(interatellCnpj: string, dealId: number, baseCode: string, retryCount: number, legacyBase?: string, forcar = false) {
+  if (!ctx().buscarPedidos && !forcar) return null
   // legacyBase: codigo usado antes da OV passar a ser por filial. Sem ele, um
   // negocio ja enviado criaria uma OV nova em vez de atualizar a existente.
   const codigos = [
@@ -445,7 +707,8 @@ async function findExistingOV(interatellCnpj: string, dealId: number, baseCode: 
   return null
 }
 
-async function findExistingOS(interatellCnpj: string, dealId: number, baseCode: string, retryCount: number) {
+async function findExistingOS(interatellCnpj: string, dealId: number, baseCode: string, retryCount: number, forcar = false) {
+  if (!ctx().buscarPedidos && !forcar) return null
   for (const cCodIntOS of integrationLookupCodes(baseCode, retryCount)) {
     const existing = await omieCall(interatellCnpj, OMIE_URL.ORDEM_SERVICO, 'ConsultarOS',
       { cCodIntOS }, dealId, 'checkOS')
@@ -481,13 +744,13 @@ async function upsertOC(
     ...(e.codigoProdutoOmie
       ? { nCodProd: e.codigoProdutoOmie }
       : { cCodIntProd: codigoProduto(e) }),
-    cDescricao: e.description,
+    cDescricao: descricaoProduto(e),
     cNCM: normalizeNatureza(e.nature) === 'HW' ? normalizeNCM(e.ncm) : '00000000',
     cUnidade: 'UN', nQtde: Number(e.quantity ?? 1),
     nValUnit: Number(e.unitCost ?? 0), nPesoLiq: 0, nPesoBruto: 0,
   }))
 
-  const lookupRetry = opts.isUpdate ? Math.max(opts.retryCount, 5) : opts.retryCount
+  const lookupRetry = ctx().retryMax
   const found = await findExistingOC(interatellCnpj, dealId, baseCode, lookupRetry)
   const intCode = found?.intCode ?? (opts.isUpdate ? baseCode : createCode)
 
@@ -552,7 +815,7 @@ async function upsertOV(
         ...(e.codigoProdutoOmie
           ? { codigo_produto: e.codigoProdutoOmie }
           : { codigo_produto_integracao: codigoProduto(e) }),
-        cfop: e.cfop ?? '', ncm: normalizeNCM(e.ncm), descricao: e.description,
+        cfop: cfopOmie(e.cfop), ncm: normalizeNCM(e.ncm), descricao: descricaoProduto(e),
         quantidade: Number(e.quantity ?? 1), unidade: 'UN',
         valor_unitario: Number(e.unitSale ?? 0), tipo_desconto: 'V', valor_desconto: 0,
       },
@@ -575,7 +838,7 @@ async function upsertOV(
     dados_adicionais_nf: obs.externa,
   }
 
-  const lookupRetry = opts.isUpdate ? Math.max(opts.retryCount, 5) : opts.retryCount
+  const lookupRetry = ctx().retryMax
   const found = await findExistingOV(interatellCnpj, dealId, baseCode, lookupRetry, legacyBase)
   if (found) {
     const res = await omieCall(interatellCnpj, OMIE_URL.PEDIDOS_VENDA, 'AlterarPedidoVenda', {
@@ -602,7 +865,7 @@ async function upsertOV(
   }, dealId, 'createOVResult')
 
   if (res?.faultstring && /j[aá] cadastrado|already registered/i.test(String(res.faultstring))) {
-    const retryFound = await findExistingOV(interatellCnpj, dealId, baseCode, Math.max(opts.retryCount, 5), legacyBase)
+    const retryFound = await findExistingOV(interatellCnpj, dealId, baseCode, ctx().retryMax, legacyBase, true)
     if (retryFound) {
       const retryRes = await omieCall(interatellCnpj, OMIE_URL.PEDIDOS_VENDA, 'AlterarPedidoVenda', {
         cabecalho: {
@@ -644,6 +907,28 @@ function cidadePrestServ(city: unknown, state: unknown): string {
   return uf.length === 2 ? `${nome} (${uf})` : nome
 }
 
+/**
+ * Cidade da prestação do serviço na OS, sempre como "CIDADE (UF)".
+ *
+ * Na ordem: a cidade que o próprio Omie tem no cadastro do cliente (já vem nesse
+ * formato), a do formulário e, por último, a da filial que fatura. O Omie recusa
+ * a OS com "Cidade não cadastrada para o Código [SAO PAULO]" quando falta a UF, e
+ * foi isso que derrubou a OS de um cliente cadastrado sem UF no formulário.
+ */
+function cidadeDaOS(interatellCnpj: string, cliente: any, filial: Filial): { cidade: string; doFilial: boolean } {
+  const temUF = (v: string) => /\([A-Za-z]{2}\)\s*$/.test(v)
+  const candidatos = [
+    ctx().clienteCidade.get(`${digits(interatellCnpj)}:${digits(cliente?.cnpj ?? '')}`) ?? '',
+    cidadePrestServ(cliente?.city, cliente?.state),
+  ].map(v => String(v).trim())
+
+  const escolhido = candidatos.find(temUF)
+  if (escolhido) return { cidade: escolhido, doFilial: false }
+
+  const itl = companyForBranch(filial === 'es' ? 'es' : 'barueri')
+  return { cidade: `${itl.city} (${itl.state})`, doFilial: true }
+}
+
 // ─── Upsert OS (busca pelo código de integração → atualiza ou cria) ──────────
 async function upsertOS(
   interatellCnpj: string, codCliente: number, cliente: any, items: any[], nat: Natureza,
@@ -654,6 +939,7 @@ async function upsertOS(
   if (!items.length || !codCliente) return null
   // Numero do pedido do cliente = numero do negocio (ex.: 2026.12345).
   const pedidoCliente = String(business?.commercialProposal ?? '').trim()
+  const SERVICO_MAP: Record<Natureza, string> = { SW:'SRV00007', LC:'SRV00007', ST:'SRV00016', SRV:'SRV00001', HW:'' }
   // A externa ja vai em cDadosAdicNF (sai na NF), entao cObsOS fica so com a
   // interna e o link. Antes cObsOS levava tudo junto e o texto externo aparecia
   // duplicado, misturado com o interno.
@@ -667,8 +953,20 @@ async function upsertOS(
     dDtPrevisao: toOmieDate(business?.deliveryDeadline ?? business?.expectedBillingDate),
     cCodParc: codParc, nQtdeParc: 1,
   }
+  // Cidade da prestação: sem UF o Omie recusa a OS inteira. Quando nem o cadastro
+  // do Omie nem o formulário têm a UF, vai a cidade da Interatell — e isso muda o
+  // município da prestação, então fica avisado no log.
+  const { cidade: cidadePrestacao, doFilial: cidadeDaFilial } = cidadeDaOS(interatellCnpj, cliente, filial)
+  if (cidadeDaFilial) {
+    await addOmieRawLog({
+      transactionId: dealId, step: 'createOSResult', level: 'warning', runId: ctx().runId,
+      message: `createOSResult: cliente "${cliente?.name ?? ''}" sem cidade com UF — a OS vai com ${cidadePrestacao}, a cidade da Interatell. Confira a UF do cliente.`,
+      raw: { endpoint: OMIE_URL.ORDEM_SERVICO, httpStatus: 0, requestBodyRaw: '', responseBodyRaw: '' },
+    }).catch(() => {})
+  }
+
   const InformacoesAdicionais = {
-    cCidPrestServ: cidadePrestServ(cliente?.city, cliente?.state), cCodCateg: '1.01.02',
+    cCidPrestServ: cidadePrestacao, cCodCateg: '1.01.02',
     // Numero do pedido do cliente; cai no codigo de integracao so quando o
     // cliente nao informou o dele.
     cNumPedido: pedidoCliente || createCode, nCodCC: contaCorrente(interatellCnpj),
@@ -706,9 +1004,7 @@ async function upsertOS(
     .map((e: any) => ({ cAcaoItemPU: 'I', nCodProdutoPU: Number(e.codigoProdutoOmie), nQtdePU: Number(e.quantity ?? 1) }))
   const produtosUtilizados = { cAcaoProdUtilizados: 'EST', cCodCategRem: '', produtoUtilizado }
 
-  const lookupRetry = opts.isUpdate ? Math.max(opts.retryCount, 5) : opts.retryCount
-  const found = await findExistingOS(interatellCnpj, dealId, baseCode, lookupRetry)
-  if (found) {
+  const alteraOS = async (found: any) => {
     // Idempotente: na atualização só INCLUI o produto que a OS ainda não tem, evitando
     // baixa de estoque em duplicidade a cada reenvio. Produtos já presentes ficam intactos.
     const jaPresentes = new Set(
@@ -718,16 +1014,25 @@ async function upsertOS(
     )
     const produtoUtilizadoNovo = produtoUtilizado.filter(p => !jaPresentes.has(Number(p.nCodProdutoPU)))
     const produtosUtilizadosUpdate = { cAcaoProdUtilizados: 'EST', cCodCategRem: '', produtoUtilizado: produtoUtilizadoNovo }
+    // AlterarOS identifica a OS só pelo nCodOS. Com o cCodIntOS junto o Omie
+    // recusa com "Informe a Tag [nCodOS] ou [cCodIntOS] na alteração!" — foi o
+    // que derrubou o #111. É a mesma regra que a atualização parcial
+    // (lib/omie-order-api) já seguia, com o bloco Email presente.
+    const { cCodIntOS: _codigoIntegracao, ...cabecalhoAlteracao } = Cabecalho
     const res = await omieCall(interatellCnpj, OMIE_URL.ORDEM_SERVICO, 'AlterarOS', {
-      Cabecalho: { ...Cabecalho, cCodIntOS: found.intCode, nCodOS: found.cab.nCodOS },
+      Cabecalho: { ...cabecalhoAlteracao, nCodOS: found.cab.nCodOS },
       InformacoesAdicionais,
+      Email: { cEnvBoleto: 'N', cEnvLink: 'N', cEnvPix: 'N', cEnviarPara: '' },
       Observacoes: { cObsOS: obsOS },
       Departamentos: [],
       ServicosPrestados: await buildServicos(found.servicos),
       produtosUtilizados: produtosUtilizadosUpdate,
     }, dealId, 'createOSResult')
-    return { ...res, _action: 'updated', _numero: found.cab.cNumOS ?? found.cab.nCodOS, _codigo: found.cab.nCodOS }
+    return { ...res, _action: 'updated', _numero: found.cab.cNumOS ?? found.cab.nCodOS, _codigo: found.cab.nCodOS, _intCode: found.intCode }
   }
+
+  const found = await findExistingOS(interatellCnpj, dealId, baseCode, ctx().retryMax)
+  if (found) return alteraOS(found)
 
   const res = await omieCall(interatellCnpj, OMIE_URL.ORDEM_SERVICO, 'IncluirOS', {
     Cabecalho, InformacoesAdicionais,
@@ -736,7 +1041,15 @@ async function upsertOS(
     ServicosPrestados: await buildServicos(),
     produtosUtilizados,
   }, dealId, 'createOSResult')
-  return { ...res, _action: 'created', _numero: res?.cNumOS ?? res?.nCodOS, _codigo: res?.nCodOS }
+
+  // Fora da atualização o app cria direto, sem procurar antes. Se a OS já existe
+  // com este código — envio anterior que falhou depois de criá-la —, busca e
+  // atualiza em vez de falhar.
+  if (res?.faultstring && /j[aá] cadastrad|j[aá] existe|already registered/i.test(String(res.faultstring))) {
+    const existente = await findExistingOS(interatellCnpj, dealId, baseCode, ctx().retryMax, true)
+    if (existente) return alteraOS(existente)
+  }
+  return { ...res, _action: 'created', _numero: res?.cNumOS ?? res?.nCodOS, _codigo: res?.nCodOS, _intCode: createCode }
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
@@ -752,8 +1065,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Credenciais Omie não configuradas.' }, { status: 500 })
     }
 
-    // Todo o processamento roda dentro de um contexto isolado por requisição
-    return await runStore.run(newRunCtx(runId), () => processDeal(body, dealId))
+    // Todo o processamento roda dentro de um contexto isolado por requisição, e em
+    // segundo plano: o freio pode esperar minutos para o Omie não bloquear a
+    // chave, e uma requisição aberta esse tempo todo caía por timeout (o fetch do
+    // Node desiste depois de 5 min sem resposta). Andamento e resultado seguem
+    // pelos logs, que a tela de processamento acompanha; processDeal grava o
+    // status do negócio e o erro, se houver.
+    void runStore.run(newRunCtx(runId), () => processDeal(body, dealId))
+      .catch(err => console.error(`[Omie] deal=${dealId} erro fora do envio:`, err))
+    return NextResponse.json({ success: true, started: true, dealId }, { status: 202 })
   } catch (err: any) {
     console.error('omie/send error:', err)
     await addOmieRawLog({
@@ -766,7 +1086,89 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/** Número do pedido na resposta do Omie — cada método devolve num lugar. */
+function pickNumero(r: any, intCode: string) {
+  return r?.cNumero || r?.cNumPed || r?.nCodPed || r?.numero_pedido ||
+    r?.cabecalho_consulta?.cNumero || r?.pedido_venda_produto?.cabecalho?.numero_pedido ||
+    r?.cabecalho_alterar?.cNumero || r?.pedido_venda_produto_response?.cabecalho?.numero_pedido ||
+    r?.Cabecalho?.cNumOS || r?.nCodOS || intCode || '?'
+}
+
+/**
+ * Resumo dos pedidos de um envio. Vai para o log final (que a tela de
+ * processamento mostra), para omie_response e para os campos do card do Bitrix —
+ * também quando o envio falha no meio, com o que chegou a ser criado.
+ */
+function montaResumo(dealId: number, ocResults: any[], ovResults: any[], osResults: any[], alteracoes: any[]) {
+  return {
+    oc: ocResults.map((r, i) => ({
+      numero: r._numero ?? pickNumero(r, `OC-${dealId}-G${i}`),
+      codigoIntegracao: r._intCode ?? `OC-${dealId}-G${r._groupIdx ?? i}`,
+      codigoPedido: r._codigo ?? r?.nCodPed,
+      acao: r._action ?? 'created',
+      fornecedor: r._supplier,
+      // De qual fornecedor saiu a OC — os campos do card do Bitrix usam para
+      // achar o Número de Ordem de Compra.
+      grupoIdx: r._groupIdx,
+      erro: omieFaultMessage(r) ?? undefined,
+    })),
+    ov: ovResults.map((r, i) => ({
+      numero: r._numero ?? pickNumero(r, `OV-${dealId}-C${i}`),
+      numeroCurto: r._numeroCurto,
+      codigoIntegracao: r._intCode ?? `OV-${dealId}-C${i}`,
+      codigoPedido: r._codigoPedido ?? r._codigo ?? r?.codigo_pedido,
+      acao: r._action ?? 'created',
+      cliente: r._customer,
+      clienteIdx: r._clienteIdx,
+      filial: r._filial,
+      erro: omieFaultMessage(r) ?? undefined,
+    })),
+    os: osResults.map((r) => ({
+      numero: r._numero ?? pickNumero(r, r.cCodIntOS || '?'),
+      codigoIntegracao: r._intCode ?? r.cCodIntOS,
+      acao: r._action ?? 'created',
+      cliente: r._customer,
+      nat: r._nat,
+      // Serviço próprio Interatell (não veio de fornecedor) — o PDF é separado.
+      interatellService: r._interatellService ?? undefined,
+      clienteIdx: r._clienteIdx,
+      servicoIdx: r._servicoIdx,
+      filial: r._filial,
+      erro: omieFaultMessage(r) ?? undefined,
+    })),
+    alteracoes,
+  }
+}
+
+/**
+ * Soma o resumo de uma tentativa ao das anteriores, pelo código de integração.
+ * Um envio que falha no meio grava o que criou até ali; o seguinte não pode
+ * apagar isso, nem trocar um pedido criado pela resposta de erro de uma nova
+ * tentativa.
+ */
+function juntaResumos(anterior: any, novo: any) {
+  const junta = (a: any[] = [], b: any[] = []) => {
+    const chave = (x: any) => String(x?.codigoIntegracao ?? x?.numero ?? '')
+    const m = new Map<string, any>(a.map(x => [chave(x), x]))
+    for (const x of b) {
+      const atual = m.get(chave(x))
+      if (x?.erro && atual && !atual.erro) continue
+      m.set(chave(x), x)
+    }
+    return [...m.values()]
+  }
+  return { ...novo, oc: junta(anterior?.oc, novo?.oc), ov: junta(anterior?.ov, novo?.ov), os: junta(anterior?.os, novo?.os) }
+}
+
+/** Só os pedidos que existem no Omie — sem as tentativas que voltaram com erro. */
+function soCriados(resumo: any) {
+  const ok = (l: any[] = []) => l.filter(x => !x?.erro)
+  return { ...resumo, oc: ok(resumo?.oc), ov: ok(resumo?.ov), os: ok(resumo?.os) }
+}
+
 async function processDeal(body: any, dealId: number) {
+  // Fora do try: se o envio falhar no meio, o catch ainda sabe o que foi criado.
+  const ocResults: any[] = [], ovResults: any[] = [], osResults: any[] = []
   try {
     console.log(`[Omie] Iniciando envio do deal=${dealId}${body.update ? ' (atualização)' : ''}`)
 
@@ -775,6 +1177,19 @@ async function processDeal(body: any, dealId: number) {
     if (!deal) return NextResponse.json({ success: false, error: 'Deal não encontrado' }, { status: 404 })
 
     const payload = typeof deal.payload === 'string' ? JSON.parse(deal.payload) : deal.payload
+
+    // Número de Ordem de Compra (lista #35 do Bitrix) do que ainda não tem, antes
+    // de qualquer pedido, para o card sair com "OC 9178/26 - ...". Aqui, e não na
+    // action, porque os reenvios da tela de processamento chamam esta rota direto.
+    // Falha aqui não segura o envio: o card só fica sem o prefixo naquela linha.
+    try {
+      const { criados, erros } = await garanteNumerosOc(payload)
+      if (criados) await sql`UPDATE deals SET payload = ${JSON.stringify(payload)}, updated_at = NOW() WHERE id = ${dealId}`
+      if (erros.length) console.error(`[OC] deal=${dealId} sem Número de Ordem de Compra:`, erros.join(' | '))
+    } catch (err) {
+      console.error(`[OC] deal=${dealId} erro ao garantir Número de Ordem de Compra:`, err)
+    }
+
     const { interatell, supplierGroups = [], customers = [], serviceCustomers = [], business, notes } = payload
     // A observação interna sempre carrega o link do negócio no Bitrix, para quem
     // consultar o pedido no Omie conseguir voltar ao card de origem.
@@ -790,11 +1205,27 @@ async function processDeal(body: any, dealId: number) {
     const isUpdate = body.update === true || deal.status === 'sent'
     const alteracoes = Array.isArray(body.changes) ? body.changes : []
     const upsertOpts = { isUpdate, retryCount: isUpdate ? 0 : retryCount }
+    // Procurar pedido antes de criar dá um erro "não cadastrado" por pedido que
+    // ainda não existe (dois por OV, com o código antigo), e erro conta para o
+    // bloqueio do Omie — num reenvio com 13 clientes o freio esperava 30 min a
+    // cada 8. Fora da atualização o app cria direto: a OC é upsert pelo código, e
+    // OV/OS que já existam (envio anterior que falhou no meio) voltam "já
+    // cadastrado", e só então são buscadas e atualizadas.
+    ctx().buscarPedidos = isUpdate
+    // Os pedidos só podem ter sido criados com o código base ou com -R1..-Rn até
+    // o retry atual. Antes a busca testava sempre até -R5 (e mais seis códigos
+    // antigos na OV), mesmo sem retry nenhum.
+    ctx().retryMax = retryCount
     // fallbackCnpj: backward compat for old payloads that stored a single interatell.cnpj
     const fallbackCnpj = digits(interatell?.cnpj ?? '')
 
     // Resolve códigos Omie (aceita "A28", "A28 - Para 28 Dias" ou só "Para 28 Dias")
-    const purchaseCodParc = await resolvePaymentCodeForOmie(business?.purchasePaymentCondition ?? '', 'purchase')
+    // A condição de compra só existe quando há fornecedor — é usada apenas na OC.
+    // Negócio só de serviço Interatell não tem compra, o campo fica vazio, e
+    // resolvê-la aqui derrubava o envio com "Condição de pagamento não informada."
+    const purchaseCodParc = supplierGroups.length
+      ? await resolvePaymentCodeForOmie(business?.purchasePaymentCondition ?? '', 'purchase')
+      : ''
     const saleCodParc = await resolvePaymentCodeForOmie(business?.salePaymentCondition ?? '', 'sale')
 
     // 1a) Garantir FORNECEDORES no Omie — usa credenciais da filial do grupo
@@ -818,7 +1249,23 @@ async function processDeal(body: any, dealId: number) {
       await ensureCliente(CNPJ_BARUERI, entry.customer, dealId)
     }
 
-    // 2) Garantir produtos no Omie (por grupo de fornecedor, na filial correta)
+    // 2) Garantir produtos no Omie (por grupo de fornecedor, na filial correta).
+    //    Antes, uma consulta em lote por filial: ver mapaProdutosExistentes.
+    const codigosPorFilial = new Map<string, string[]>()
+    for (const group of supplierGroups) {
+      const branchCnpj = getBranchCnpj(group.branch, fallbackCnpj)
+      const lista = codigosPorFilial.get(branchCnpj) ?? []
+      for (const p of group.products ?? []) {
+        if (normalizeNatureza(p.nature) === 'SRV') continue
+        lista.push(codigoProduto(p), String(p.partnumber ?? '').trim())
+      }
+      codigosPorFilial.set(branchCnpj, lista)
+    }
+    for (const [branchCnpj, codigos] of codigosPorFilial) {
+      if (!codigos.some(Boolean)) continue
+      ctx().produtosExistentes.set(digits(branchCnpj), await mapaProdutosExistentes(branchCnpj, codigos, dealId))
+    }
+
     for (const group of supplierGroups) {
       const branchCnpj = getBranchCnpj(group.branch, fallbackCnpj)
       for (const product of group.products ?? []) {
@@ -827,7 +1274,6 @@ async function processDeal(body: any, dealId: number) {
     }
 
     // 3) OC: 1 por grupo de fornecedor
-    const ocResults: any[] = []
     for (let gIdx = 0; gIdx < supplierGroups.length; gIdx++) {
       const group = supplierGroups[gIdx]
       const branchCnpj = getBranchCnpj(group.branch, fallbackCnpj)
@@ -835,12 +1281,11 @@ async function processDeal(body: any, dealId: number) {
       if (!codDistribuidor) continue
       const valorFrete = group.hasFreight ? Number(group.freightValue ?? 0) : 0
       const res = await upsertOC(branchCnpj, codDistribuidor, group.products ?? [], business, obs, dealId, gIdx, upsertOpts, purchaseCodParc, valorFrete)
-      if (res) ocResults.push({ ...res, _supplier: group.supplier?.name })
+      if (res) ocResults.push({ ...res, _supplier: group.supplier?.name, _groupIdx: gIdx })
     }
 
     // 4) OV + OS: 1 por cliente E por filial de compra. O mesmo cliente gera
     //    dois pedidos quando recebe itens comprados em filiais diferentes.
-    const ovResults: any[] = [], osResults: any[] = []
     for (let cIdx = 0; cIdx < customers.length; cIdx++) {
       const entry = customers[cIdx]
       const porFilial = itensPorFilial(entry, supplierGroups)
@@ -863,13 +1308,13 @@ async function processDeal(body: any, dealId: number) {
         if (!codCliente) continue
 
         const ov = await upsertOV(branchCnpj, codCliente, itens, business, obs, dealId, cIdx, upsertOpts, saleCodParc, filial)
-        if (ov) ovResults.push({ ...ov, _customer: entry.customer?.name, _filial: filial })
+        if (ov) ovResults.push({ ...ov, _customer: entry.customer?.name, _filial: filial, _clienteIdx: cIdx })
 
         for (const nat of ['SW','LC','ST'] as Natureza[]) {
           const natItems = itens.filter(i => normalizeNatureza(i.nature) === nat)
           if (!natItems.length) continue
           const os = await upsertOS(branchCnpj, codCliente, entry.customer, natItems, nat, business, obs, dealId, cIdx, upsertOpts, saleCodParc, filial)
-          if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: nat, _filial: filial })
+          if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: nat, _filial: filial, _clienteIdx: cIdx })
         }
       }
 
@@ -877,7 +1322,7 @@ async function processDeal(body: any, dealId: number) {
         const codCliente = ctx().clienteCache.get(`${CNPJ_BARUERI}:${digits(entry.customer?.cnpj)}`)
         if (codCliente) {
           const os = await upsertOS(CNPJ_BARUERI, codCliente, entry.customer, itensSRV, 'SRV', business, obs, dealId, cIdx, upsertOpts, saleCodParc, 'barueri')
-          if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: 'SRV', _filial: 'barueri' })
+          if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: 'SRV', _filial: 'barueri', _clienteIdx: cIdx })
         }
       }
     }
@@ -898,49 +1343,15 @@ async function processDeal(body: any, dealId: number) {
         CNPJ_BARUERI, codCliente, entry.customer, items, 'SRV',
         business, obs, dealId, customers.length + sIdx, upsertOpts, saleCodParc, 'barueri',
       )
-      if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: 'SRV', _interatellService: true })
+      if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: 'SRV', _interatellService: true, _filial: 'barueri', _servicoIdx: sIdx })
     }
 
     // 5) Resumo com números dos pedidos
-    const pickNumero = (r: any, intCode: string) =>
-      r?.cNumero || r?.cNumPed || r?.nCodPed || r?.numero_pedido ||
-      r?.cabecalho_consulta?.cNumero || r?.pedido_venda_produto?.cabecalho?.numero_pedido ||
-      r?.cabecalho_alterar?.cNumero || r?.pedido_venda_produto_response?.cabecalho?.numero_pedido ||
-      r?.Cabecalho?.cNumOS || r?.nCodOS || intCode || '?'
-
     assertNoOmieErrors(ocResults, 'OC')
     assertNoOmieErrors(ovResults, 'OV')
     assertNoOmieErrors(osResults, 'OS')
 
-    const resumo = {
-      oc: ocResults.map((r, i) => ({
-        numero: r._numero ?? pickNumero(r, `OC-${dealId}-G${i}`),
-        codigoIntegracao: `OC-${dealId}-G${i}`,
-        codigoPedido: r._codigo ?? r?.nCodPed,
-        acao: r._action ?? 'created',
-        fornecedor: r._supplier,
-        erro: omieFaultMessage(r) ?? undefined,
-      })),
-      ov: ovResults.map((r, i) => ({
-        numero: r._numero ?? pickNumero(r, `OV-${dealId}-C${i}`),
-        numeroCurto: r._numeroCurto,
-        codigoIntegracao: r._intCode ?? `OV-${dealId}-C${i}`,
-        codigoPedido: r._codigoPedido ?? r._codigo ?? r?.codigo_pedido,
-        acao: r._action ?? 'created',
-        cliente: r._customer,
-        erro: omieFaultMessage(r) ?? undefined,
-      })),
-      os: osResults.map((r, i) => ({
-        numero: r._numero ?? pickNumero(r, r.cCodIntOS || '?'),
-        acao: r._action ?? 'created',
-        cliente: r._customer,
-        nat: r._nat,
-        // Serviço próprio Interatell (não veio de fornecedor) — o PDF é separado.
-        interatellService: r._interatellService ?? undefined,
-        erro: omieFaultMessage(r) ?? undefined,
-      })),
-      alteracoes,
-    }
+    const resumo = montaResumo(dealId, ocResults, ovResults, osResults, alteracoes)
 
     // 6) Log final de resultado — marca conclusão no modal de logs
     const verbo = (a: string) => (a === 'updated' ? 'atualizada' : 'criada')
@@ -962,17 +1373,58 @@ async function processDeal(body: any, dealId: number) {
     // 7) Atualizar status do deal
     await sql`UPDATE deals SET status = 'sent', omie_response = ${JSON.stringify({ ocResults, ovResults, osResults, resumo })}, updated_at = NOW() WHERE id = ${dealId}`
 
+    // 8) Números nos campos "Sistema Financeiro (Omie)" do card do Bitrix. Aqui, e
+    // não na action que dispara o envio, porque o envio roda em segundo plano.
+    // Best-effort: falha aqui não desfaz os pedidos, mas fica no log do servidor.
+    try {
+      if (deal.bitrix_deal_id) {
+        await BitrixService.updateCardFinanceFields(String(deal.bitrix_deal_id), camposFinanceirosCard(payload, resumo))
+      }
+    } catch (err) {
+      console.error(`[Bitrix] deal=${dealId} números do Omie não gravados no card:`, err)
+    }
+
     console.log(`[Omie] deal=${dealId} enviado com sucesso —`, resumoMsg || 'sem pedidos criados')
     return NextResponse.json({ success: true, dealId, resumo })
 
   } catch (err: any) {
     console.error('omie/send error:', err)
+    const mensagem = err?.message ?? 'Erro inesperado'
+
+    // Pedidos criados antes da falha. Sem isto eles existiam no Omie mas não
+    // apareciam no app nem no card do Bitrix. Soma com as tentativas anteriores.
+    let dealRow: any = null
+    let resumoParcial: any = null
+    if (dealId) {
+      try {
+        ;[dealRow] = await sql`SELECT payload, omie_response, bitrix_deal_id FROM deals WHERE id = ${dealId}`
+        const anterior = typeof dealRow?.omie_response === 'string' ? JSON.parse(dealRow.omie_response) : dealRow?.omie_response
+        resumoParcial = juntaResumos(anterior?.resumo, montaResumo(dealId, ocResults, ovResults, osResults, []))
+      } catch (e) {
+        console.error(`[Omie] deal=${dealId} resumo parcial não montado:`, e)
+      }
+    }
+    const criados = resumoParcial ? soCriados(resumoParcial) : null
+    const temPedido = !!criados && criados.oc.length + criados.ov.length + criados.os.length > 0
+
+    // O log final leva o resumo parcial: a tela de processamento mostra os
+    // pedidos criados junto com o erro.
     await addOmieRawLog({
       transactionId: dealId, step: 'result', level: 'error', runId: ctx().runId,
-      message: `result: Erro — ${err?.message ?? 'Erro inesperado'}`,
-      raw: { endpoint: '', httpStatus: 500, requestBodyRaw: '', responseBodyRaw: err?.message ?? '' },
+      message: `result: Erro — ${mensagem}`,
+      raw: { endpoint: '', httpStatus: 500, requestBodyRaw: '', responseBodyRaw: resumoParcial ? JSON.stringify(resumoParcial) : mensagem },
     }).catch(() => {})
-    if (dealId) await sql`UPDATE deals SET status = 'failed', error_message = ${err?.message ?? String(err)}, updated_at = NOW() WHERE id = ${dealId}`.catch(() => {})
-    return NextResponse.json({ success: false, error: err?.message ?? 'Erro inesperado' }, { status: 500 })
+
+    if (dealId && temPedido) {
+      await sql`UPDATE deals SET status = 'failed', error_message = ${mensagem}, omie_response = ${JSON.stringify({ parcial: true, resumo: resumoParcial })}, updated_at = NOW() WHERE id = ${dealId}`.catch(() => {})
+      if (dealRow?.bitrix_deal_id) {
+        const payloadDeal = typeof dealRow.payload === 'string' ? JSON.parse(dealRow.payload) : dealRow.payload
+        await BitrixService.updateCardFinanceFields(String(dealRow.bitrix_deal_id), camposFinanceirosCard(payloadDeal, criados))
+          .catch(e => console.error(`[Bitrix] deal=${dealId} números parciais não gravados no card:`, e))
+      }
+    } else if (dealId) {
+      await sql`UPDATE deals SET status = 'failed', error_message = ${mensagem}, updated_at = NOW() WHERE id = ${dealId}`.catch(() => {})
+    }
+    return NextResponse.json({ success: false, error: mensagem }, { status: 500 })
   }
 }

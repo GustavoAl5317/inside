@@ -6,7 +6,23 @@ import { Check, ChevronDown, ChevronUp } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
-const Select = SelectPrimitive.Root
+/**
+ * Root do Radix com uma trava: ignora troca para valor vazio.
+ *
+ * O Radix grava o valor num <select> nativo escondido e repassa o "change" dele.
+ * Quando a opção ainda não existe no nativo — lista que carrega do Bitrix depois
+ * que o formulário abre, ou aba remontada ao voltar para ela — o navegador deixa
+ * o valor vazio e o Radix chamava onValueChange(""). Era assim que condição de
+ * pagamento e família salvas no rascunho abriam em branco.
+ *
+ * SelectItem não aceita value="", então vazio nunca é uma escolha do usuário.
+ */
+const Select = ({ onValueChange, ...props }: React.ComponentProps<typeof SelectPrimitive.Root>) => (
+  <SelectPrimitive.Root
+    {...props}
+    onValueChange={onValueChange ? (v: string) => { if (v !== "") onValueChange(v) } : undefined}
+  />
+)
 
 const SelectGroup = SelectPrimitive.Group
 

@@ -216,9 +216,8 @@ export interface OmiePlanDoc {
 export interface OmiePlan {
   /** id do processo no banco; entra nos códigos de integração. */
   dealId: number | null
-  /** Fornecedor e cliente a que este recorte se refere; vazio no plano inteiro. */
+  /** Fornecedor a que este recorte se refere; vazio no plano inteiro. */
   escopoFornecedor: string
-  escopoCliente: string
   proposta: string
   negocio: string
   dataOc: string
@@ -260,29 +259,31 @@ function itemDeProduto(e: any, seq: number, valor: number, ncmZeradoParaServico:
  * (SW | LC | ST), e SRV sempre por Barueri. `dealId` é o id do processo; sem ele
  * os códigos de integração saem com "?" no lugar do número.
  *
- * `escopo` recorta o plano para um par fornecedor × cliente, que é como a
- * planilha usa: cada arquivo é de um fornecedor, então mostrar as compras dos
- * outros só atrapalharia a conferência. A OC sai inteira (é o documento real do
- * Omie); a OV e a OS saem com os itens vindos deste fornecedor, e `recorte`
- * avisa quando o documento no Omie é maior do que isso.
+ * `escopo` recorta o plano, que é como a planilha usa: cada arquivo é de um
+ * distribuidor, então mostrar as compras dos outros só atrapalharia a
+ * conferência. Com `groupLocalId` saem a OC daquele fornecedor e as vendas que
+ * nascem dela; com `servicoInteratell` saem só as OS do serviço próprio, que é o
+ * arquivo sem distribuidor. A OC vai inteira (é o documento real do Omie); a OV
+ * e a OS levam os itens vindos deste fornecedor, e `recorte` avisa quando o
+ * documento no Omie é maior do que isso.
  */
 export function buildOmiePlan(
   values: any,
   dealId: number | null,
   opts: { condicaoCompra: string; condicaoVenda: string; rotulo: (v: string) => string },
-  escopo?: { groupLocalId?: string; customerLocalId?: string },
+  escopo?: { groupLocalId?: string; servicoInteratell?: boolean },
 ): OmiePlan {
   const business = values?.business ?? {}
   const todosGrupos: any[] = values?.supplierGroups ?? []
   const todosClientes: any[] = values?.customers ?? []
   // Os índices dos códigos de integração são a posição na lista inteira, não na
   // recortada — o envio numera sobre o payload completo.
-  const supplierGroups = escopo?.groupLocalId
-    ? todosGrupos.filter(g => g.localId === escopo.groupLocalId)
+  // O arquivo do serviço Interatell não tem distribuidor: leva só as OS dele.
+  const soServico = escopo?.servicoInteratell === true
+  const supplierGroups = soServico ? []
+    : escopo?.groupLocalId ? todosGrupos.filter(g => g.localId === escopo.groupLocalId)
     : todosGrupos
-  const customers = escopo?.customerLocalId
-    ? todosClientes.filter(c => c.localId === escopo.customerLocalId)
-    : todosClientes
+  const customers = soServico ? [] : todosClientes
   // Serviço Interatell não passa por fornecedor, então fica fora do recorte de
   // um arquivo de OC.
   const serviceCustomers: any[] = escopo?.groupLocalId ? [] : (values?.serviceCustomers ?? [])
@@ -466,8 +467,8 @@ export function buildOmiePlan(
 
   return {
     dealId,
-    escopoFornecedor: escopo?.groupLocalId ? String(supplierGroups[0]?.supplier?.name ?? '') : '',
-    escopoCliente: escopo?.customerLocalId ? String(customers[0]?.customer?.name ?? '') : '',
+    escopoFornecedor: soServico ? 'SERVIÇO INTERATELL'
+      : escopo?.groupLocalId ? String(supplierGroups[0]?.supplier?.name ?? '') : '',
     proposta: pedidoCliente,
     negocio: String(business?.name ?? ''),
     dataOc: toOmieDate(business?.purchaseOrderDate),

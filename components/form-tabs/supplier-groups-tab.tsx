@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect } from "react"
 import { useFieldArray, type UseFormReturn } from "react-hook-form"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -11,7 +11,7 @@ import { getBitrixSuppliersAction, searchBitrixProductsAction, searchProductsAct
 import { formatCurrency, isCNPJComplete, formatCNPJ } from "@/lib/utils"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { states } from "@/lib/utils"
+import { naturezaCatalogo } from "@/lib/oc-numbers"
 
 interface SupplierGroupsTabProps {
   form: UseFormReturn<any>
@@ -314,9 +314,10 @@ function SupplierDialog({
   )
 }
 
-const NATURES = ["HW", "SW", "LC", "ST", "SRV"]
+// Codigos do "Tipo de Part Number" do catalogo Bitrix (HDW - Hardware, etc.).
+const NATURES = ["HDW", "SFW", "LIC", "SVI", "SVT"]
 
-// ── Diálogo: buscar produto (catálogo Bitrix24 ou manual) ─────────────────────
+// ── Diálogo: buscar produto no catálogo Bitrix24 ─────────────────────────────
 function ProductDialog({
   open,
   onClose,
@@ -326,27 +327,10 @@ function ProductDialog({
   onClose: () => void
   onAdd: (product: any) => void
 }) {
-  const [mode, setMode] = useState<"catalog" | "manual">("catalog")
-
-  // ── aba catálogo ──
   const [query, setQuery]     = useState("")
   const [results, setResults] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [catalogError, setCatalogError] = useState("")
-
-  // ── aba manual ──
-  const [manual, setManual] = useState({
-    partnumber: "", description: "", nature: "HW", ncm: "", cfop: "",
-  })
-  const [manualError, setManualError] = useState("")
-  const partnumberRef = useRef<HTMLInputElement>(null)
-
-  // Foca o campo partnumber ao entrar no modo manual
-  useEffect(() => {
-    if (mode === "manual") {
-      setTimeout(() => partnumberRef.current?.focus(), 50)
-    }
-  }, [mode])
 
   const handleSearch = async () => {
     if (!query.trim()) return
@@ -382,7 +366,10 @@ function ProductDialog({
         sku:         bitrixPorPn.get(String(p.partnumber || "").toLowerCase())?.sku || "",
         ncm:         p.ncm || "",
         cfop:        p.cfop || "",
-        nature:      p.nature || "HW",
+        // Natureza vem do "Tipo de Part Number" do catalogo Bitrix; o banco local
+        // so entra quando o catalogo nao tem. Antes o local vencia e o produto
+        // chegava com a natureza antiga ou com HDW por padrao.
+        nature:      naturezaCatalogo(bitrixPorPn.get(String(p.partnumber || "").toLowerCase())?.nature || p.nature),
         family:      p.family || "",
         source:      "local" as const,
       })),
@@ -400,27 +387,8 @@ function ProductDialog({
     onClose()
   }
 
-  const handleAddManual = () => {
-    if (!manual.partnumber.trim()) { setManualError("Código é obrigatório"); return }
-    if (!manual.description.trim()) { setManualError("Descrição é obrigatória"); return }
-    onAdd({
-      id: Date.now(),
-      code: manual.partnumber.trim(),
-      name: manual.description.trim(),
-      nature: manual.nature,
-      ncm: manual.ncm.trim(),
-      cfop: manual.cfop.trim(),
-    })
-    setManual({ partnumber: "", description: "", nature: "HW", ncm: "", cfop: "" })
-    setManualError("")
-    onClose()
-  }
-
   const reset = () => {
     setQuery(""); setResults([]); setCatalogError("")
-    setManual({ partnumber: "", description: "", nature: "HW", ncm: "", cfop: "" })
-    setManualError("")
-    setMode("catalog")
   }
 
   return (
@@ -434,33 +402,8 @@ function ProductDialog({
         </DialogHeader>
 
         <div className="space-y-4 pt-1">
-          {/* Seletor de modo */}
-          <div className="flex gap-2">
-            <button
-              onClick={() => setMode("catalog")}
-              className={`px-3 py-1.5 text-sm rounded border transition-colors ${
-                mode === "catalog"
-                  ? "bg-blue-600 text-white border-blue-600"
-                  : "text-gray-600 border-gray-300 hover:bg-gray-50"
-              }`}
-            >
-              📦 Catálogo Bitrix24
-            </button>
-            <button
-              onClick={() => setMode("manual")}
-              className={`px-3 py-1.5 text-sm rounded border transition-colors ${
-                mode === "manual"
-                  ? "bg-blue-600 text-white border-blue-600"
-                  : "text-gray-600 border-gray-300 hover:bg-gray-50"
-              }`}
-            >
-              ✏️ Entrada Manual
-            </button>
-          </div>
-
           {/* ── Catálogo ── */}
-          {mode === "catalog" && (
-            <>
+          <>
               <div className="flex gap-2">
                 <Input
                   placeholder="Código, partnumber ou nome do produto"
@@ -508,84 +451,6 @@ function ProductDialog({
                 )}
               </div>
             </>
-          )}
-
-          {/* ── Manual ── */}
-          {mode === "manual" && (
-            <div className="space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-medium text-gray-700">Código / Partnumber *</label>
-                  <Input
-                    ref={partnumberRef}
-                    className="mt-1"
-                    placeholder="ex: ABC-12345"
-                    value={manual.partnumber}
-                    onKeyDown={e => e.stopPropagation()}
-                    onChange={e => { setManual(m => ({ ...m, partnumber: e.target.value })); setManualError("") }}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-gray-700">Natureza *</label>
-                  <Select
-                    value={manual.nature}
-                    onValueChange={v => setManual(m => ({ ...m, nature: v }))}
-                  >
-                    <SelectTrigger className="mt-1">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {NATURES.map(n => (
-                        <SelectItem key={n} value={n}>{n}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-medium text-gray-700">Descrição *</label>
-                <Input
-                  className="mt-1"
-                  placeholder="Descrição do produto"
-                  value={manual.description}
-                  onKeyDown={e => e.stopPropagation()}
-                  onChange={e => { setManual(m => ({ ...m, description: e.target.value })); setManualError("") }}
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-medium text-gray-700">NCM</label>
-                  <Input
-                    className="mt-1"
-                    placeholder="ex: 8471.30.19"
-                    value={manual.ncm}
-                    onKeyDown={e => e.stopPropagation()}
-                    onChange={e => setManual(m => ({ ...m, ncm: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-gray-700">CFOP</label>
-                  <Input
-                    className="mt-1"
-                    placeholder="ex: 5102"
-                    value={manual.cfop}
-                    onKeyDown={e => e.stopPropagation()}
-                    onChange={e => setManual(m => ({ ...m, cfop: e.target.value }))}
-                  />
-                </div>
-              </div>
-
-              {manualError && <p className="text-sm text-red-600">{manualError}</p>}
-
-              <div className="flex justify-end pt-1">
-                <Button onClick={handleAddManual}>
-                  Adicionar Produto
-                </Button>
-              </div>
-            </div>
-          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -615,10 +480,17 @@ function ProductRow({
   const product = form.watch(basePath)
   const [editing, setEditing] = useState(false)
 
-  // Filtra famílias pelo estado do produto e auto-seleciona para serviços
-  const productState   = product?.state || 'SP'
-  const productNature  = product?.nature || 'HW'
-  const isSRV = ['SRV', 'LC', 'SW', 'ST'].includes(productNature) // serviços/software → sem estoque físico
+  // A UF saiu do card do produto: quem define é o "Faturamento via" do
+  // fornecedor, e ter os dois lugares só dava conflito. Ela segue gravada no
+  // produto — planilha e relatório leem — e é o que filtra as famílias.
+  const branchDoGrupo  = form.watch(`supplierGroups.${groupIndex}.branch`)
+  const productState   = branchDoGrupo === 'es' ? 'ES' : 'SP'
+  const productNature  = product?.nature || 'HDW'
+  // Natureza exibida: a do catálogo Bitrix, com códigos antigos já convertidos.
+  const natureza = naturezaCatalogo(product?.nature)
+  // Serviços, software e licença não têm estoque físico. Os códigos antigos
+  // continuam na lista por causa de negócios e rascunhos já gravados.
+  const isSRV = ['SVI', 'LIC', 'SFW', 'SVT', 'SRV', 'LC', 'SW', 'ST'].includes(productNature)
 
   // Auto-seleciona família "Outros" quando nature é serviço
   useEffect(() => {
@@ -627,6 +499,14 @@ function ProductRow({
       if (current !== SRV_FAMILY_CODE) form.setValue(`${basePath}.family`, SRV_FAMILY_CODE)
     }
   }, [productNature, isSRV, basePath, form])
+
+  // Rascunho antigo pode ter ficado com outra UF, e a do fornecedor pode mudar
+  // depois: mantém o produto alinhado.
+  useEffect(() => {
+    if (form.getValues(`${basePath}.state`) !== productState) {
+      form.setValue(`${basePath}.state`, productState)
+    }
+  }, [productState, basePath, form])
 
   // Filtra lista por estado: ES → Espírito Santo, demais → Barueri
   const filteredFamilies = families.length === 0 ? [] : (() => {
@@ -676,7 +556,7 @@ function ProductRow({
                 onChange={e => form.setValue(`${basePath}.ncm`, e.target.value)} />
             </div>
             <div className="col-span-2">
-              <label className="text-[10px] font-semibold text-gray-500 uppercase">Partnumber / Descrição</label>
+              <label className="text-[10px] font-semibold text-gray-500 uppercase">Descrição</label>
               <Input className="h-7 text-xs mt-0.5"
                 value={product?.description || ""}
                 onChange={e => form.setValue(`${basePath}.description`, e.target.value)} />
@@ -689,12 +569,17 @@ function ProductRow({
             </div>
             <div>
               <label className="text-[10px] font-semibold text-gray-500 uppercase">Natureza</label>
-              <Select value={product?.nature || "HW"} onValueChange={v => form.setValue(`${basePath}.nature`, v)}>
-                <SelectTrigger className="h-7 text-xs mt-0.5"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {["HW","SW","LC","ST","SRV"].map(n => <SelectItem key={n} value={n} className="text-xs">{n}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              {/* Vem do "Tipo de Part Number" do catálogo Bitrix — não se escolhe aqui.
+                  A lista antiga tinha HW/SW/LC/ST/SRV e não casava com HDW/LIC do
+                  catálogo, então abria em branco e forçava escolher de novo. */}
+              <div
+                className={`h-7 mt-0.5 px-2 flex items-center rounded-md border text-xs ${
+                  natureza ? "bg-gray-50 text-gray-700" : "bg-amber-50 border-amber-300 text-amber-700"
+                }`}
+                title={natureza ? "Vem do catálogo do Bitrix" : "Produto sem Tipo de Part Number no catálogo do Bitrix"}
+              >
+                {natureza || "Sem natureza no catálogo"}
+              </div>
             </div>
           </div>
           <div className="flex justify-end gap-2">
@@ -704,8 +589,17 @@ function ProductRow({
           </div>
         </>
       ) : (
-      <><div className="col-span-4">
-        <p className="font-medium truncate">{product?.sku || product?.partnumber}</p>
+      <><div className="col-span-5">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <p className="font-medium truncate">{product?.sku || product?.partnumber}</p>
+          <Badge
+            variant="outline"
+            className={`text-[10px] px-1.5 py-0 shrink-0 ${natureza ? "" : "border-amber-300 text-amber-700"}`}
+            title={natureza ? "Natureza do catálogo do Bitrix" : "Produto sem Tipo de Part Number no catálogo do Bitrix"}
+          >
+            {natureza || "sem natureza"}
+          </Badge>
+        </div>
         <p className="text-xs text-gray-500 truncate">{product?.description}</p>
         {/* Seletor de família — codigo_familia do Omie */}
         <Select
@@ -729,21 +623,6 @@ function ProductRow({
                 </SelectItem>
               ))
             )}
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="col-span-1">
-        <Select
-          value={form.watch(`${basePath}.state`) || "SP"}
-          onValueChange={v => form.setValue(`${basePath}.state`, v)}
-        >
-          <SelectTrigger className="h-8 text-xs">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {states.map(s => (
-              <SelectItem key={s.value} value={s.value} className="text-xs">{s.value}</SelectItem>
-            ))}
           </SelectContent>
         </Select>
       </div>
@@ -850,10 +729,10 @@ function SupplierGroupCard({
       partnumber:  p.partnumber || "",
       description: p.description || "",
       cfop:        p.cfop  || "",
-      nature:      p.nature || "HW",
+      nature:      naturezaCatalogo(p.nature),
       ncm:         p.ncm   || "",
       family:      p.family || "",  // codigo_familia para o Omie
-      state:       "SP",
+      state:       form.getValues(`supplierGroups.${groupIndex}.branch`) === 'es' ? 'ES' : 'SP',
       quantity:    1,
       unitCost:    0,
       totalCost:   0,
