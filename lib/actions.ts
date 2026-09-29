@@ -255,12 +255,20 @@ export async function getInsideSalesCardDetailsAction(itemId: number) {
 // Bitrix24 — Empresas CRM (sem banco)
 // ============================
 
-export async function searchBitrixCompaniesAction(query: string) {
+/**
+ * Empresas do CRM do Bitrix — a base de clientes do portal, e a mesma fonte de
+ * onde vem o cliente do negócio. Query vazia devolve a primeira página.
+ */
+export async function searchBitrixCompaniesAction(query = "") {
   try {
     const companies = await BitrixService.searchCRMCompanies(query)
-    return { success: true, companies }
+    return { success: true as const, companies, error: '' }
   } catch (error) {
-    return { success: false, error: error instanceof Error ? error.message : 'Erro desconhecido' }
+    return {
+      success: false as const,
+      companies: [] as Awaited<ReturnType<typeof BitrixService.searchCRMCompanies>>,
+      error: error instanceof Error ? error.message : 'Erro desconhecido',
+    }
   }
 }
 

@@ -642,28 +642,53 @@ export class BitrixService {
   // ─── CRM Empresas ────────────────────────────────────────────────────────────
 
   /**
-   * Busca empresas do CRM Bitrix24 por nome (sem banco de dados)
+   * Busca empresas do CRM Bitrix24 por nome, com paginação.
+   *
+   * É a base de clientes do portal: a mesma de onde vem a empresa do negócio.
+   * O CNPJ não está na empresa e sim no requisito, então não dá para filtrar por
+   * ele aqui — quem escolhe uma empresa chama getCRMCompanyFullDetails para
+   * trazer CNPJ, IE, endereço e contato.
+   *
+   * A base tem ~2400 empresas e o Bitrix devolve 50 por página. Sem `query` vem
+   * só a primeira página — listar tudo custaria ~48 chamadas para uma lista que
+   * ninguém rola. Com busca, pagina até `limit`.
    */
-  static async searchCRMCompanies(query: string): Promise<Array<{
+  static async searchCRMCompanies(query: string, limit = 200): Promise<Array<{
     id: number; name: string; cnpj?: string; city?: string; state?: string
   }>> {
+    const q = String(query ?? '').trim()
+    const teto = q ? limit : 50
+    const out: Array<{ id: number; name: string; cnpj?: string; city?: string; state?: string }> = []
     try {
-      const j: any = await bPost('/crm.company.list.json', {
-        filter: { '%TITLE': query },
-        select: ['ID', 'TITLE', 'CITY', 'ADDRESS_CITY', 'ADDRESS_REGION'],
-        order: { TITLE: 'ASC' },
-        start: 0,
-      })
-      const items: any[] = Array.isArray(j.result) ? j.result : []
-      return items.map(i => ({
-        id: Number(i.ID),
-        name: String(i.TITLE || ''),
-        city: String(i.CITY || i.ADDRESS_CITY || '').trim() || undefined,
-        state: String(i.ADDRESS_REGION || '').trim() || undefined,
-      }))
+      let start = 0
+      while (out.length < teto) {
+        const j: any = await bPost('/crm.company.list.json', {
+          // Filtro vazio traz tudo; o Bitrix recusa '%TITLE' com string vazia.
+          ...(q ? { filter: { '%TITLE': q } } : {}),
+          select: ['ID', 'TITLE', 'ADDRESS_CITY', 'ADDRESS_PROVINCE', 'ADDRESS_REGION'],
+          order: { TITLE: 'ASC' },
+          start,
+        })
+        const items: any[] = Array.isArray(j?.result) ? j.result : []
+        for (const i of items) {
+          out.push({
+            id: Number(i.ID),
+            name: String(i.TITLE || ''),
+            // No portal da Interatell o endereço da empresa costuma vir vazio:
+            // ADDRESS_REGION é a cidade e ADDRESS_PROVINCE o estado, como no
+            // requisito (ver getCRMCompanyFullDetails).
+            city: String(i.ADDRESS_REGION || i.ADDRESS_CITY || '').trim() || undefined,
+            state: String(i.ADDRESS_PROVINCE || '').trim() || undefined,
+          })
+        }
+        const next = Number(j?.next)
+        if (!items.length || !Number.isFinite(next) || next <= start) break
+        start = next
+      }
+      return out.slice(0, teto)
     } catch (error) {
       console.error('Erro ao buscar empresas no CRM:', error)
-      return []
+      return out
     }
   }
 

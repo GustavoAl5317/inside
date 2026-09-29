@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { Trash2, Plus, Search, Users, Building2, ChevronDown, ChevronUp, Pencil, Loader2 } from "lucide-react"
-import { getBitrixClientsAction, createBitrixClientAction, lookupCnpjAction } from "@/lib/actions"
+import { searchBitrixCompaniesAction, getBitrixCompanyDetailsAction, createBitrixClientAction, lookupCnpjAction } from "@/lib/actions"
 import { isCNPJComplete, formatCNPJ, formatCurrency } from "@/lib/utils"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { toast } from "sonner"
@@ -22,8 +22,10 @@ const emptyCustomer = {
   city: "", state: "", zipCode: "", contactName: "",
 }
 
-// ── Diálogo: adicionar cliente manualmente ou buscar da lista #63 ─────────────
-// Exportado para o step de Cliente Serviço (SRV) reusar a mesma seleção de empresa.
+// ── Diálogo: filial buscada na base de empresas do Bitrix ────────────────────
+// O cadastro de cliente é único e mora no Bitrix, então filial nova só entra por
+// busca. Os campos digitáveis ficam só para editar uma filial já adicionada.
+// Exportado para o step de Cliente Serviço (SRV) reusar a mesma seleção.
 export function CustomerDialog({
   open,
   onClose,
@@ -37,7 +39,8 @@ export function CustomerDialog({
   initialData?: any
   isEdit?: boolean
 }) {
-  const [mode, setMode] = useState<"manual" | "list">("manual")
+  // "list" = busca no Bitrix. "manual" existe só no modo edição.
+  const [mode, setMode] = useState<"manual" | "list">(isEdit ? "manual" : "list")
   const [manual, setManual] = useState<typeof emptyCustomer>(isEdit && initialData ? { ...emptyCustomer, ...initialData } : emptyCustomer)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
@@ -49,35 +52,51 @@ export function CustomerDialog({
       setManual(isEdit && initialData ? { ...emptyCustomer, ...initialData } : emptyCustomer)
       setBranch(initialData?.branch === 'es' ? 'es' : 'barueri')
       setError("")
-      if (!isEdit) setMode("manual")
+      setMode(isEdit ? "manual" : "list")
     }
   }, [open])
 
   // modo lista
   const [query, setQuery] = useState("")
   const [listLoading, setListLoading] = useState(false)
+  const [detailLoading, setDetailLoading] = useState(false)
   const [results, setResults] = useState<any[]>([])
   const [selected, setSelected] = useState<any>(null)
 
   const handleLoadList = async (q = "") => {
     setListLoading(true); setError(""); setResults([]); setSelected(null)
-    const data = await getBitrixClientsAction(q)
+    const res = await searchBitrixCompaniesAction(q)
     setListLoading(false)
-    if (!data.length) {
-      setError(q ? "Nenhum cliente encontrado." : "Nenhum cliente cadastrado ainda.")
+    if (!res.success) { setError(res.error || "Falha ao consultar o Bitrix."); return }
+    if (!res.companies.length) {
+      setError(q ? "Nenhuma empresa encontrada no Bitrix." : "Nenhuma empresa na base do Bitrix.")
       return
     }
-    setResults(data)
+    setResults(res.companies)
+  }
+
+  /**
+   * CNPJ, IE, endereço e contato não vêm na listagem de empresas: moram no
+   * requisito e no contato vinculado. São buscados ao escolher a empresa.
+   */
+  const handleSelect = async (empresa: any) => {
+    setSelected(empresa); setError("")
+    if (empresa?.detalhado) return
+    setDetailLoading(true)
+    const { success, ...dados } = await getBitrixCompanyDetailsAction(Number(empresa.id))
+    setDetailLoading(false)
+    if (!success) {
+      setError("Não foi possível carregar os dados da empresa no Bitrix.")
+      return
+    }
+    const completo = { ...empresa, ...dados, name: dados.name || empresa.name, detalhado: true }
+    setSelected(completo)
+    setResults(rs => rs.map(r => (r.id === empresa.id ? completo : r)))
   }
 
   useEffect(() => {
     if (open && mode === "list") handleLoadList("")
   }, [open, mode])
-
-  const handleModeChange = (m: "manual" | "list") => {
-    setMode(m); setError(""); setSelected(null); setResults([])
-    if (m === "list") handleLoadList("")
-  }
 
   const triggerCnpjLookup = async (digits: string) => {
     setCepLoading(true)
@@ -161,23 +180,16 @@ export function CustomerDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Building2 className="w-5 h-5 text-purple-600" />
-            {isEdit ? "Editar Cliente / Filial" : "Adicionar Cliente / Filial"}
+            {isEdit ? "Editar Filial" : "Adicionar Filial — Buscar no Bitrix"}
           </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4 pt-2">
-          {/* Seletor de modo — oculto no modo edição */}
           {!isEdit && (
-            <div className="flex gap-2">
-              <button onClick={() => handleModeChange("manual")}
-                className={`px-3 py-1.5 text-sm rounded border transition-colors ${mode === "manual" ? "bg-purple-600 text-white border-purple-600" : "text-gray-600 border-gray-300 hover:bg-gray-50"}`}>
-                Adicionar Manualmente
-              </button>
-              <button onClick={() => handleModeChange("list")}
-                className={`px-3 py-1.5 text-sm rounded border transition-colors ${mode === "list" ? "bg-purple-600 text-white border-purple-600" : "text-gray-600 border-gray-300 hover:bg-gray-50"}`}>
-                Buscar na Lista
-              </button>
-            </div>
+            <p className="text-xs text-gray-500">
+              O cadastro dos clientes é único e fica no Bitrix. Para incluir uma filial que
+              não aparece aqui, cadastre a empresa no Bitrix primeiro.
+            </p>
           )}
 
           {/* ── Modo: Manual ── */}
@@ -283,25 +295,34 @@ export function CustomerDialog({
             <>
               <div className="flex gap-2">
                 <Input
-                  placeholder="Filtrar por nome ou CNPJ..."
+                  placeholder="Razão social da empresa no Bitrix..."
                   value={query}
                   onChange={e => setQuery(e.target.value)}
                   onKeyDown={e => e.key === "Enter" && handleLoadList(query)}
                   autoFocus
                 />
                 <Button onClick={() => handleLoadList(query)} disabled={listLoading} className="shrink-0">
-                  <Search className="w-4 h-4 mr-1" />{listLoading ? "..." : "Buscar"}
+                  {listLoading ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Search className="w-4 h-4 mr-1" />}
+                  Buscar no Bitrix
                 </Button>
               </div>
+
+              {results.length > 0 && !query.trim() && (
+                <p className="text-xs text-gray-400">
+                  Primeiras {results.length} empresas da base. Digite para filtrar.
+                </p>
+              )}
 
               {results.length > 0 && (
                 <div className="max-h-56 overflow-y-auto border rounded-lg divide-y">
                   {results.map(c => (
-                    <button key={c.id} onClick={() => setSelected(c)}
+                    <button key={c.id} onClick={() => handleSelect(c)}
                       className={`w-full text-left px-3 py-2.5 hover:bg-purple-50 transition-colors ${selected?.id === c.id ? "bg-purple-50 font-medium" : ""}`}>
                       <p className="text-sm font-medium">{c.name}</p>
                       <p className="text-xs text-gray-500">
-                        {c.cnpj || <span className="text-orange-500">CNPJ não cadastrado</span>}
+                        {c.detalhado
+                          ? (c.cnpj || <span className="text-orange-500">CNPJ não cadastrado no Bitrix</span>)
+                          : <span className="text-gray-400">clique para carregar CNPJ e endereço</span>}
                         {c.city ? ` · ${c.city}${c.state ? `/${c.state}` : ""}` : ""}
                       </p>
                     </button>
@@ -312,7 +333,19 @@ export function CustomerDialog({
               {selected && (
                 <div className="border rounded-lg p-3 bg-purple-50 border-purple-200 space-y-0.5">
                   <p className="font-semibold text-purple-900 text-sm">{selected.name}</p>
-                  {selected.cnpj && <p className="text-xs text-purple-700">CNPJ: {selected.cnpj}</p>}
+                  {detailLoading && (
+                    <p className="text-xs text-purple-600 flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" /> buscando CNPJ, endereço e contato no Bitrix...
+                    </p>
+                  )}
+                  {selected.cnpj
+                    ? <p className="text-xs text-purple-700">CNPJ: {selected.cnpj}</p>
+                    : !detailLoading && (
+                        <p className="text-xs text-orange-600">
+                          Sem CNPJ no requisito desta empresa no Bitrix — o envio ao Omie vai falhar.
+                        </p>
+                      )}
+                  {selected.contactName && <p className="text-xs text-purple-700">Contato: {selected.contactName}</p>}
                   {selected.address && (
                     <p className="text-xs text-purple-600">
                       {selected.address}{selected.number ? `, ${selected.number}` : ""}
@@ -333,7 +366,8 @@ export function CustomerDialog({
 
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={onClose}>Cancelar</Button>
-                <Button onClick={handleListConfirm} disabled={!selected} className="bg-purple-600 hover:bg-purple-700">
+                <Button onClick={handleListConfirm} disabled={!selected || detailLoading}
+                  className="bg-purple-600 hover:bg-purple-700">
                   Confirmar
                 </Button>
               </div>
@@ -874,7 +908,8 @@ export function CustomersTab({ form }: CustomersTabProps) {
         <div>
           <h2 className="text-lg font-semibold">Clientes / Filiais</h2>
           <p className="text-sm text-gray-500">
-            Para cada cliente, defina quantas unidades de cada produto ele irá receber.
+            O cliente do negócio já vem selecionado. Use "Adicionar Filial" quando o
+            negócio atender mais de uma filial do mesmo cliente.
           </p>
         </div>
         <Button
@@ -882,7 +917,7 @@ export function CustomersTab({ form }: CustomersTabProps) {
           onClick={() => setCustomerDialogOpen(true)}
           className="gap-2 bg-purple-600 hover:bg-purple-700"
         >
-          <Plus className="w-4 h-4" /> Adicionar Cliente
+          <Plus className="w-4 h-4" /> Adicionar Filial
         </Button>
       </div>
 
@@ -935,7 +970,7 @@ export function CustomersTab({ form }: CustomersTabProps) {
         <div className="border-2 border-dashed rounded-xl p-12 text-center text-gray-400">
           <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
           <p className="font-medium">Nenhum cliente adicionado</p>
-          <p className="text-sm mt-1">Clique em "Adicionar Cliente" para começar</p>
+          <p className="text-sm mt-1">Clique em "Adicionar Filial" para buscar no Bitrix</p>
         </div>
       )}
 
