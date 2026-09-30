@@ -1,6 +1,7 @@
 "use server"
 
 import { createTransaction } from "./db"
+import { consultarCnpj, type CnpjLookupResult } from "./cnpj-lookup"
 import { sql } from "./db"
 import { validateCNPJ, formatZipCode, formatPhoneNumber, normalizeCNPJDigits, familyMatchesBranch } from "./utils"
 import { BitrixService } from "./bitrix-service"
@@ -2055,63 +2056,8 @@ export async function updateDealPayloadAndStatusAction(dealId: number, status: s
   }
 }
 
-export async function lookupCnpjAction(cnpj: string): Promise<{
-  success: boolean
-  name?: string
-  tradeName?: string
-  address?: string
-  number?: string
-  complement?: string
-  neighborhood?: string
-  city?: string
-  state?: string
-  zipCode?: string
-  email?: string
-  phone?: string
-  error?: string
-}> {
-  const digits = cnpj.replace(/\D/g, '')
-  if (digits.length !== 14) return { success: false, error: 'CNPJ deve ter 14 dígitos' }
-  try {
-    console.log(`[lookupCnpj] Consultando: ${digits}`)
-    const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${digits}`, {
-      cache: 'no-store',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; InsideSales/1.0)',
-        'Accept': 'application/json',
-      },
-    })
-    if (!res.ok) {
-      let errBody = ''
-      try { errBody = await res.text() } catch {}
-      console.error(`[lookupCnpj] HTTP ${res.status} para ${digits}: ${errBody}`)
-      const msg = `HTTP ${res.status} — ${errBody || 'CNPJ não encontrado'}`
-      return { success: false, error: msg }
-    }
-    const d = await res.json()
-    if (d.message) {
-      console.error(`[lookupCnpj] API retornou mensagem de erro para ${digits}: ${d.message}`)
-      return { success: false, error: d.message }
-    }
-    console.log(`[lookupCnpj] OK: ${d.razao_social}`)
-    return {
-      success:      true,
-      name:         d.razao_social     || '',
-      tradeName:    d.nome_fantasia    || '',
-      address:      d.logradouro       || '',
-      number:       d.numero           || '',
-      complement:   d.complemento      || '',
-      neighborhood: d.bairro           || '',
-      city:         d.municipio        || '',
-      state:        d.uf               || '',
-      zipCode:      (d.cep || '').replace(/\D/g, ''),
-      email:        d.email            || '',
-      phone:        (d.ddd_telefone_1 ? d.ddd_telefone_1.replace(/\D/g, '') : ''),
-    }
-  } catch (err: any) {
-    console.error(`[lookupCnpj] Exceção ao consultar ${digits}:`, err)
-    return { success: false, error: err?.message || 'Erro ao consultar CNPJ' }
-  }
+export async function lookupCnpjAction(cnpj: string): Promise<CnpjLookupResult> {
+  return consultarCnpj(cnpj)
 }
 
 // ============================

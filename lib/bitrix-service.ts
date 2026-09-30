@@ -1,5 +1,6 @@
 import { formatCNPJ, normalizeCNPJDigits } from './utils'
 import { proximoNumeroOc, type CamposFinanceiros } from './oc-numbers'
+import { consultarCnpj } from './cnpj-lookup'
 
 interface BitrixDeal {
   id: string;
@@ -768,6 +769,10 @@ export class BitrixService {
       // Atenção à semântica do Bitrix neste portal: PROVINCE é a UF, REGION é a
       // cidade e CITY costuma trazer o bairro. Quando CITY e REGION são iguais,
       // não há bairro cadastrado.
+      // Em ~2/3 dos requisitos o endereço inteiro está como texto livre em
+      // ADDRESS_2 ("R SO CANTO DO MANGUE, S/N, 57.950-000, ZONA RURAL, ..."),
+      // sem logradouro, cidade nem CEP separados.
+      let enderecoTextoLivre = false
       if (requisiteId) {
         const aj: any = await bPost('/crm.address.list.json', {
           filter: { ENTITY_TYPE_ID: 8, ENTITY_ID: requisiteId },
@@ -782,13 +787,43 @@ export class BitrixService {
             const m = logradouro.match(/^(.*?)[,\s]+(\d+[A-Za-z]?)$/)
             if (m) { address = m[1].trim(); number = m[2] } else { address = logradouro }
           }
-          if (a.ADDRESS_2)   complement = String(a.ADDRESS_2)
+          if (a.ADDRESS_2) {
+            // Sem ADDRESS_1, o ADDRESS_2 não é complemento: é o endereço todo.
+            // Vai para o logradouro, onde fica visível e editável.
+            if (a.ADDRESS_1) complement = String(a.ADDRESS_2)
+            else { address = String(a.ADDRESS_2).trim(); enderecoTextoLivre = true }
+          }
           if (a.PROVINCE)    state      = String(a.PROVINCE).trim()
           if (a.REGION)      city       = String(a.REGION).trim()
           if (a.CITY && String(a.CITY).trim() !== String(a.REGION || '').trim()) {
             neighborhood = String(a.CITY).trim()
           }
           if (a.POSTAL_CODE) zipCode    = String(a.POSTAL_CODE).replace(/\D/g, '')
+        }
+      }
+
+      // 3b. Endereço em texto livre ou incompleto: completa com a Receita pelo
+      // CNPJ. No texto livre a Receita substitui o bloco inteiro; num endereço
+      // estruturado só preenche o que faltar.
+      if (cnpj && (enderecoTextoLivre || !address || !city || !state || !zipCode)) {
+        const rf = await consultarCnpj(cnpj)
+        if (rf.success && rf.address) {
+          if (enderecoTextoLivre) {
+            address      = rf.address
+            number       = rf.number       || ''
+            complement   = rf.complement   || ''
+            neighborhood = rf.neighborhood || neighborhood
+            city         = rf.city         || city
+            state        = rf.state        || state
+            zipCode      = rf.zipCode      || zipCode
+          } else {
+            if (!address)      { address = rf.address; number = number || rf.number || '' }
+            if (!complement)   complement   = rf.complement   || ''
+            if (!neighborhood) neighborhood = rf.neighborhood || ''
+            if (!city)         city         = rf.city         || ''
+            if (!state)        state        = rf.state        || ''
+            if (!zipCode)      zipCode      = rf.zipCode      || ''
+          }
         }
       }
 
