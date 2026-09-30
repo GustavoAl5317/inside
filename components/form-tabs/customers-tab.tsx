@@ -78,18 +78,47 @@ export function CustomerDialog({
   /**
    * CNPJ, IE, endereço e contato não vêm na listagem de empresas: moram no
    * requisito e no contato vinculado. São buscados ao escolher a empresa.
+   *
+   * O endereço do requisito está vazio na maior parte da base (numa amostra de
+   * 60 empresas, 53 tinham CNPJ e só 16 tinham endereço). Quando falta, o
+   * endereço é buscado na Receita pelo CNPJ — que é o endereço que vale na nota.
    */
   const handleSelect = async (empresa: any) => {
     setSelected(empresa); setError("")
     if (empresa?.detalhado) return
     setDetailLoading(true)
     const { success, ...dados } = await getBitrixCompanyDetailsAction(Number(empresa.id))
-    setDetailLoading(false)
     if (!success) {
+      setDetailLoading(false)
       setError("Não foi possível carregar os dados da empresa no Bitrix.")
       return
     }
-    const completo = { ...empresa, ...dados, name: dados.name || empresa.name, detalhado: true }
+
+    let completo: any = { ...empresa, ...dados, name: dados.name || empresa.name, detalhado: true }
+
+    const digits = String(completo.cnpj ?? '').replace(/\D/g, '')
+    if (!String(completo.address ?? '').trim() && digits.length === 14) {
+      const rf = await lookupCnpjAction(digits)
+      if (rf.success) {
+        // Só completa o que o Bitrix não trouxe; o que veio do CRM manda.
+        const usaRF = (atual: unknown, vindo: unknown) => String(atual ?? '').trim() || String(vindo ?? '')
+        completo = {
+          ...completo,
+          address:      usaRF(completo.address,      rf.address),
+          number:       usaRF(completo.number,       rf.number),
+          complement:   usaRF(completo.complement,   rf.complement),
+          neighborhood: usaRF(completo.neighborhood, rf.neighborhood),
+          city:         usaRF(completo.city,         rf.city),
+          state:        usaRF(completo.state,        rf.state),
+          zipCode:      usaRF(completo.zipCode,      rf.zipCode),
+          phone:        usaRF(completo.phone,        rf.phone),
+          email:        usaRF(completo.email,        rf.email),
+          enderecoDaReceita: true,
+        }
+      }
+    }
+
+    setDetailLoading(false)
     setSelected(completo)
     setResults(rs => rs.map(r => (r.id === empresa.id ? completo : r)))
   }
@@ -346,6 +375,15 @@ export function CustomerDialog({
                         </p>
                       )}
                   {selected.contactName && <p className="text-xs text-purple-700">Contato: {selected.contactName}</p>}
+                  {!detailLoading && !selected.address && (
+                    <p className="text-xs text-orange-600">
+                      Sem endereço no Bitrix e sem retorno da Receita. Preencha no cadastro da
+                      empresa no Bitrix antes de enviar ao Omie.
+                    </p>
+                  )}
+                  {selected.enderecoDaReceita && selected.address && (
+                    <p className="text-[11px] text-purple-500">endereço obtido na Receita pelo CNPJ</p>
+                  )}
                   {selected.address && (
                     <p className="text-xs text-purple-600">
                       {selected.address}{selected.number ? `, ${selected.number}` : ""}
