@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
+import { familyBranch } from '@/lib/utils'
 import {
   Loader2, Plus, Search, Pencil, Trash2, X,
   AlertTriangle, CheckCircle2, RefreshCw,
@@ -310,7 +311,7 @@ export default function FamiliasPage() {
 
   const locBadge = (loc: string) => {
     if (!loc) return null
-    const isES = loc.toLowerCase().includes('espirito') || loc.toLowerCase().includes('espírito') || loc.toLowerCase() === 'es'
+    const isES = familyBranch(loc) === 'es'
     return <Badge variant="outline" className={`text-xs ${isES ? 'border-green-400 text-green-700' : 'border-blue-400 text-blue-700'}`}>{isES ? 'ES' : 'SP'}</Badge>
   }
 

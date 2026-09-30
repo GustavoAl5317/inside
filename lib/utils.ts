@@ -187,6 +187,40 @@ export function formatZipCode(zipCode: string): string {
   return zipCode
 }
 
+/** Sem acento e em caixa baixa, para comparar rótulo digitado à mão no Bitrix. */
+function semAcento(value: unknown): string {
+  return String(value ?? '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().trim()
+}
+
+/**
+ * Filial de uma família Omie, a partir do campo de localidade da lista Bitrix.
+ *
+ * O rótulo é digitado à mão e aparece como "BARUERI", "Barueri/SP", "ES",
+ * "ESPIRITO SANTO" ou "Espírito Santo". Devolve null quando não dá para decidir.
+ *
+ * ES é testado primeiro de propósito: "espirito" contém "sp", e o teste antigo
+ * de Barueri por `includes('sp')` casava "espirito santo" — daí as famílias do
+ * ES aparecerem junto com as de Barueri. Por isso a comparação usa limite de
+ * palavra em "es" e "sp", em vez de substring solta.
+ */
+export function familyBranch(location: unknown): 'barueri' | 'es' | null {
+  const s = semAcento(location)
+  if (!s) return null
+  if (/(^|[^a-z])es([^a-z]|$)/.test(s) || s.includes('espirito')) return 'es'
+  if (s.includes('barueri') || s.includes('sao paulo') || /(^|[^a-z])sp([^a-z]|$)/.test(s)) {
+    return 'barueri'
+  }
+  return null
+}
+
+/** Família vale para esta filial? Localidade que não identifica filial vale para as duas. */
+export function familyMatchesBranch(location: unknown, branch: 'barueri' | 'es'): boolean {
+  const b = familyBranch(location)
+  return b === null || b === branch
+}
+
 export function formatPhoneNumber(phone: string): string {
   // Remove any non-numeric characters
   const cleanPhone = phone.replace(/\D/g, "")

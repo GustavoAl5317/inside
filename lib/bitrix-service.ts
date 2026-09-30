@@ -1273,18 +1273,31 @@ export class BitrixService {
   }>> {
     // 1) Descobre IDs das propriedades via lists.field.get
     let localPropId = ''
+    // Rótulos do campo de localidade quando ele é lista (TYPE "L"): o elemento
+    // guarda o ID do item da lista, não o texto.
+    let rotulosLocal: Record<string, string> = {}
     try {
       const fj: any = await bPost('/lists.field.get.json', {
         IBLOCK_TYPE_ID: 'lists',
         IBLOCK_ID: listId,
       })
-      for (const [key, info] of Object.entries(fj as Record<string, any>)) {
+      // O corpo vem em .result; iterar o envelope não achava PROPERTY_N nenhum,
+      // e sem localPropId a localidade saía vazia e o filtro por filial ficava
+      // desligado — as famílias das duas filiais apareciam sempre.
+      const fields: Record<string, any> = fj?.result ?? {}
+      for (const [key, info] of Object.entries(fields)) {
         const propMatch = key.match(/^PROPERTY_(\d+)$/)
         if (!propMatch) continue
         const code = String((info as any).CODE || '').toUpperCase().trim()
         // Aceita variações comuns do nome do campo de localidade
         if (['LOCAL', 'LOCALIDADE', 'REGIAO', 'REGIÃO', 'ESTADO', 'LOCALIZACAO'].includes(code)) {
           localPropId = propMatch[1]
+          const dv = (info as any)?.DISPLAY_VALUES_FORM
+          if (dv && typeof dv === 'object') {
+            rotulosLocal = Object.fromEntries(
+              Object.entries(dv).map(([id, label]) => [String(id), String(label)]),
+            )
+          }
         }
       }
     } catch { /* segue sem filtro de local */ }
@@ -1326,8 +1339,10 @@ export class BitrixService {
       // Nome limpo: sem o código (ex: "Aruba - Hardware")
       const displayName = omieCode ? parts.slice(0, -1).join(' - ').trim() : fullName
 
-      // Localidade
-      const location = (localPropId ? readProp(el, localPropId) : '').toLowerCase()
+      // Localidade: "263" → "BARUERI", "265" → "ESPIRITO SANTO". Quem não for
+      // item de lista segue com o próprio texto.
+      const bruto = localPropId ? readProp(el, localPropId) : ''
+      const location = (rotulosLocal[bruto] ?? bruto).toLowerCase()
 
       return {
         id:       String(el.ID || ''),

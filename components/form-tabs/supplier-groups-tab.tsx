@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Badge } from "@/components/ui/badge"
 import { Trash2, Plus, Search, Package, ChevronDown, ChevronUp, Building2, Pencil, Truck } from "lucide-react"
 import { getBitrixSuppliersAction, searchBitrixProductsAction, searchProductsAction, getBitrixFamiliesFullAction } from "@/lib/actions"
-import { formatCurrency, isCNPJComplete, formatCNPJ } from "@/lib/utils"
+import { formatCurrency, isCNPJComplete, formatCNPJ, familyMatchesBranch } from "@/lib/utils"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { naturezaCatalogo } from "@/lib/oc-numbers"
@@ -508,17 +508,14 @@ function ProductRow({
     }
   }, [productState, basePath, form])
 
-  // Filtra lista por estado: ES → Espírito Santo, demais → Barueri
+  // Só as famílias da filial do "Faturamento via" do fornecedor. O teste antigo
+  // era por substring e `includes('sp')` casava "espirito santo", então as duas
+  // filiais apareciam sempre; familyMatchesBranch compara com limite de palavra.
   const filteredFamilies = families.length === 0 ? [] : (() => {
     const hasLocation = families.some(f => f.location)
     if (!hasLocation) return families
-    const isES = productState === 'ES'
-    return families.filter(f => {
-      if (!f.location) return true
-      return isES
-        ? f.location.includes('es') || f.location.includes('espirito') || f.location.includes('espírito')
-        : f.location.includes('barueri') || f.location.includes('sp')
-    })
+    const branch = productState === 'ES' ? 'es' : 'barueri'
+    return families.filter(f => familyMatchesBranch(f.location, branch))
   })()
 
   const updateTotals = (value: number) => {

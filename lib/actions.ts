@@ -2,7 +2,7 @@
 
 import { createTransaction } from "./db"
 import { sql } from "./db"
-import { validateCNPJ, formatZipCode, formatPhoneNumber, normalizeCNPJDigits } from "./utils"
+import { validateCNPJ, formatZipCode, formatPhoneNumber, normalizeCNPJDigits, familyMatchesBranch } from "./utils"
 import { BitrixService } from "./bitrix-service"
 import { naturezaCatalogo, preservaNumerosOc } from "./oc-numbers"
 import { garanteNumerosOc } from "./oc-numbers-bitrix"
@@ -483,10 +483,11 @@ export async function getBitrixFamiliesAction() {
 
 /**
  * Retorna todas as famílias da lista #65 com omieCode e localidade.
- * Regra de negócio:
- *  - state = 'ES' → filtra por location contendo 'es' ou 'espirito'
- *  - demais UFs   → filtra por location contendo 'barueri'
- *  - sem localidade configurada → retorna tudo
+ * Regra de negócio (familyBranch em lib/utils):
+ *  - state = 'ES'   → só as famílias do Espírito Santo
+ *  - demais UFs     → só as famílias de Barueri
+ *  - localidade que não identifica filial → vale para as duas
+ *  - nenhuma família com localidade → retorna tudo
  */
 export async function getBitrixFamiliesFullAction(state?: string) {
   try {
@@ -495,13 +496,10 @@ export async function getBitrixFamiliesFullAction(state?: string) {
 
     let families = all
     if (state && all.some(f => f.location)) {
-      const isES = state === 'ES'
-      families = all.filter(f => {
-        if (!f.location) return true
-        return isES
-          ? f.location.includes('es') || f.location.includes('espirito') || f.location.includes('espírito')
-          : f.location.includes('barueri') || f.location.includes('sp')
-      })
+      // Mesmo filtro da tela. O teste antigo era por substring e
+      // `includes('sp')` casava "espirito santo", trazendo as duas filiais.
+      const branch = state === 'ES' ? 'es' : 'barueri'
+      families = all.filter(f => familyMatchesBranch(f.location, branch))
     }
 
     return { success: true as const, families }
