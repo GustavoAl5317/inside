@@ -90,6 +90,9 @@ const supplierGroupSchema = z.object({
   // Vai para o Omie em frete_upsert.nValFrete do Pedido de Compra.
   hasFreight:   z.boolean().default(false),
   freightValue: z.number().min(0).default(0),
+  // Prazo de entrega por fornecedor: cada compra chega numa data. Era um campo
+  // só do negócio, e com vários fornecedores a data de um valia para todos.
+  deliveryDeadline: z.string().default(""),
   supplier: companySchema,
   products: z.array(productSchema),
   // Número de Ordem de Compra desta OC na lista #35 do Bitrix, ex. "9178/26".
@@ -150,11 +153,15 @@ const formSchema = z.object({
     name:                     z.string().min(1, "Nome do negócio é obrigatório"),
     commercialProposal:       z.string().optional(),
     purchaseOrderDate:        z.string().min(1, "Data da OC é obrigatória"),
-    deliveryDeadline:         z.string().min(1, "Prazo de entrega é obrigatório"),
+    // Derivado: o prazo saiu da etapa Negócio e passou a ser por fornecedor.
+    // Aqui fica o mais distante entre eles — a entrega só fecha quando o último
+    // item chega. Mantido no payload porque PDF, relatório, histórico e o diff
+    // leem este campo, e é a data de previsão da OV e da OS.
+    deliveryDeadline:         z.string().default(""),
     // Obrigatória só quando há compra: negócio só de serviço Interatell não tem
     // fornecedor. A regra fica no superRefine do formSchema.
     purchasePaymentCondition: z.string().default(""),
-    expectedBillingDate:      z.string().min(1, "Data de previsão de faturamento é obrigatória"),
+    expectedBillingDate:      z.string().min(1, "Previsão de faturamento é obrigatória"),
     salePaymentCondition:     z.string().min(1, "Condição de pagamento de venda é obrigatória"),
     hasInteratellService:     z.boolean().default(false),
     // Negócio só de serviço Interatell: sem fornecedor, sem produto, sem OC/OV.
@@ -226,6 +233,20 @@ function deriveBranches(groups: any[] | undefined): ('barueri' | 'es')[] {
   const set = new Set<'barueri' | 'es'>()
   for (const g of groups ?? []) set.add(g?.branch === 'es' ? 'es' : 'barueri')
   return [...set]
+}
+
+/**
+ * Prazo de entrega do negócio a partir dos prazos dos fornecedores: o mais
+ * distante. A entrega do negócio só fecha quando o último fornecedor entrega,
+ * e é essa data que vai como previsão na OV e na OS, que juntam itens de
+ * fornecedores diferentes. Sem fornecedor com prazo, cai na previsão de
+ * faturamento (negócio só de serviço Interatell não tem compra).
+ */
+function deriveDeliveryDeadline(groups: any[] | undefined, fallback: string): string {
+  // Datas em ISO (aaaa-mm-dd) ordenam como texto.
+  const datas = (groups ?? []).map(g => String(g?.deliveryDeadline ?? '').trim()).filter(Boolean)
+  if (!datas.length) return String(fallback ?? '')
+  return datas.reduce((maior, d) => (d > maior ? d : maior))
 }
 
 function normalizeFormCNPJs(form: UseFormReturn<FormInput, any, FormValues>) {
@@ -539,6 +560,18 @@ export function MultiStepForm({
       if (groups.some((g: any) => !g.products?.length)) {
         toast.error("Todos os grupos de fornecedores precisam ter pelo menos um produto."); return false
       }
+      // O prazo é por fornecedor e vai como dDtPrevisao da OC dele.
+      const semPrazo = groups
+        .map((g: any, i: number) => (!String(g.deliveryDeadline ?? '').trim() ? (g.supplier?.name || `Fornecedor ${i + 1}`) : ''))
+        .filter(Boolean)
+      if (semPrazo.length) {
+        toast.error(
+          semPrazo.length === 1
+            ? `Informe o prazo de entrega de ${semPrazo[0]}.`
+            : `Informe o prazo de entrega de: ${semPrazo.join(', ')}.`,
+        )
+        return false
+      }
       return true
     }
     if (tabId === "customers") {
@@ -643,6 +676,9 @@ export function MultiStepForm({
       } else {
         values.interatellBranches = deriveBranches(values.supplierGroups)
       }
+      values.business.deliveryDeadline = deriveDeliveryDeadline(
+        values.supplierGroups, values.business.expectedBillingDate,
+      )
       pruneAllocations(values)
       const payload = {
         bitrixDealId:       values.bitrixDealId || null,

@@ -101,7 +101,7 @@ export function BusinessTab({ form }: BusinessTabProps) {
             name="business.purchaseOrderDate"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Data da Criação da OC</FormLabel>
+                <FormLabel>Criação da OC</FormLabel>
                 <FormControl>
                   <Input type="date" {...field} disabled className="bg-gray-100 cursor-not-allowed" />
                 </FormControl>
@@ -110,12 +110,14 @@ export function BusinessTab({ form }: BusinessTabProps) {
             )}
           />
 
+          {/* O prazo de entrega saiu daqui: cada fornecedor entrega numa data,
+              então o campo vive no card do fornecedor, na etapa seguinte. */}
           <FormField
             control={form.control}
-            name="business.deliveryDeadline"
+            name="business.expectedBillingDate"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Data de Prazo de Entrega</FormLabel>
+                <FormLabel>Previsão de Faturamento</FormLabel>
                 <FormControl>
                   <Input type="date" {...field} />
                 </FormControl>
@@ -125,7 +127,7 @@ export function BusinessTab({ form }: BusinessTabProps) {
           />
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4">
           {!onlyService && (
           <FormField
             control={form.control}
@@ -162,20 +164,6 @@ export function BusinessTab({ form }: BusinessTabProps) {
             )}
           />
           )}
-
-          <FormField
-            control={form.control}
-            name="business.expectedBillingDate"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Data de Previsão de Faturamento</FormLabel>
-                <FormControl>
-                  <Input type="date" {...field} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
         </div>
 
         <FormField

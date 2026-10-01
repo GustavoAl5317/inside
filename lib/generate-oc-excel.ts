@@ -256,7 +256,7 @@ function montaAbaResumo(wb: ExcelJS.Workbook, plan: OmiePlan) {
     campo('Empresa emissora', `${d.empresaEmissora} · ${formatCNPJ(d.cnpjEmissor)}`)
     campo(d.parteTipo, `${d.parteNome} · ${d.parteCnpj}`)
     campo('Condição de pagamento', `${d.condicaoPagamento} — ${d.condicaoPagamentoLabel}`)
-    campo('Data de previsão', d.dataPrevisao)
+    campo('Previsão', d.dataPrevisao)
     if (d.numeroPedidoCliente) campo('Nº do pedido do cliente', d.numeroPedidoCliente)
     // Frete zerado nao e enviado (frete_upsert so vai com valor), entao a aba
     // diz que nao ha frete em vez de mostrar um campo com 0.
@@ -383,7 +383,9 @@ function preencheAba(
   // ── Cabeçalho ──────────────────────────────────────────────────────────────
   set('K2', txt(business.commercialProposal))
   set('K3', paraData(business.purchaseOrderDate))
-  set('K4', paraData(business.deliveryDeadline))
+  // Prazo deste fornecedor. business.deliveryDeadline e o mais distante entre
+  // todos e fica de reserva para rascunho gravado antes do campo por fornecedor.
+  set('K4', paraData(group?.deliveryDeadline || business.deliveryDeadline))
   set('O4', paraData(business.expectedBillingDate))
   const condicao = (v: unknown) => { const c = txt(v); return condicoes.get(c) || c }
   set('K6', condicao(business.purchasePaymentCondition))

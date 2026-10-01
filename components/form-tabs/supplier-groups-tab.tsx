@@ -691,6 +691,8 @@ function SupplierGroupCard({
   const groupBranch: string = form.watch(`supplierGroups.${groupIndex}.branch`) || 'barueri'
   const hasFreight: boolean = !!form.watch(`supplierGroups.${groupIndex}.hasFreight`)
   const freightValue: number = form.watch(`supplierGroups.${groupIndex}.freightValue`) || 0
+  const prazoEntrega: string = form.watch(`supplierGroups.${groupIndex}.deliveryDeadline`) || ''
+  const prazoFaltando = !prazoEntrega.trim()
   const totalCusto = (form.watch(`supplierGroups.${groupIndex}.products`) || [])
     .reduce((s: number, p: any) => s + (p.totalCost || 0), 0)
 
@@ -767,6 +769,27 @@ function SupplierGroupCard({
                     <SelectItem value="es" className="text-xs">Interatell Espírito Santo / ES</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+
+              {/* Prazo de entrega por fornecedor. Vai como dDtPrevisao da OC
+                  deste fornecedor; era um campo só do negócio, e com vários
+                  fornecedores a data de um valia para todos. */}
+              <div className="flex items-center gap-1.5 mt-1">
+                <span className={`text-[10px] font-semibold uppercase shrink-0 ${
+                  prazoFaltando ? 'text-red-600' : 'text-blue-700/70'
+                }`}>
+                  Prazo de entrega {prazoFaltando && '*'}
+                </span>
+                <Input
+                  type="date"
+                  className={`h-6 text-[11px] w-[150px] bg-white ${
+                    prazoFaltando ? 'border-red-300 focus-visible:ring-red-400' : ''
+                  }`}
+                  value={prazoEntrega}
+                  onChange={e => form.setValue(
+                    `supplierGroups.${groupIndex}.deliveryDeadline`, e.target.value, { shouldDirty: true },
+                  )}
+                />
               </div>
 
               {/* Frete da compra — vai para o Omie em frete_upsert.nValFrete
@@ -954,6 +977,9 @@ export function SupplierGroupsTab({ form }: SupplierGroupsTabProps) {
       branch:   company.branch || 'barueri',
       hasFreight:   false,
       freightValue: 0,
+      // Prefill com a data de fechamento do card Bitrix, que o step Negocio ja
+      // carrega. O usuario ajusta por fornecedor quando os prazos diferem.
+      deliveryDeadline: String(form.getValues("business.deliveryDeadline") ?? ""),
       supplier: {
         cnpj:             company.cnpj,
         name:             company.name,

@@ -98,6 +98,7 @@ export function computeDealPayloadChanges(before: any, after: any): PayloadChang
     pushDiff(changes, `${gLabel} — filial`, bg.branch, ag.branch)
     const frete = (g: any) => (g?.hasFreight ? Number(g.freightValue ?? 0) : 0)
     pushDiff(changes, `${gLabel} — frete`, frete(bg), frete(ag), fmtMoney)
+    pushDiff(changes, `${gLabel} — prazo de entrega`, bg.deliveryDeadline, ag.deliveryDeadline, fmtDate)
 
     const bProds = bg.products ?? []
     const aProds = ag.products ?? []

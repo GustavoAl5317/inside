@@ -299,6 +299,23 @@ export function buildOmiePlan(
   const obsInterna = String(values?.notes?.internalNotes ?? '').trim()
 
   const pedidoCliente = String(business?.commercialProposal ?? '').trim()
+
+  /**
+   * Prazo de entrega de um documento de venda: o mais distante entre os
+   * fornecedores que mandaram item para ele. A OV e a OS juntam compras de
+   * fornecedores diferentes, e a entrega só fecha quando o último item chega.
+   * Mesma regra de prazoDosItens no envio (api/omie/send).
+   */
+  const prazoPorGrupo = new Map<string, string>()
+  for (const g of todosGrupos) {
+    prazoPorGrupo.set(String(g?.localId ?? ''), String(g?.deliveryDeadline ?? '').trim())
+  }
+  const prazoDosItens = (lista: any[]): string => {
+    const datas = lista.map(i => prazoPorGrupo.get(String(i?._groupLocalId ?? '')) ?? '').filter(Boolean)
+    if (datas.length) return toOmieDate(datas.reduce((maior, d) => (d > maior ? d : maior)))
+    return toOmieDate(business?.deliveryDeadline ?? business?.expectedBillingDate)
+  }
+  // Serviço Interatell não tem compra: vale a previsão de faturamento.
   const dtPrevisao = toOmieDate(business?.deliveryDeadline ?? business?.expectedBillingDate)
 
   const emissor = (filial: Filial) => {
@@ -330,7 +347,7 @@ export function buildOmiePlan(
       condicaoPagamento: opts.condicaoCompra,
       condicaoPagamentoLabel: opts.rotulo(business.purchasePaymentCondition),
       etapa: '',
-      dataPrevisao: toOmieDate(business?.deliveryDeadline),
+      dataPrevisao: toOmieDate(group.deliveryDeadline || business?.deliveryDeadline),
       numeroPedidoCliente: '',
       valorFrete: group.hasFreight ? Number(group.freightValue ?? 0) : 0,
       campoObsExterna: 'cObs', obsExterna,
@@ -355,9 +372,16 @@ export function buildOmiePlan(
     }
 
     // SRV sai do agrupamento por filial: é sempre faturado por Barueri.
+    // todosSRV é o documento como ele existe no Omie; itensSRV é o recorte deste
+    // arquivo. A previsão sai do primeiro, os itens exibidos do segundo.
+    const todosSRV: any[] = []
     const itensSRV: any[] = []
     for (const [, lista] of porFilial) {
-      for (const item of soDoGrupo(lista)) if (normalizeNatureza(item.nature) === 'SRV') itensSRV.push(item)
+      for (const item of lista) {
+        if (normalizeNatureza(item.nature) !== 'SRV') continue
+        todosSRV.push(item)
+        if (soDoGrupo([item]).length) itensSRV.push(item)
+      }
     }
 
     for (const [filial, itensDaFilial] of porFilial) {
@@ -380,7 +404,10 @@ export function buildOmiePlan(
           codigoIntegracao: `OV-${id}-C${cIdx}-${sufixo}`,
           ...emissor(filial), ...parte,
           etapa: '10',
-          dataPrevisao: dtPrevisao,
+          // Sobre o conjunto inteiro, nao o recorte: a OV no Omie e uma so e
+          // tem uma data. Recortada por fornecedor, cada arquivo mostraria uma
+          // previsao diferente para o mesmo documento.
+          dataPrevisao: prazoDosItens(daFilial.filter(ehHW)),
           campoObsExterna: 'informacoes_adicionais.dados_adicionais_nf', obsExterna,
           campoObsInterna: 'observacoes.obs_venda', obsInterna,
           itens, total: soma(itens),
@@ -401,7 +428,7 @@ export function buildOmiePlan(
           codigoIntegracao: `OS-${id}-C${cIdx}-${nat}-${sufixo}`,
           ...emissor(filial), ...parte,
           etapa: '20',
-          dataPrevisao: dtPrevisao,
+          dataPrevisao: prazoDosItens(daFilial.filter(i => normalizeNatureza(i.nature) === nat)),
           campoObsExterna: 'cDadosAdicNF', obsExterna,
           campoObsInterna: 'cObsOS', obsInterna,
           itens, total: soma(itens),
@@ -421,7 +448,7 @@ export function buildOmiePlan(
         codigoIntegracao: `OS-${id}-C${cIdx}-SRV-BAR`,
         ...emissor('barueri'), ...parte,
         etapa: '20',
-        dataPrevisao: dtPrevisao,
+        dataPrevisao: prazoDosItens(todosSRV),
         campoObsExterna: 'cDadosAdicNF', obsExterna,
         campoObsInterna: 'cObsOS', obsInterna,
         itens, total: soma(itens), recorte: '',
@@ -472,7 +499,11 @@ export function buildOmiePlan(
     proposta: pedidoCliente,
     negocio: String(business?.name ?? ''),
     dataOc: toOmieDate(business?.purchaseOrderDate),
-    prazoEntrega: toOmieDate(business?.deliveryDeadline),
+    // Recortado por fornecedor: o prazo dele. No plano inteiro, o mais distante
+    // entre os fornecedores, que é o que business.deliveryDeadline guarda.
+    prazoEntrega: toOmieDate(
+      (escopo?.groupLocalId ? supplierGroups[0]?.deliveryDeadline : '') || business?.deliveryDeadline,
+    ),
     previsaoFaturamento: toOmieDate(business?.expectedBillingDate),
     condicaoCompra: opts.condicaoCompra,
     condicaoCompraLabel: opts.rotulo(business?.purchasePaymentCondition),

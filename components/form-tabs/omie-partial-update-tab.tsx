@@ -1424,7 +1424,7 @@ export function OmiePartialUpdateTab({ dealId, branches, prefill }: OmiePartialU
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">Data de previsão</Label>
+              <Label className="text-xs">Previsão</Label>
               <Input
                 type="date"
                 value={form.header.dataPrevisao}

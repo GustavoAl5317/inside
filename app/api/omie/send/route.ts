@@ -732,7 +732,7 @@ async function upsertOC(
   interatellCnpj: string, codDistribuidor: number, items: any[], business: any,
   obs: { externa: string; interna: string },
   dealId: number, groupIdx: number, opts: { isUpdate: boolean; retryCount: number },
-  codParc: string, valorFrete: number,
+  codParc: string, valorFrete: number, prazoEntrega: string,
 ) {
   const ocItems = items.filter(i => normalizeNatureza(i.nature) !== 'SRV')
   if (!ocItems.length || !codDistribuidor) return null
@@ -759,7 +759,9 @@ async function upsertOC(
       cCodIntPed: intCode,
       nCodFor: codDistribuidor,
       cCodParc: codParc,
-      dDtPrevisao: toOmieDate(business?.deliveryDeadline),
+      // Prazo deste fornecedor. business.deliveryDeadline e o mais distante
+      // entre todos os fornecedores e fica de reserva para payload antigo.
+      dDtPrevisao: toOmieDate(prazoEntrega || business?.deliveryDeadline),
       // cObs = observação do pedido; cObsInt = observação interna (só quem consulta vê).
       cObs: obs.externa,
       cObsInt: obs.interna,
@@ -779,9 +781,31 @@ async function upsertOC(
   }
 }
 
+/**
+ * Prazo de entrega de um documento de venda.
+ *
+ * A OV e a OS juntam itens de fornecedores diferentes, e cada fornecedor tem o
+ * seu prazo. Vale o mais distante: a entrega só fecha quando o último item
+ * chega. itensPorFilial marca cada item com _groupLocalId, que é de onde vem a
+ * compra. Sem prazo em nenhum fornecedor, cai no prazo do negócio (payload
+ * antigo) e depois na previsão de faturamento.
+ */
+function prazoDosItens(items: any[], supplierGroups: any[], business: any): string {
+  const porId = new Map<string, string>()
+  for (const g of supplierGroups ?? []) {
+    porId.set(String(g?.localId ?? ''), String(g?.deliveryDeadline ?? '').trim())
+  }
+  // Datas em ISO (aaaa-mm-dd) ordenam como texto.
+  const datas = items
+    .map(i => porId.get(String(i?._groupLocalId ?? '')) ?? '')
+    .filter(Boolean)
+  if (datas.length) return datas.reduce((maior, d) => (d > maior ? d : maior))
+  return String(business?.deliveryDeadline ?? '') || String(business?.expectedBillingDate ?? '')
+}
+
 // ─── Upsert OV (busca pelo código de integração → atualiza ou cria) ──────────
 async function upsertOV(
-  interatellCnpj: string, codCliente: number, items: any[], business: any,
+  interatellCnpj: string, codCliente: number, items: any[], business: any, prazoEntrega: string,
   obs: { externa: string; interna: string },
   dealId: number, customerIdx: number, opts: { isUpdate: boolean; retryCount: number },
   codParc: string, filial: Filial,
@@ -824,7 +848,7 @@ async function upsertOV(
 
   const cabecalhoCreate = {
     codigo_cliente: codCliente, codigo_pedido_integracao: createCode,
-    data_previsao: toOmieDate(business?.deliveryDeadline ?? business?.expectedBillingDate),
+    data_previsao: toOmieDate(prazoEntrega || business?.deliveryDeadline || business?.expectedBillingDate),
     etapa: '10', numero_pedido: createCode,
     codigo_parcela: codParc,
     quantidade_itens: hwItems.length,
@@ -846,7 +870,7 @@ async function upsertOV(
         codigo_cliente: codCliente,
         codigo_pedido_integracao: found.intCode,
         codigo_pedido: found.cab.codigo_pedido,
-        data_previsao: toOmieDate(business?.deliveryDeadline ?? business?.expectedBillingDate),
+        data_previsao: toOmieDate(prazoEntrega || business?.deliveryDeadline || business?.expectedBillingDate),
         etapa: '10',
         codigo_parcela: codParc,
         quantidade_itens: hwItems.length,
@@ -872,7 +896,7 @@ async function upsertOV(
           codigo_cliente: codCliente,
           codigo_pedido_integracao: retryFound.intCode,
           codigo_pedido: retryFound.cab.codigo_pedido,
-          data_previsao: toOmieDate(business?.deliveryDeadline ?? business?.expectedBillingDate),
+          data_previsao: toOmieDate(prazoEntrega || business?.deliveryDeadline || business?.expectedBillingDate),
           etapa: '10',
           codigo_parcela: codParc,
           quantidade_itens: hwItems.length,
@@ -931,7 +955,7 @@ function cidadeDaOS(interatellCnpj: string, cliente: any, filial: Filial): { cid
 
 // ─── Upsert OS (busca pelo código de integração → atualiza ou cria) ──────────
 async function upsertOS(
-  interatellCnpj: string, codCliente: number, cliente: any, items: any[], nat: Natureza,
+  interatellCnpj: string, codCliente: number, cliente: any, items: any[], nat: Natureza, prazoEntrega: string,
   business: any, obs: { externa: string; interna: string },
   dealId: number, customerIdx: number, opts: { isUpdate: boolean; retryCount: number },
   codParc: string, filial: Filial,
@@ -950,7 +974,7 @@ async function upsertOS(
 
   const Cabecalho = {
     cCodIntOS: createCode, nCodCli: codCliente, cEtapa: '20',
-    dDtPrevisao: toOmieDate(business?.deliveryDeadline ?? business?.expectedBillingDate),
+    dDtPrevisao: toOmieDate(prazoEntrega || business?.deliveryDeadline || business?.expectedBillingDate),
     cCodParc: codParc, nQtdeParc: 1,
   }
   // Cidade da prestação: sem UF o Omie recusa a OS inteira. Quando nem o cadastro
@@ -1280,7 +1304,7 @@ async function processDeal(body: any, dealId: number) {
       const codDistribuidor = ctx().fornecedorCache.get(`${branchCnpj}:${digits(group.supplier?.cnpj)}`)
       if (!codDistribuidor) continue
       const valorFrete = group.hasFreight ? Number(group.freightValue ?? 0) : 0
-      const res = await upsertOC(branchCnpj, codDistribuidor, group.products ?? [], business, obs, dealId, gIdx, upsertOpts, purchaseCodParc, valorFrete)
+      const res = await upsertOC(branchCnpj, codDistribuidor, group.products ?? [], business, obs, dealId, gIdx, upsertOpts, purchaseCodParc, valorFrete, String(group.deliveryDeadline ?? ''))
       if (res) ocResults.push({ ...res, _supplier: group.supplier?.name, _groupIdx: gIdx })
     }
 
@@ -1307,13 +1331,13 @@ async function processDeal(body: any, dealId: number) {
         const codCliente = ctx().clienteCache.get(`${branchCnpj}:${digits(entry.customer?.cnpj)}`)
         if (!codCliente) continue
 
-        const ov = await upsertOV(branchCnpj, codCliente, itens, business, obs, dealId, cIdx, upsertOpts, saleCodParc, filial)
+        const ov = await upsertOV(branchCnpj, codCliente, itens, business, prazoDosItens(itens, supplierGroups, business), obs, dealId, cIdx, upsertOpts, saleCodParc, filial)
         if (ov) ovResults.push({ ...ov, _customer: entry.customer?.name, _filial: filial, _clienteIdx: cIdx })
 
         for (const nat of ['SW','LC','ST'] as Natureza[]) {
           const natItems = itens.filter(i => normalizeNatureza(i.nature) === nat)
           if (!natItems.length) continue
-          const os = await upsertOS(branchCnpj, codCliente, entry.customer, natItems, nat, business, obs, dealId, cIdx, upsertOpts, saleCodParc, filial)
+          const os = await upsertOS(branchCnpj, codCliente, entry.customer, natItems, nat, prazoDosItens(natItems, supplierGroups, business), business, obs, dealId, cIdx, upsertOpts, saleCodParc, filial)
           if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: nat, _filial: filial, _clienteIdx: cIdx })
         }
       }
@@ -1321,7 +1345,7 @@ async function processDeal(body: any, dealId: number) {
       if (itensSRV.length) {
         const codCliente = ctx().clienteCache.get(`${CNPJ_BARUERI}:${digits(entry.customer?.cnpj)}`)
         if (codCliente) {
-          const os = await upsertOS(CNPJ_BARUERI, codCliente, entry.customer, itensSRV, 'SRV', business, obs, dealId, cIdx, upsertOpts, saleCodParc, 'barueri')
+          const os = await upsertOS(CNPJ_BARUERI, codCliente, entry.customer, itensSRV, 'SRV', prazoDosItens(itensSRV, supplierGroups, business), business, obs, dealId, cIdx, upsertOpts, saleCodParc, 'barueri')
           if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: 'SRV', _filial: 'barueri', _clienteIdx: cIdx })
         }
       }
@@ -1339,8 +1363,10 @@ async function processDeal(body: any, dealId: number) {
       const codCliente = ctx().clienteCache.get(`${CNPJ_BARUERI}:${digits(entry.customer?.cnpj)}`)
       if (!codCliente) continue
 
+      // Serviço Interatell não tem fornecedor: sem prazo de compra, vale a
+      // previsão de faturamento do negócio.
       const os = await upsertOS(
-        CNPJ_BARUERI, codCliente, entry.customer, items, 'SRV',
+        CNPJ_BARUERI, codCliente, entry.customer, items, 'SRV', '',
         business, obs, dealId, customers.length + sIdx, upsertOpts, saleCodParc, 'barueri',
       )
       if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: 'SRV', _interatellService: true, _filial: 'barueri', _servicoIdx: sIdx })
