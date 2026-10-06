@@ -19,6 +19,8 @@ export function BusinessTab({ form }: BusinessTabProps) {
   const [manualMode, setManualMode] = useState(false)
   // Negócio só de serviço Interatell não tem compra: some a condição de compra.
   const onlyService = !!form.watch("business.onlyInteratellService")
+  // Compra para estoque: some tudo que é de venda.
+  const onlyPurchase = !!form.watch("business.onlyPurchase")
 
   /**
    * Garante que o valor salvo no rascunho apareca no Select mesmo quando a opcao
@@ -112,6 +114,7 @@ export function BusinessTab({ form }: BusinessTabProps) {
 
           {/* O prazo de entrega saiu daqui: cada fornecedor entrega numa data,
               então o campo vive no card do fornecedor, na etapa seguinte. */}
+          {!onlyPurchase && (
           <FormField
             control={form.control}
             name="business.expectedBillingDate"
@@ -125,6 +128,7 @@ export function BusinessTab({ form }: BusinessTabProps) {
               </FormItem>
             )}
           />
+          )}
         </div>
 
         <div className="grid grid-cols-1 gap-4">
@@ -166,6 +170,7 @@ export function BusinessTab({ form }: BusinessTabProps) {
           )}
         </div>
 
+        {!onlyPurchase && (
         <FormField
           control={form.control}
           name="business.salePaymentCondition"
@@ -200,6 +205,7 @@ export function BusinessTab({ form }: BusinessTabProps) {
             </FormItem>
           )}
         />
+        )}
 
         {/* Serviço Interatell (SRV): não passa por fornecedor, é vendido direto
             ao cliente — por isso abre um step próprio e gera um PDF separado. */}
@@ -212,8 +218,8 @@ export function BusinessTab({ form }: BusinessTabProps) {
                 <FormControl>
                   <input
                     type="checkbox"
-                    checked={!!field.value || onlyService}
-                    disabled={onlyService}
+                    checked={(!!field.value || onlyService) && !onlyPurchase}
+                    disabled={onlyService || onlyPurchase}
                     onChange={e => field.onChange(e.target.checked)}
                     className="mt-0.5 h-4 w-4 accent-teal-600 cursor-pointer disabled:cursor-not-allowed"
                   />
@@ -244,12 +250,13 @@ export function BusinessTab({ form }: BusinessTabProps) {
                 <FormControl>
                   <input
                     type="checkbox"
-                    checked={!!field.value}
+                    checked={!!field.value && !onlyPurchase}
+                    disabled={onlyPurchase}
                     onChange={e => {
                       field.onChange(e.target.checked)
                       if (e.target.checked) form.setValue("business.hasInteratellService", true)
                     }}
-                    className="mt-0.5 h-4 w-4 accent-amber-600 cursor-pointer"
+                    className="mt-0.5 h-4 w-4 accent-amber-600 cursor-pointer disabled:cursor-not-allowed"
                   />
                 </FormControl>
                 <div className="min-w-0">
@@ -260,6 +267,45 @@ export function BusinessTab({ form }: BusinessTabProps) {
                     Serviço da Interatell direto para o cliente, sem compra. Pula as etapas
                     de <strong>Fornecedores/Produtos</strong> e <strong>Clientes</strong>, vai
                     direto para <strong>Cliente Serviço</strong> e gera só a OS no Omie.
+                  </p>
+                </div>
+              </div>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        {/* Compra para estoque: tem fornecedor e produto, não tem cliente. Pula
+            Clientes e gera só a OC de cada fornecedor. */}
+        <FormField
+          control={form.control}
+          name="business.onlyPurchase"
+          render={({ field }) => (
+            <FormItem className="md:col-span-2">
+              <div className="flex items-start gap-3 rounded-xl border-2 border-slate-300 bg-slate-50 p-4">
+                <FormControl>
+                  <input
+                    type="checkbox"
+                    checked={!!field.value}
+                    disabled={onlyService}
+                    onChange={e => {
+                      field.onChange(e.target.checked)
+                      if (e.target.checked) {
+                        form.setValue("business.hasInteratellService", false)
+                        form.setValue("business.onlyInteratellService", false)
+                      }
+                    }}
+                    className="mt-0.5 h-4 w-4 accent-slate-700 cursor-pointer disabled:cursor-not-allowed"
+                  />
+                </FormControl>
+                <div className="min-w-0">
+                  <FormLabel className="text-sm font-bold text-slate-800 cursor-pointer">
+                    Somente compra (sem venda)
+                  </FormLabel>
+                  <p className="text-xs text-slate-600 mt-1">
+                    Compra para estoque. Pula a etapa de <strong>Clientes</strong> e gera só a
+                    <strong> Ordem de Compra</strong> de cada fornecedor no Omie, sem OV e sem OS.
+                    Na planilha, o bloco do cliente final sai em branco.
                   </p>
                 </div>
               </div>

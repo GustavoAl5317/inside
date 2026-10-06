@@ -497,7 +497,9 @@ export function buildOmiePlan(
     prazoEntrega: toOmieDate(
       (escopo?.groupLocalId ? supplierGroups[0]?.deliveryDeadline : '') || business?.deliveryDeadline,
     ),
-    previsaoFaturamento: toOmieDate(business?.expectedBillingDate),
+    // Compra para estoque nao tem venda: campo vazio fica vazio, nao vira a
+    // data de hoje (toOmieDate cai em hoje quando a entrada e vazia).
+    previsaoFaturamento: business?.expectedBillingDate ? toOmieDate(business.expectedBillingDate) : '',
     condicaoCompra: opts.condicaoCompra,
     condicaoCompraLabel: opts.rotulo(business?.purchasePaymentCondition),
     condicaoVenda: opts.condicaoVenda,

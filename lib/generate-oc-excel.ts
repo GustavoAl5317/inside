@@ -214,9 +214,10 @@ function montaAbaResumo(wb: ExcelJS.Workbook, plan: OmiePlan) {
   campo('Processo (id no app)', plan.dealId ?? 'rascunho ainda sem id')
   campo('Data da OC', plan.dataOc)
   campo('Prazo de entrega', plan.prazoEntrega)
-  campo('Previsão de faturamento', plan.previsaoFaturamento)
+  if (plan.previsaoFaturamento) campo('Previsão de faturamento', plan.previsaoFaturamento)
   campo('Cond. pagamento compra', `${plan.condicaoCompra} — ${plan.condicaoCompraLabel}`)
-  campo('Cond. pagamento venda', `${plan.condicaoVenda} — ${plan.condicaoVendaLabel}`)
+  // Sem venda (compra para estoque) nao ha condicao de venda nem faturamento.
+  if (plan.condicaoVendaLabel) campo('Cond. pagamento venda', `${plan.condicaoVenda} — ${plan.condicaoVendaLabel}`)
   campo('Observação externa (sai na NF)', plan.obsExterna, { largo: true })
   campo('Observação interna', plan.obsInterna, { largo: true })
   branco()
@@ -543,11 +544,20 @@ export async function generateOcExcelFiles(values: any, dealId?: number | null):
   type Arquivo = { fornecedor: string; abas: Aba[]; groupLocalId?: string; servico?: boolean }
   const arquivos: Arquivo[] = []
 
+  // Compra para estoque: sem cliente, uma aba só com a compra inteira do
+  // fornecedor e o bloco do cliente final em branco.
+  const soCompra = !!values?.business?.onlyPurchase
+
   for (const group of (values?.supplierGroups ?? [])) {
     const abas: Aba[] = []
-    for (const entry of (values?.customers ?? [])) {
-      const itens = itensDoPar(group, entry)
-      if (itens.length) abas.push({ group, entry, itens })
+    if (soCompra) {
+      const itens = (group?.products ?? []).filter((p: any) => Number(p?.quantity) > 0)
+      if (itens.length) abas.push({ group, entry: { customer: {} }, itens })
+    } else {
+      for (const entry of (values?.customers ?? [])) {
+        const itens = itensDoPar(group, entry)
+        if (itens.length) abas.push({ group, entry, itens })
+      }
     }
     if (abas.length) {
       arquivos.push({ fornecedor: txt(group?.supplier?.name), abas, groupLocalId: group?.localId })
@@ -600,7 +610,8 @@ export async function generateOcExcelFiles(values: any, dealId?: number | null):
           try { ws.mergeCells(m) } catch { /* mesclagem ja existente */ }
         }
       }
-      ws.name = nomeAba(txt(entry?.customer?.name), i, usados)
+      // Sem cliente (compra para estoque) a aba leva o nome do fornecedor.
+      ws.name = nomeAba(txt(entry?.customer?.name) || txt(fornecedor), i, usados)
       preencheAba(ws, values, group, entry, itens, condicoes, gerente)
     })
 
