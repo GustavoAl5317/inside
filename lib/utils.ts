@@ -187,6 +187,17 @@ export function formatZipCode(zipCode: string): string {
   return zipCode
 }
 
+/**
+ * Código do produto no Omie: o SKU do catálogo.
+ *
+ * partnumber só entra quando não há SKU (produto digitado à mão). Antes o código
+ * era sempre o partnumber, que vem do NAME do catálogo Bitrix e costuma trazer o
+ * texto da descrição — daí código e descrição saírem iguais no pedido.
+ */
+export function codigoProduto(item: any): string {
+  return String(item?.sku ?? '').trim() || String(item?.partnumber ?? '').trim()
+}
+
 /** Sem acento e em caixa baixa, para comparar rótulo digitado à mão no Bitrix. */
 function semAcento(value: unknown): string {
   return String(value ?? '')

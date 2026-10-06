@@ -1,4 +1,7 @@
 import { companyForBranch } from './interatell-companies'
+// codigoProduto mora em utils porque a tela de fornecedores tambem usa.
+export { codigoProduto } from './utils'
+import { codigoProduto } from './utils'
 import { BitrixService } from './bitrix-service'
 import {
   paymentConditionMatches,
@@ -59,16 +62,6 @@ export function toOmieDate(input: any): string {
   return today()
 }
 
-/**
- * Código do produto no Omie: o SKU do catálogo.
- *
- * partnumber só entra quando não há SKU (produto digitado à mão). Antes o código
- * era sempre o partnumber, que vem do NAME do catálogo Bitrix e costuma trazer o
- * texto da descrição — daí código e descrição saírem iguais no pedido.
- */
-export function codigoProduto(item: any): string {
-  return String(item?.sku ?? '').trim() || String(item?.partnumber ?? '').trim()
-}
 
 /** Filial do grupo de fornecedor — é ela que decide onde a compra acontece. */
 export function filialDoGrupo(group: any): Filial {

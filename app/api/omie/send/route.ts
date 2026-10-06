@@ -728,13 +728,39 @@ async function findExistingOS(interatellCnpj: string, dealId: number, baseCode: 
 }
 
 // ─── Upsert OC (busca pelo código de integração → atualiza ou cria) ──────────
+/**
+ * Junta linhas do mesmo produto numa so, somando a quantidade.
+ *
+ * O Omie casa item de pedido de compra por cCodIntItem, que aqui e a posicao na
+ * lista: duas linhas do mesmo produto viram dois itens no pedido. A tela ja soma
+ * ao adicionar, mas rascunho gravado antes disso pode ter a duplicata. Vale o
+ * custo da primeira linha; o total do pedido muda de acordo.
+ */
+function agrupaIguais(items: any[]): any[] {
+  const porCodigo = new Map<string, any>()
+  const saida: any[] = []
+  for (const item of items) {
+    const codigo = codigoProduto(item)
+    if (!codigo) { saida.push(item); continue }
+    const existente = porCodigo.get(codigo)
+    if (!existente) {
+      const copia = { ...item, quantity: Number(item.quantity ?? 1) }
+      porCodigo.set(codigo, copia)
+      saida.push(copia)
+      continue
+    }
+    existente.quantity += Number(item.quantity ?? 1)
+  }
+  return saida
+}
+
 async function upsertOC(
   interatellCnpj: string, codDistribuidor: number, items: any[], business: any,
   obs: { externa: string; interna: string },
   dealId: number, groupIdx: number, opts: { isUpdate: boolean; retryCount: number },
   codParc: string, valorFrete: number, prazoEntrega: string,
 ) {
-  const ocItems = items.filter(i => normalizeNatureza(i.nature) !== 'SRV')
+  const ocItems = agrupaIguais(items.filter(i => normalizeNatureza(i.nature) !== 'SRV'))
   if (!ocItems.length || !codDistribuidor) return null
   const baseCode = `OC-${dealId}-G${groupIdx}`
   const createCode = opts.isUpdate ? baseCode : `${baseCode}${opts.retryCount > 0 ? `-R${opts.retryCount}` : ''}`

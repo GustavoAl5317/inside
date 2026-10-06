@@ -8,10 +8,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Badge } from "@/components/ui/badge"
 import { Trash2, Plus, Search, Package, ChevronDown, ChevronUp, Building2, Pencil, Truck } from "lucide-react"
 import { getBitrixSuppliersAction, searchBitrixProductsAction, searchProductsAction, getBitrixFamiliesFullAction } from "@/lib/actions"
-import { formatCurrency, isCNPJComplete, formatCNPJ, familyMatchesBranch } from "@/lib/utils"
+import { formatCurrency, isCNPJComplete, formatCNPJ, familyMatchesBranch, codigoProduto } from "@/lib/utils"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { naturezaCatalogo } from "@/lib/oc-numbers"
+import { toast } from "sonner"
 import { OmieLimitAlert } from "@/components/omie-limit-alert"
 import { camposExcedidos } from "@/lib/omie-limites"
 
@@ -726,7 +727,35 @@ function SupplierGroupCard({
     })
   }
 
+  /**
+   * Adiciona o produto ao grupo, somando na linha que ja existe.
+   *
+   * O Omie casa item de pedido de compra por cCodIntItem, que aqui e a posicao
+   * na lista. Duas linhas do mesmo produto viram dois itens no pedido em vez de
+   * uma quantidade maior — foi o que aconteceu ao mover um equipamento de um
+   * fornecedor para outro que ja tinha o mesmo produto.
+   */
   const handleAddProduct = (p: any) => {
+    const codigoNovo = codigoProduto(p)
+    const atuais: any[] = form.getValues(`supplierGroups.${groupIndex}.products`) ?? []
+    const iguais = codigoNovo
+      ? atuais.map((x, i) => (codigoProduto(x) === codigoNovo ? i : -1)).filter(i => i >= 0)
+      : []
+
+    if (iguais.length) {
+      const idx = iguais[0]
+      const base = `supplierGroups.${groupIndex}.products.${idx}`
+      const qtd = (Number(form.getValues(`${base}.quantity`)) || 0) + 1
+      const custo = Number(form.getValues(`${base}.unitCost`)) || 0
+      const venda = Number(form.getValues(`${base}.unitSale`)) || 0
+      form.setValue(`${base}.quantity`,  qtd,          { shouldDirty: true })
+      form.setValue(`${base}.totalCost`, custo * qtd,  { shouldDirty: true })
+      form.setValue(`${base}.totalSale`, venda * qtd,  { shouldDirty: true })
+      toast.info(`"${codigoNovo}" já estava neste fornecedor — quantidade somada (${qtd}).`)
+      setProductDialogOpen(false)
+      return
+    }
+
     appendProduct({
       id:          p.id,
       sku:         p.sku || "",
