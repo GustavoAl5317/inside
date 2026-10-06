@@ -516,6 +516,10 @@ function ProductRow({
   // Só as famílias da filial do "Faturamento via" do fornecedor. O teste antigo
   // era por substring e `includes('sp')` casava "espirito santo", então as duas
   // filiais apareciam sempre; familyMatchesBranch compara com limite de palavra.
+  // Sem família o Omie cadastra o produto sem classificação; serviço tem a sua
+  // fixa, então só produto normal cobra.
+  const familiaFaltando = !isSRV && !String(form.watch(`${basePath}.family`) ?? '').trim()
+
   const filteredFamilies = families.length === 0 ? [] : (() => {
     const hasLocation = families.some(f => f.location)
     if (!hasLocation) return families
@@ -603,30 +607,41 @@ function ProductRow({
           </Badge>
         </div>
         <p className="text-xs text-gray-500 truncate">{product?.description}</p>
-        {/* Seletor de família — codigo_familia do Omie */}
-        <Select
-          value={form.watch(`${basePath}.family`) || ""}
-          onValueChange={v => form.setValue(`${basePath}.family`, v)}
-          disabled={isSRV}
-        >
-          <SelectTrigger className={`h-6 text-[11px] mt-1 border-dashed ${isSRV ? 'opacity-60' : ''}`}>
-            <SelectValue placeholder={isSRV ? "Outros (serviço)" : "Família Omie"} />
-          </SelectTrigger>
-          <SelectContent>
-            {filteredFamilies.length === 0 ? (
-              <div className="px-3 py-2 text-xs text-gray-400">
-                {families.length === 0 ? 'Configure BITRIX_LIST_FAMILY_ID=65 no .env' : 'Nenhuma família para este estado'}
-              </div>
-            ) : (
-              filteredFamilies.map(f => (
-                <SelectItem key={f.id} value={f.omieCode || f.id} className="text-xs">
-                  {f.name}
-                  {f.omieCode && <span className="text-gray-400 ml-1">· {f.omieCode}</span>}
-                </SelectItem>
-              ))
-            )}
-          </SelectContent>
-        </Select>
+        {/* Família do Omie (codigo_familia). Fica com rótulo próprio e sem
+            borda tracejada: é um campo obrigatório do produto, não um extra. */}
+        <div className="mt-1.5">
+          <label className={`block text-[10px] font-semibold uppercase tracking-wide mb-0.5 ${
+            familiaFaltando ? 'text-red-600' : 'text-gray-400'
+          }`}>
+            Família Omie {familiaFaltando && '*'}
+          </label>
+          <Select
+            value={form.watch(`${basePath}.family`) || ""}
+            onValueChange={v => form.setValue(`${basePath}.family`, v, { shouldDirty: true })}
+            disabled={isSRV}
+          >
+            <SelectTrigger className={`h-7 text-[11px] bg-white ${
+              isSRV ? 'opacity-60' : familiaFaltando ? 'border-red-300 focus:ring-red-400' : ''
+            }`}>
+              <SelectValue placeholder={isSRV ? "Outros (serviço)" : "Selecione a família"} />
+            </SelectTrigger>
+            <SelectContent>
+              {filteredFamilies.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-gray-400">
+                  {families.length === 0
+                    ? 'Nenhuma família carregada do Omie'
+                    : `Nenhuma família cadastrada no Omie da filial ${productState === 'ES' ? 'ES' : 'Barueri'}`}
+                </div>
+              ) : (
+                filteredFamilies.map(f => (
+                  <SelectItem key={f.id} value={f.omieCode || f.id} className="text-xs">
+                    {f.name}
+                  </SelectItem>
+                ))
+              )}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
       <div className="col-span-1">
         <Input
@@ -778,119 +793,129 @@ function SupplierGroupCard({
 
   return (
     <div className="border rounded-xl overflow-hidden shadow-sm">
-      {/* Header do grupo */}
-      <div className="flex items-center justify-between px-4 py-3 bg-blue-50 border-b border-blue-100">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-sm shrink-0">
-            {groupIndex + 1}
-          </div>
-          <div className="min-w-0">
+      {/* Header: identificação em cima, campos da compra numa grade embaixo.
+          Antes os três campos empilhavam ao lado do nome do fornecedor, cada um
+          com largura própria, e o bloco ficava desalinhado. */}
+      <div className="bg-blue-50 border-b border-blue-100">
+        <div className="flex items-start justify-between gap-3 px-4 pt-3">
+          <div className="flex items-start gap-3 min-w-0">
+            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-sm shrink-0">
+              {groupIndex + 1}
+            </div>
             <div className="min-w-0">
               <p className="font-semibold text-blue-900 truncate" title={supplier?.name}>
                 {supplier?.name || "Fornecedor"}
               </p>
-              {/* Faturamento via — define o CNPJ da Interatell usado nos pedidos
-                  deste fornecedor. Antes era escolhido uma vez para o negocio
-                  inteiro, na etapa Negocio. */}
-              <div className="flex items-center gap-1.5 mt-1">
-                <span className="text-[10px] font-semibold uppercase text-blue-700/70 shrink-0">Faturamento via</span>
-                <Select
-                  value={groupBranch}
-                  onValueChange={v => form.setValue(`supplierGroups.${groupIndex}.branch`, v, { shouldDirty: true })}
-                >
-                  <SelectTrigger className="h-6 text-[11px] w-[210px] bg-white"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="barueri" className="text-xs">Interatell Barueri / SP</SelectItem>
-                    <SelectItem value="es" className="text-xs">Interatell Espírito Santo / ES</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Prazo de entrega por fornecedor. Vai como dDtPrevisao da OC
-                  deste fornecedor; era um campo só do negócio, e com vários
-                  fornecedores a data de um valia para todos. */}
-              <div className="flex items-center gap-1.5 mt-1">
-                <span className={`text-[10px] font-semibold uppercase shrink-0 ${
-                  prazoFaltando ? 'text-red-600' : 'text-blue-700/70'
-                }`}>
-                  Prazo de entrega {prazoFaltando && '*'}
-                </span>
-                <Input
-                  type="date"
-                  className={`h-6 text-[11px] w-[150px] bg-white ${
-                    prazoFaltando ? 'border-red-300 focus-visible:ring-red-400' : ''
-                  }`}
-                  value={prazoEntrega}
-                  onChange={e => form.setValue(
-                    `supplierGroups.${groupIndex}.deliveryDeadline`, e.target.value, { shouldDirty: true },
-                  )}
-                />
-              </div>
-
-              {/* Frete da compra — vai para o Omie em frete_upsert.nValFrete
-                  do Pedido de Compra deste fornecedor. */}
-              <div className="flex items-center gap-1.5 mt-1">
-                {!hasFreight ? (
-                  <Button
-                    type="button" size="sm" variant="outline"
-                    className="h-6 text-[11px] px-2 border-dashed bg-white"
-                    onClick={() => {
-                      form.setValue(`supplierGroups.${groupIndex}.hasFreight`, true, { shouldDirty: true })
-                      form.setValue(`supplierGroups.${groupIndex}.freightValue`, 0, { shouldDirty: true })
-                    }}
-                  >
-                    <Truck className="w-3 h-3 mr-1" /> Adicionar Frete?
-                  </Button>
-                ) : (
-                  <>
-                    <span className="text-[10px] font-semibold uppercase text-blue-700/70 shrink-0">Valor do frete</span>
-                    <CurrencyInput
-                      className="h-6 text-[11px] w-[130px] bg-white"
-                      resetKey={`frete:${groupIndex}:${freightValue}`}
-                      value={freightValue}
-                      onChange={v => form.setValue(`supplierGroups.${groupIndex}.freightValue`, v, { shouldDirty: true })}
-                    />
-                    <Button
-                      type="button" size="sm" variant="ghost"
-                      className="h-6 px-1.5 text-[11px] text-gray-400 hover:text-red-600"
-                      title="Remover frete"
-                      onClick={() => {
-                        form.setValue(`supplierGroups.${groupIndex}.hasFreight`, false, { shouldDirty: true })
-                        form.setValue(`supplierGroups.${groupIndex}.freightValue`, 0, { shouldDirty: true })
-                      }}
-                    >
-                      remover
-                    </Button>
-                  </>
-                )}
-              </div>
+              <p className="text-xs text-blue-600/90 truncate">
+                {supplier?.cnpj}
+                {" · "}{productFields.length} produto(s)
+                {" · "}Custo total {formatCurrency(totalCusto)}
+                {hasFreight && freightValue > 0 && ` + frete ${formatCurrency(freightValue)}`}
+              </p>
             </div>
-            <p className="text-xs text-blue-600">{supplier?.cnpj} — {productFields.length} produto(s) · Custo total: {formatCurrency(totalCusto)}</p>
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            <Button
+              type="button" size="sm" variant="ghost"
+              className="h-8 w-8 p-0 text-blue-600 hover:bg-blue-100"
+              title={expanded ? "Recolher produtos" : "Expandir produtos"}
+              onClick={() => setExpanded(!expanded)}
+            >
+              {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            </Button>
+            <Button
+              type="button" size="sm" variant="ghost"
+              className="h-8 w-8 p-0 text-blue-500 hover:text-blue-700 hover:bg-blue-100"
+              onClick={onEditSupplier}
+              title="Editar fornecedor"
+            >
+              <Pencil className="w-4 h-4" />
+            </Button>
+            <Button
+              type="button" size="sm" variant="ghost"
+              className="h-8 w-8 p-0 text-red-400 hover:text-red-600 hover:bg-red-50"
+              onClick={onRemoveGroup}
+              title="Remover fornecedor"
+            >
+              <Trash2 className="w-4 h-4" />
+            </Button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button
-            type="button" size="sm" variant="ghost"
-            className="h-8 text-blue-600 hover:bg-blue-100"
-            onClick={() => setExpanded(!expanded)}
-          >
-            {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-          </Button>
-          <Button
-            type="button" size="sm" variant="ghost"
-            className="h-8 text-blue-500 hover:text-blue-700 hover:bg-blue-100"
-            onClick={onEditSupplier}
-            title="Editar fornecedor"
-          >
-            <Pencil className="w-4 h-4" />
-          </Button>
-          <Button
-            type="button" size="sm" variant="ghost"
-            className="h-8 text-red-400 hover:text-red-600 hover:bg-red-50"
-            onClick={onRemoveGroup}
-          >
-            <Trash2 className="w-4 h-4" />
-          </Button>
+
+        {/* Campos da compra deste fornecedor. Rótulo em cima do campo e larguras
+            iguais: os três têm o mesmo peso e vão para o mesmo Pedido de Compra. */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 px-4 pb-3 pt-3">
+          <div className="min-w-0">
+            <label className="block text-[10px] font-semibold uppercase tracking-wide text-blue-700/70 mb-1">
+              Faturamento via
+            </label>
+            <Select
+              value={groupBranch}
+              onValueChange={v => form.setValue(`supplierGroups.${groupIndex}.branch`, v, { shouldDirty: true })}
+            >
+              <SelectTrigger className="h-8 text-xs bg-white"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="barueri" className="text-xs">Interatell Barueri / SP</SelectItem>
+                <SelectItem value="es" className="text-xs">Interatell Espírito Santo / ES</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="min-w-0">
+            <label className={`block text-[10px] font-semibold uppercase tracking-wide mb-1 ${
+              prazoFaltando ? 'text-red-600' : 'text-blue-700/70'
+            }`}>
+              Prazo de entrega {prazoFaltando && '*'}
+            </label>
+            <Input
+              type="date"
+              className={`h-8 text-xs bg-white ${
+                prazoFaltando ? 'border-red-300 focus-visible:ring-red-400' : ''
+              }`}
+              value={prazoEntrega}
+              onChange={e => form.setValue(
+                `supplierGroups.${groupIndex}.deliveryDeadline`, e.target.value, { shouldDirty: true },
+              )}
+            />
+          </div>
+
+          <div className="min-w-0">
+            <label className="block text-[10px] font-semibold uppercase tracking-wide text-blue-700/70 mb-1">
+              Frete
+            </label>
+            {!hasFreight ? (
+              <Button
+                type="button" variant="outline"
+                className="h-8 w-full justify-start text-xs font-normal border-dashed bg-white text-gray-500 hover:text-blue-700"
+                onClick={() => {
+                  form.setValue(`supplierGroups.${groupIndex}.hasFreight`, true, { shouldDirty: true })
+                  form.setValue(`supplierGroups.${groupIndex}.freightValue`, 0, { shouldDirty: true })
+                }}
+              >
+                <Truck className="w-3.5 h-3.5 mr-1.5" /> Adicionar frete
+              </Button>
+            ) : (
+              <div className="flex items-center gap-1">
+                <CurrencyInput
+                  className="h-8 text-xs bg-white flex-1 min-w-0"
+                  resetKey={`frete:${groupIndex}:${freightValue}`}
+                  value={freightValue}
+                  onChange={v => form.setValue(`supplierGroups.${groupIndex}.freightValue`, v, { shouldDirty: true })}
+                />
+                <Button
+                  type="button" size="sm" variant="ghost"
+                  className="h-8 w-8 p-0 shrink-0 text-gray-400 hover:text-red-600"
+                  title="Remover frete"
+                  onClick={() => {
+                    form.setValue(`supplierGroups.${groupIndex}.hasFreight`, false, { shouldDirty: true })
+                    form.setValue(`supplierGroups.${groupIndex}.freightValue`, 0, { shouldDirty: true })
+                  }}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -958,7 +983,7 @@ export function SupplierGroupsTab({ form }: SupplierGroupsTabProps) {
   const [editingSupplierIdx, setEditingSupplierIdx] = useState<number | null>(null)
   const [families, setFamilies] = useState<FamilyItem[]>([])
 
-  // Carrega famílias da lista Bitrix24 #65 (BITRIX_LIST_FAMILY_ID no .env)
+  // Famílias lidas direto do Omie, das duas filiais (lib/omie-familias).
   useEffect(() => {
     getBitrixFamiliesFullAction().then(res => {
       if (res.success) setFamilies(res.families)

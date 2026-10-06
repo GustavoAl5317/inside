@@ -8,6 +8,7 @@ import { BitrixService } from "./bitrix-service"
 import { naturezaCatalogo, preservaNumerosOc } from "./oc-numbers"
 import { garanteNumerosOc } from "./oc-numbers-bitrix"
 import { listOmieStock, compareStockWithCatalog, type CatalogEntry } from './omie-stock'
+import { listarFamiliasOmie } from './omie-familias'
 import { ProcessHistoryService } from "./process-history-service"
 import { unifiedLogService } from "./unified-log-service"
 import { getSessionUser } from "./auth-actions"
@@ -483,17 +484,17 @@ export async function getBitrixFamiliesAction() {
 }
 
 /**
- * Retorna todas as famílias da lista #65 com omieCode e localidade.
- * Regra de negócio (familyBranch em lib/utils):
+ * Famílias de produto, lidas direto do Omie (lib/omie-familias).
+ *
+ * Saíram da lista #65 do Bitrix, que era cadastro manual e vivia desatualizado.
+ * O filtro por filial continua o mesmo (familyBranch em lib/utils):
  *  - state = 'ES'   → só as famílias do Espírito Santo
  *  - demais UFs     → só as famílias de Barueri
  *  - localidade que não identifica filial → vale para as duas
- *  - nenhuma família com localidade → retorna tudo
  */
 export async function getBitrixFamiliesFullAction(state?: string) {
   try {
-    const listId = Number(process.env.BITRIX_LIST_FAMILY_ID || '65')
-    const all = await BitrixService.getFamilyList(listId)
+    const all = await listarFamiliasOmie()
 
     let families = all
     if (state && all.some(f => f.location)) {
