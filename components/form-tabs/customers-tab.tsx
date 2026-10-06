@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
-import { Trash2, Plus, Search, Users, Building2, ChevronDown, ChevronUp, Pencil, Loader2 } from "lucide-react"
+import { Trash2, Plus, Search, Users, Building2, ChevronDown, ChevronUp, Eye, Loader2 } from "lucide-react"
 import { searchBitrixCompaniesAction, getBitrixCompanyDetailsAction, createBitrixClientAction, lookupCnpjAction } from "@/lib/actions"
 import { isCNPJComplete, formatCNPJ, formatCurrency } from "@/lib/utils"
 import { CurrencyInput } from "@/components/ui/currency-input"
@@ -153,6 +153,14 @@ export function CustomerDialog({
       setError("CNPJ inválido — deve ter 12 a 14 dígitos"); return
     }
 
+    // Consulta: nada volta para o Bitrix — o cadastro de la e a fonte.
+    if (isEdit) {
+      onConfirm({ ...manual, cnpj: manual.cnpj ? formatCNPJ(manual.cnpj) : "", branch })
+      setError("")
+      onClose()
+      return
+    }
+
     setSaving(true)
     try {
       const saved = await createBitrixClientAction(manual)
@@ -178,6 +186,9 @@ export function CustomerDialog({
     onClose()
   }
 
+  // Consulta: o cadastro e do Bitrix, so o contato e editavel aqui.
+  const travado = isEdit ? 'bg-gray-100 text-gray-600 cursor-not-allowed' : ''
+
   const set = (field: keyof typeof emptyCustomer, value: string) => {
     setManual(m => ({ ...m, [field]: value }))
     setError("")
@@ -189,17 +200,16 @@ export function CustomerDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Building2 className="w-5 h-5 text-purple-600" />
-            {isEdit ? "Editar Filial" : "Adicionar Filial — Buscar no Bitrix"}
+            {isEdit ? "Dados do cliente" : "Adicionar Filial — Buscar no Bitrix"}
           </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4 pt-2">
-          {!isEdit && (
-            <p className="text-xs text-gray-500">
-              O cadastro dos clientes é único e fica no Bitrix. Para incluir uma filial que
-              não aparece aqui, cadastre a empresa no Bitrix primeiro.
-            </p>
-          )}
+          <p className="text-xs text-gray-500">
+            {isEdit
+              ? "O cadastro do cliente é do Bitrix e aqui é só consulta. Para corrigir razão social, CNPJ ou endereço, altere no Bitrix e adicione a filial de novo. Só o contato é editável."
+              : "O cadastro dos clientes é único e fica no Bitrix. Para incluir uma filial que não aparece aqui, cadastre a empresa no Bitrix primeiro."}
+          </p>
 
           {/* ── Modo: Manual ── */}
           {mode === "manual" && (
@@ -207,7 +217,8 @@ export function CustomerDialog({
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
                   <label className="text-xs font-medium text-gray-700">Razão Social *</label>
-                  <Input className="mt-1" placeholder="Nome / Razão Social" autoFocus
+                  <Input className={`mt-1 ${travado}`} placeholder="Nome / Razão Social" autoFocus={!isEdit}
+                    disabled={isEdit}
                     value={manual.name} onChange={e => set("name", e.target.value)} />
                 </div>
                 <div>
@@ -215,17 +226,17 @@ export function CustomerDialog({
                     CNPJ {cepLoading && <span className="text-purple-500 font-normal">buscando...</span>}
                   </label>
                   <div className="flex gap-1 mt-1">
-                    <Input className="flex-1" placeholder="00.000.000/0000-00"
+                    <Input className={`flex-1 ${travado}`} placeholder="00.000.000/0000-00"
                       value={manual.cnpj}
                       onChange={e => handleCnpjChange(e.target.value)}
-                      disabled={cepLoading}
+                      disabled={cepLoading || isEdit}
                     />
                     <Button
                       type="button"
                       size="sm"
                       variant="outline"
                       className="shrink-0 px-2"
-                      disabled={cepLoading || manual.cnpj.replace(/\D/g, '').length !== 14}
+                      disabled={isEdit || cepLoading || manual.cnpj.replace(/\D/g, '').length !== 14}
                       onClick={() => triggerCnpjLookup(manual.cnpj.replace(/\D/g, ''))}
                       title="Buscar dados do CNPJ"
                     >
@@ -235,65 +246,67 @@ export function CustomerDialog({
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-700">Inscrição Estadual</label>
-                  <Input className="mt-1" placeholder="IE"
+                  <Input className={`mt-1 ${travado}`} placeholder="IE" disabled={isEdit}
                     value={manual.stateRegistration} onChange={e => set("stateRegistration", e.target.value)} />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-gray-700">Contato</label>
-                  <Input className="mt-1" placeholder="Nome do contato"
+                  <label className="text-xs font-medium text-gray-700">
+                    Contato {isEdit && <span className="text-purple-600 font-normal">· único campo editável</span>}
+                  </label>
+                  <Input className="mt-1" placeholder="Nome do contato" autoFocus={isEdit}
                     value={manual.contactName} onChange={e => set("contactName", e.target.value)} />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-700">Telefone</label>
-                  <Input className="mt-1" placeholder="(11) 99999-9999"
+                  <Input className={`mt-1 ${travado}`} placeholder="(11) 99999-9999" disabled={isEdit}
                     value={manual.phone} onChange={e => set("phone", e.target.value)} />
                 </div>
                 <div className="col-span-2">
                   <label className="text-xs font-medium text-gray-700">E-mail</label>
-                  <Input className="mt-1" placeholder="email@empresa.com"
+                  <Input className={`mt-1 ${travado}`} placeholder="email@empresa.com" disabled={isEdit}
                     value={manual.email} onChange={e => set("email", e.target.value)} />
                 </div>
                 <div className="col-span-2">
                   <label className="text-xs font-medium text-gray-700">Endereço</label>
-                  <Input className="mt-1" placeholder="Rua / Avenida"
+                  <Input className={`mt-1 ${travado}`} placeholder="Rua / Avenida" disabled={isEdit}
                     value={manual.address} onChange={e => set("address", e.target.value)} />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-700">Número</label>
-                  <Input className="mt-1" placeholder="Número"
+                  <Input className={`mt-1 ${travado}`} placeholder="Número" disabled={isEdit}
                     value={manual.number} onChange={e => set("number", e.target.value)} />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-700">Complemento</label>
-                  <Input className="mt-1" placeholder="Apto, sala..."
+                  <Input className={`mt-1 ${travado}`} placeholder="Apto, sala..." disabled={isEdit}
                     value={manual.complement} onChange={e => set("complement", e.target.value)} />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-700">Bairro</label>
-                  <Input className="mt-1" placeholder="Bairro"
+                  <Input className={`mt-1 ${travado}`} placeholder="Bairro" disabled={isEdit}
                     value={manual.neighborhood} onChange={e => set("neighborhood", e.target.value)} />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-700">CEP</label>
-                  <Input className="mt-1" placeholder="00000-000" maxLength={9}
+                  <Input className={`mt-1 ${travado}`} placeholder="00000-000" maxLength={9} disabled={isEdit}
                     value={manual.zipCode} onChange={e => set("zipCode", e.target.value)} />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-700">Cidade</label>
-                  <Input className="mt-1" placeholder="Cidade"
+                  <Input className={`mt-1 ${travado}`} placeholder="Cidade" disabled={isEdit}
                     value={manual.city} onChange={e => set("city", e.target.value)} />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-700">Estado (UF)</label>
-                  <Input className="mt-1" placeholder="SP" maxLength={2}
+                  <Input className={`mt-1 ${travado}`} placeholder="SP" maxLength={2} disabled={isEdit}
                     value={manual.state} onChange={e => set("state", e.target.value.toUpperCase())} />
                 </div>
               </div>
               {error && <p className="text-sm text-red-600">{error}</p>}
               <div className="flex justify-end gap-2 pt-1">
-                <Button variant="outline" onClick={onClose}>Cancelar</Button>
+                <Button variant="outline" onClick={onClose}>{isEdit ? "Fechar" : "Cancelar"}</Button>
                 <Button onClick={handleManualConfirm} disabled={saving} className="bg-purple-600 hover:bg-purple-700">
-                  {saving ? "Salvando..." : isEdit ? "Salvar Alterações" : "Confirmar e Salvar na Lista"}
+                  {saving ? "Salvando..." : isEdit ? "Salvar contato" : "Confirmar e Salvar na Lista"}
                 </Button>
               </div>
             </div>
@@ -709,9 +722,9 @@ function CustomerCard({
             type="button" size="sm" variant="ghost"
             className="h-8 text-purple-500 hover:text-purple-700 hover:bg-purple-100"
             onClick={onEdit}
-            title="Editar cliente"
+            title="Ver dados do cliente (só o contato é editável)"
           >
-            <Pencil className="w-4 h-4" />
+            <Eye className="w-4 h-4" />
           </Button>
           <Button
             type="button" size="sm" variant="ghost"
@@ -749,6 +762,37 @@ function CustomerCard({
             Obrigatório — o Bitrix não trouxe contato para este cliente.
           </span>
         )}
+      </div>
+
+      {/* Cadastro do cliente — só consulta. Vem do Bitrix e se corrige lá; o
+          contato é a exceção, na barra acima. */}
+      <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50/60">
+        <div className="flex items-center justify-between gap-2 mb-1.5">
+          <span className="text-[11px] font-semibold uppercase text-gray-500">Cadastro (Bitrix)</span>
+          <span className="text-[10px] text-gray-400">somente leitura</span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-1.5">
+          {[
+            { rotulo: 'Razão Social',       valor: customer?.name },
+            { rotulo: 'CNPJ',               valor: customer?.cnpj },
+            { rotulo: 'Inscrição Estadual', valor: customer?.stateRegistration },
+            { rotulo: 'Contribuinte',       valor: customer?.isTaxpayer ? 'Sim' : 'Não' },
+            { rotulo: 'Endereço',           valor: [customer?.address, customer?.number].filter(Boolean).join(', ') },
+            { rotulo: 'Complemento',        valor: customer?.complement },
+            { rotulo: 'Bairro',             valor: customer?.neighborhood },
+            { rotulo: 'CEP',                valor: customer?.zipCode },
+            { rotulo: 'Cidade / UF',        valor: [customer?.city, customer?.state].filter(Boolean).join('/') },
+            { rotulo: 'Telefone',           valor: customer?.phone },
+            { rotulo: 'E-mail',             valor: customer?.email },
+          ].map(c => (
+            <div key={c.rotulo} className="min-w-0">
+              <p className="text-[10px] uppercase tracking-wide text-gray-400">{c.rotulo}</p>
+              <p className="text-xs text-gray-700 truncate" title={String(c.valor ?? '')}>
+                {String(c.valor ?? '').trim() || <span className="text-gray-300">—</span>}
+              </p>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Numero do pedido do cliente enviado ao Omie: e o numero do negocio,
@@ -852,29 +896,18 @@ export function CustomersTab({ form }: CustomersTabProps) {
   const supplierGroups = form.watch("supplierGroups") || []
   const allCustomers   = form.watch("customers") || []
 
+  /**
+   * Depois de escolhido, o cliente vira consulta: razão social, CNPJ, endereço e
+   * o resto vêm do Bitrix e só se corrigem lá. Aqui só o contato muda, que é o
+   * dado que o Bitrix costuma não ter.
+   */
   const handleEditCustomer = (company: any) => {
     if (editingIdx === null) return
     const current = form.getValues(`customers.${editingIdx}`)
     form.setValue(`customers.${editingIdx}`, {
       ...current,
-      branch: company.branch || current.branch || 'barueri',
-      customer: {
-        ...current.customer,
-        name:              company.name,
-        cnpj:              company.cnpj,
-        stateRegistration: company.stateRegistration || "",
-        zipCode:           company.zipCode || "",
-        city:              company.city || "",
-        state:             company.state || "",
-        neighborhood:      company.neighborhood || "",
-        address:           company.address || "",
-        number:            company.number || "",
-        complement:        company.complement || "",
-        contactName:       company.contactName || "",
-        phone:             company.phone || "",
-        email:             company.email || "",
-      },
-    })
+      customer: { ...current.customer, contactName: company.contactName || "" },
+    }, { shouldDirty: true })
     setEditingIdx(null)
   }
 

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { Badge } from "@/components/ui/badge"
-import { Trash2, Plus, Wrench, Building2, Pencil } from "lucide-react"
+import { Trash2, Plus, Wrench, Building2, Eye } from "lucide-react"
 import { formatCurrency } from "@/lib/utils"
 import { CustomerDialog } from "./customers-tab"
 import { toast } from "sonner"
@@ -38,8 +38,13 @@ export function ServiceCustomersTab({ form }: ServiceCustomersTabProps) {
 
   const handleConfirmCustomer = (company: any) => {
     if (editingIdx !== null) {
+      // Depois de escolhido, o cadastro do cliente e consulta: vem do Bitrix e
+      // so se corrige la. Aqui so o contato muda.
       const current = entries[editingIdx] ?? {}
-      update(editingIdx, { ...current, customer: { ...current.customer, ...company } })
+      update(editingIdx, {
+        ...current,
+        customer: { ...current.customer, contactName: company.contactName || "" },
+      })
       setEditingIdx(null)
     } else {
       append({
@@ -147,9 +152,9 @@ export function ServiceCustomersTab({ form }: ServiceCustomersTabProps) {
                   <Button
                     type="button" size="icon" variant="ghost" className="h-8 w-8"
                     onClick={() => { setEditingIdx(idx); setDialogOpen(true) }}
-                    title="Editar cliente"
+                    title="Ver dados do cliente (só o contato é editável)"
                   >
-                    <Pencil className="w-4 h-4" />
+                    <Eye className="w-4 h-4" />
                   </Button>
                   <Button
                     type="button" size="icon" variant="ghost"
