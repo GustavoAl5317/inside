@@ -16,6 +16,7 @@ import { SupplierGroupsTab } from "./form-tabs/supplier-groups-tab"
 import { CustomersTab } from "./form-tabs/customers-tab"
 import { generateDealPDFs } from "@/lib/generate-pdf"
 import { downloadOcExcels } from "@/lib/download-oc-excel"
+import { downloadAlteracoesExcel } from "@/lib/download-alteracoes-excel"
 import { INTERATELL_COMPANIES } from "@/lib/interatell-companies"
 import { ServiceCustomersTab } from "./form-tabs/service-customers-tab"
 import {
@@ -247,6 +248,39 @@ function deriveDeliveryDeadline(groups: any[] | undefined, fallback: string): st
   const datas = (groups ?? []).map(g => String(g?.deliveryDeadline ?? '').trim()).filter(Boolean)
   if (!datas.length) return String(fallback ?? '')
   return datas.reduce((maior, d) => (d > maior ? d : maior))
+}
+
+/**
+ * Payload do deal a partir dos valores do formulário, no mesmo formato que o
+ * envio grava — é o lado "depois" do diff.
+ *
+ * Trabalha sobre uma cópia: o handleSubmit aplica as mesmas derivações mutando
+ * `values`, e o botão de baixar planilha não pode mexer no que está na tela.
+ */
+function payloadParaDiff(values: any) {
+  const v = structuredClone(values)
+  if (v.business?.onlyInteratellService) {
+    v.supplierGroups = []
+    v.customers = []
+    v.interatellBranches = ['barueri']
+  } else {
+    v.interatellBranches = deriveBranches(v.supplierGroups)
+  }
+  if (v.business) {
+    v.business.deliveryDeadline = deriveDeliveryDeadline(
+      v.supplierGroups, v.business.expectedBillingDate,
+    )
+  }
+  pruneAllocations(v)
+  return {
+    bitrixDealId:       v.bitrixDealId || null,
+    business:           v.business,
+    interatellBranches: v.interatellBranches,
+    supplierGroups:     v.supplierGroups,
+    customers:          v.customers,
+    serviceCustomers:   v.serviceCustomers ?? [],
+    notes:              v.notes || {},
+  }
 }
 
 function normalizeFormCNPJs(form: UseFormReturn<FormInput, any, FormValues>) {
@@ -632,6 +666,39 @@ export function MultiStepForm({
     }
   }
 
+  /**
+   * Baixar Planilha Excel — substitui o PDF na tela de Atualizações.
+   *
+   * A planilha leva o que mudou no Deal Completo: campo, antes, depois e tipo.
+   * O diff é o mesmo que o envio usa (computeDealPayloadChanges), comparando o
+   * que está gravado com o que está na tela, então a planilha pode ser baixada
+   * antes de reenviar ao Omie.
+   */
+  const handleDownloadAlteracoes = async () => {
+    if (!existingDeal) return
+    setGeneratingPDF(true)
+    try {
+      normalizeFormCNPJs(form)
+      const atual = payloadParaDiff(form.getValues())
+      const changes = computeDealPayloadChanges(existingDeal.payload, atual)
+      await downloadAlteracoesExcel({
+        id:           existingDeal.id,
+        proposal:     atual.business?.commercialProposal,
+        businessName: atual.business?.name,
+        customerName: (atual.customers?.[0] as any)?.customer?.name
+          ?? (atual.serviceCustomers?.[0] as any)?.customer?.name,
+        supplierName: (atual.supplierGroups?.[0] as any)?.supplier?.name,
+      }, changes)
+      toast.success(changes.length
+        ? `Planilha baixada com ${changes.length} alteração${changes.length > 1 ? 'ões' : ''}!`
+        : "Planilha baixada — nenhuma alteração em relação ao que está gravado.")
+    } catch (err: any) {
+      toast.error("Erro ao gerar a planilha: " + (err?.message || ""))
+    } finally {
+      setGeneratingPDF(false)
+    }
+  }
+
   // ── Submit principal ──────────────────────────────────────────────────────
   const handleSubmit = async () => {
     normalizeFormCNPJs(form)
@@ -948,8 +1015,24 @@ export function MultiStepForm({
           </Button>
 
           <div className="flex items-center gap-2">
-            {/* Botão PDF — sempre visível quando há deal existente ou na última tab */}
-            {(existingDeal || isLastTab) && (
+            {/* Atualizacao leva a planilha do que mudou; os outros fluxos seguem
+                com o PDF dos documentos do negocio. */}
+            {isUpdate ? (
+              existingDeal && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleDownloadAlteracoes}
+                  disabled={isGeneratingPDF}
+                  className="gap-1.5 text-emerald-700 border-emerald-200 hover:bg-emerald-50 hover:border-emerald-400"
+                >
+                  {isGeneratingPDF
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Gerando...</>
+                    : <><FileSpreadsheet className="w-4 h-4" /> Baixar Planilha Excel</>
+                  }
+                </Button>
+              )
+            ) : (existingDeal || isLastTab) && (
               <Button
                 type="button"
                 variant="outline"
