@@ -12,6 +12,8 @@ import { formatCurrency, isCNPJComplete, formatCNPJ, familyMatchesBranch } from 
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { naturezaCatalogo } from "@/lib/oc-numbers"
+import { OmieLimitAlert } from "@/components/omie-limit-alert"
+import { camposExcedidos } from "@/lib/omie-limites"
 
 interface SupplierGroupsTabProps {
   form: UseFormReturn<any>
@@ -194,6 +196,8 @@ function SupplierDialog({
                   ))}
                 </div>
               )}
+
+              {selected && <OmieLimitAlert company={selected} variant="inline" />}
 
               {selected && !selected.cnpj && (
                 <div className="p-3 border border-orange-200 bg-orange-50 rounded-lg">
@@ -692,6 +696,8 @@ function SupplierGroupCard({
   const hasFreight: boolean = !!form.watch(`supplierGroups.${groupIndex}.hasFreight`)
   const freightValue: number = form.watch(`supplierGroups.${groupIndex}.freightValue`) || 0
   const prazoEntrega: string = form.watch(`supplierGroups.${groupIndex}.deliveryDeadline`) || ''
+  // Cadastro acima do limite do Omie faz o envio parar no cadastro do fornecedor.
+  const camposForaDoLimite = camposExcedidos(supplier)
   const prazoFaltando = !prazoEntrega.trim()
   const totalCusto = (form.watch(`supplierGroups.${groupIndex}.products`) || [])
     .reduce((s: number, p: any) => s + (p.totalCost || 0), 0)
@@ -858,6 +864,12 @@ function SupplierGroupCard({
           </Button>
         </div>
       </div>
+
+      {camposForaDoLimite.length > 0 && (
+        <div className="px-4 pt-3">
+          <OmieLimitAlert company={supplier} />
+        </div>
+      )}
 
       {/* Produtos do grupo */}
       {expanded && (

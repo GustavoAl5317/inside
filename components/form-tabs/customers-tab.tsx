@@ -11,6 +11,8 @@ import { searchBitrixCompaniesAction, getBitrixCompanyDetailsAction, createBitri
 import { isCNPJComplete, formatCNPJ, formatCurrency } from "@/lib/utils"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { toast } from "sonner"
+import { OmieLimitAlert } from "@/components/omie-limit-alert"
+import { camposExcedidos } from "@/lib/omie-limites"
 
 interface CustomersTabProps {
   form: UseFormReturn<any>
@@ -374,6 +376,8 @@ export function CustomerDialog({
                 </div>
               )}
 
+              {selected && <OmieLimitAlert company={selected} variant="inline" />}
+
               {error && <p className="text-sm text-amber-600">{error}</p>}
 
 
@@ -649,6 +653,8 @@ function CustomerCard({
   }
 
   const contactMissing = !String(customer?.contactName ?? '').trim()
+  // Cadastro acima do limite do Omie faz o envio parar no cadastro do cliente.
+  const camposForaDoLimite = camposExcedidos(customer)
 
   const allocatedCount = allocations.filter(a => a.quantity > 0).length
   const totalUnits = allocations.reduce((s, a) => s + (a.quantity || 0), 0)
@@ -716,6 +722,12 @@ function CustomerCard({
           </Button>
         </div>
       </div>
+
+      {camposForaDoLimite.length > 0 && (
+        <div className="px-4 pt-3">
+          <OmieLimitAlert company={customer} />
+        </div>
+      )}
 
       {/* Contato do cliente — obrigatório para avançar */}
       <div className={`px-4 py-2.5 border-b flex items-center gap-3 ${
