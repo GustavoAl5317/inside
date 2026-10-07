@@ -16,7 +16,6 @@ import { SupplierGroupsTab } from "./form-tabs/supplier-groups-tab"
 import { CustomersTab } from "./form-tabs/customers-tab"
 import { generateDealPDFs } from "@/lib/generate-pdf"
 import { downloadOcExcels } from "@/lib/download-oc-excel"
-import { downloadAlteracoesExcel } from "@/lib/download-alteracoes-excel"
 import { INTERATELL_COMPANIES } from "@/lib/interatell-companies"
 import { ServiceCustomersTab } from "./form-tabs/service-customers-tab"
 import {
@@ -282,12 +281,12 @@ function deriveDeliveryDeadline(groups: any[] | undefined, fallback: string): st
 
 /**
  * Payload do deal a partir dos valores do formulário, no mesmo formato que o
- * envio grava — é o lado "depois" do diff.
+ * envio grava. Serve ao diff da atualização e à planilha baixada da tela.
  *
  * Trabalha sobre uma cópia: o handleSubmit aplica as mesmas derivações mutando
  * `values`, e o botão de baixar planilha não pode mexer no que está na tela.
  */
-function payloadParaDiff(values: any) {
+function payloadDosValores(values: any) {
   const v = structuredClone(values)
   if (v.business?.onlyInteratellService) {
     v.supplierGroups = []
@@ -706,29 +705,22 @@ export function MultiStepForm({
   /**
    * Baixar Planilha Excel — substitui o PDF na tela de Atualizações.
    *
-   * A planilha leva o que mudou no Deal Completo: campo, antes, depois e tipo.
-   * O diff é o mesmo que o envio usa (computeDealPayloadChanges), comparando o
-   * que está gravado com o que está na tela, então a planilha pode ser baixada
-   * antes de reenviar ao Omie.
+   * É a mesma planilha do processo normal: um arquivo por distribuidor, com uma
+   * aba por cliente e a aba "Resumo Omie" no fim. Monta a partir do que está na
+   * tela, então sai com os dados já atualizados, antes mesmo de reenviar.
    */
-  const handleDownloadAlteracoes = async () => {
+  const handleDownloadPlanilha = async () => {
     if (!existingDeal) return
     setGeneratingPDF(true)
     try {
       normalizeFormCNPJs(form)
-      const atual = payloadParaDiff(form.getValues())
-      const changes = computeDealPayloadChanges(existingDeal.payload, atual)
-      await downloadAlteracoesExcel({
-        id:           existingDeal.id,
-        proposal:     atual.business?.commercialProposal,
-        businessName: atual.business?.name,
-        customerName: (atual.customers?.[0] as any)?.customer?.name
-          ?? (atual.serviceCustomers?.[0] as any)?.customer?.name,
-        supplierName: (atual.supplierGroups?.[0] as any)?.supplier?.name,
-      }, changes)
-      toast.success(changes.length
-        ? `Planilha baixada com ${changes.length} alteração${changes.length > 1 ? 'ões' : ''}!`
-        : "Planilha baixada — nenhuma alteração em relação ao que está gravado.")
+      const atual = payloadDosValores(form.getValues())
+      const n = await downloadOcExcels(atual, existingDeal.id)
+      if (n === 0) {
+        toast.warning("Nenhuma planilha gerada — nenhum produto alocado a cliente nem serviço Interatell com item.")
+      } else {
+        toast.success(n > 1 ? `${n} planilhas baixadas (uma por distribuidor)!` : "Planilha baixada com sucesso!")
+      }
     } catch (err: any) {
       toast.error("Erro ao gerar a planilha: " + (err?.message || ""))
     } finally {
@@ -1066,7 +1058,7 @@ export function MultiStepForm({
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={handleDownloadAlteracoes}
+                  onClick={handleDownloadPlanilha}
                   disabled={isGeneratingPDF}
                   className="gap-1.5 text-emerald-700 border-emerald-200 hover:bg-emerald-50 hover:border-emerald-400"
                 >
