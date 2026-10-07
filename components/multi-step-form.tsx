@@ -172,9 +172,6 @@ const formSchema = z.object({
     // Negócio só de serviço Interatell: sem fornecedor, sem produto, sem OC/OV.
     // Vai direto ao cliente do serviço e gera uma OS.
     onlyInteratellService:    z.boolean().default(false),
-    // Compra para estoque: tem fornecedor e produto, não tem cliente. Gera só a
-    // OC; o bloco do cliente final sai vazio na planilha.
-    onlyPurchase:             z.boolean().default(false),
   }),
   // Derivado das filiais dos grupos de fornecedor ("Faturamento via"), nao mais
   // escolhido a mao na etapa Negocio. Mantido no payload porque PDF, diff e o
@@ -192,6 +189,8 @@ const formSchema = z.object({
 }).superRefine((v, ctx) => {
   const semServico = !(v.serviceCustomers?.length ?? 0)
   const msgServico = 'Adicione pelo menos um cliente de serviço Interatell'
+  // Sempre há venda: produto comprado e não alocado simplesmente não entra na
+  // OV, mas o negócio continua tendo cliente e condição de venda.
   const exigeVenda = () => {
     if (!String(v.business.salePaymentCondition ?? '').trim()) {
       ctx.addIssue({
@@ -222,9 +221,6 @@ const formSchema = z.object({
       message: 'Condição de pagamento de compra é obrigatória',
     })
   }
-
-  // Compra para estoque: sem cliente, sem venda, sem serviço.
-  if (v.business.onlyPurchase) return
 
   if (!v.customers.length) {
     ctx.addIssue({ code: "custom", path: ['customers'], message: 'Adicione pelo menos um cliente' })
@@ -335,12 +331,7 @@ const TABS = [
  * Negócio só de serviço pula Fornecedores/Produtos e Clientes: não há compra nem
  * produto, só o cliente que recebe o serviço.
  */
-function buildTabs(hasInteratellService: boolean, onlyInteratellService = false, onlyPurchase = false) {
-  // Compra para estoque: só Negócio, Fornecedores/Produtos, Observações e os
-  // números de OC. Sem cliente não há o que alocar nem OV/OS para gerar.
-  if (onlyPurchase) {
-    return TABS.filter(t => t.id !== 'customers')
-  }
+function buildTabs(hasInteratellService: boolean, onlyInteratellService = false) {
   if (onlyInteratellService) {
     return [
       TABS.find(t => t.id === 'business')!,
@@ -590,10 +581,9 @@ export function MultiStepForm({
 
   const hasInteratellService = !!form.watch("business.hasInteratellService")
   const onlyInteratellService = !!form.watch("business.onlyInteratellService")
-  const onlyPurchase = !!form.watch("business.onlyPurchase")
   const tabs = useMemo(
-    () => buildTabs(hasInteratellService, onlyInteratellService, onlyPurchase),
-    [hasInteratellService, onlyInteratellService, onlyPurchase],
+    () => buildTabs(hasInteratellService, onlyInteratellService),
+    [hasInteratellService, onlyInteratellService],
   )
 
   // Ao marcar "só serviço", o cliente que veio do card Bitrix (pré-carregado na
@@ -762,14 +752,7 @@ export function MultiStepForm({
       // "Faturamento via" passou a viver em cada grupo de fornecedor. O campo do
       // negocio vira derivado e e gravado no proprio values porque saveDraftAction
       // recebe values (nao o payload) e PDF, diff e historico leem esse campo.
-      if (values.business.onlyPurchase) {
-        // Compra para estoque: sem cliente e sem serviço, só a OC de cada
-        // fornecedor. Descarta o que tenha ficado de antes de marcar a opção.
-        values.customers = []
-        values.serviceCustomers = []
-        values.business.hasInteratellService = false
-        values.interatellBranches = deriveBranches(values.supplierGroups)
-      } else if (values.business.onlyInteratellService) {
+      if (values.business.onlyInteratellService) {
         // Só serviço: descarta fornecedor e cliente de produto que tenham ficado de
         // antes de marcar a opção — senão o envio ainda geraria OC e OV. Serviço
         // Interatell é sempre faturado por Barueri.
