@@ -1,4 +1,5 @@
 import { companyForBranch } from './interatell-companies'
+import { naturezaInterna } from './oc-numbers'
 // codigoProduto mora em utils porque a tela de fornecedores tambem usa.
 export { codigoProduto } from './utils'
 import { codigoProduto } from './utils'
@@ -38,14 +39,17 @@ export const SERVICO_MAP: Record<Natureza, string> = {
 
 export const digits = (v: any) => String(v ?? '').replace(/\D/g, '')
 
+/**
+ * Natureza do item no envio ao Omie.
+ *
+ * Delega a naturezaInterna, que conhece os dois conjuntos de códigos: o do
+ * catálogo Bitrix (HDW/SFW/LIC/SVT/SVI), que é o que o formulário grava hoje, e
+ * o antigo (HW/SW/LC/ST/SRV), de rascunhos e negócios já salvos. Esta função
+ * tinha só o conjunto antigo, então licença, software e serviço de terceiro
+ * caíam no padrão HW: iam para a OV como hardware em vez de virar OS.
+ */
 export function normalizeNatureza(raw: any): Natureza {
-  const s = String(raw ?? '').toUpperCase().trim()
-  if (['HW','HARDWARE'].includes(s)) return 'HW'
-  if (['SW','SOFTWARE'].includes(s)) return 'SW'
-  if (['LC','LICENSE','LICENCA'].includes(s)) return 'LC'
-  if (['ST','SERV_TER','TERCEIRO'].includes(s)) return 'ST'
-  if (['SRV','SERV','SERVICO'].includes(s)) return 'SRV'
-  return 'HW'
+  return naturezaInterna(raw)
 }
 
 export function normalizeNCM(ncm: any): string {
