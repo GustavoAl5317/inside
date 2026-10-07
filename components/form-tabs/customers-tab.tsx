@@ -6,12 +6,13 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
-import { Trash2, Plus, Search, Users, Building2, ChevronDown, ChevronUp, Eye, Loader2 } from "lucide-react"
+import { Trash2, Plus, Search, Users, Building2, ChevronDown, ChevronUp, Eye, Loader2, ExternalLink } from "lucide-react"
 import { searchBitrixCompaniesAction, getBitrixCompanyDetailsAction, createBitrixClientAction, lookupCnpjAction } from "@/lib/actions"
 import { isCNPJComplete, formatCNPJ, formatCurrency } from "@/lib/utils"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { toast } from "sonner"
 import { OmieLimitAlert } from "@/components/omie-limit-alert"
+import { abrirEmpresaBitrix } from "@/lib/bx24-open"
 import { camposExcedidos } from "@/lib/omie-limites"
 
 interface CustomersTabProps {
@@ -205,6 +206,16 @@ export function CustomerDialog({
         </DialogHeader>
 
         <div className="space-y-4 pt-2">
+          {isEdit && initialData?.bitrixCompanyId && (
+            <button
+              type="button"
+              onClick={() => abrirEmpresaBitrix(initialData.bitrixCompanyId)}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-purple-600 hover:text-purple-800 underline underline-offset-2"
+            >
+              <ExternalLink className="w-3.5 h-3.5" /> Abrir esta empresa no Bitrix
+            </button>
+          )}
+
           <p className="text-xs text-gray-500">
             {isEdit
               ? "O cadastro do cliente é do Bitrix e aqui é só consulta. Para corrigir razão social, CNPJ ou endereço, altere no Bitrix e adicione a filial de novo. Só o contato é editável."
@@ -354,7 +365,19 @@ export function CustomerDialog({
 
               {selected && (
                 <div className="border rounded-lg p-3 bg-purple-50 border-purple-200 space-y-0.5">
-                  <p className="font-semibold text-purple-900 text-sm">{selected.name}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-semibold text-purple-900 text-sm">{selected.name}</p>
+                    {selected.id && (
+                      <button
+                        type="button"
+                        onClick={() => abrirEmpresaBitrix(selected.id)}
+                        title="Abrir a empresa no Bitrix para corrigir o cadastro"
+                        className="shrink-0 inline-flex items-center gap-1 text-[11px] font-medium text-purple-600 hover:text-purple-800 underline underline-offset-2 decoration-dotted"
+                      >
+                        <ExternalLink className="w-3 h-3" /> Bitrix
+                      </button>
+                    )}
+                  </div>
                   {detailLoading && (
                     <p className="text-xs text-purple-600 flex items-center gap-1">
                       <Loader2 className="w-3 h-3 animate-spin" /> buscando CNPJ, endereço e contato no Bitrix...
@@ -665,6 +688,26 @@ function CustomerCard({
     form.setValue(`${basePath}.productAllocations`, next)
   }
 
+  /**
+   * Volta do Bitrix com o cadastro atualizado.
+   *
+   * O slider do BX24 avisa quando fecha; sem recarregar, o app seguiria com os
+   * dados de antes da correção. Contato e PO ficam como estão: são digitados
+   * aqui e não vêm do Bitrix.
+   */
+  const recarregarDoBitrix = async () => {
+    const id = Number(customer?.bitrixCompanyId)
+    if (!id) return
+    const { success, ...dados } = await getBitrixCompanyDetailsAction(id)
+    if (!success || !dados.name) return
+    form.setValue(`${basePath}.customer`, {
+      ...customer, ...dados,
+      contactName:   customer?.contactName || dados.contactName || "",
+      purchaseOrder: customer?.purchaseOrder ?? "",
+    }, { shouldDirty: true })
+    toast.success("Cadastro recarregado do Bitrix.")
+  }
+
   const contactMissing = !String(customer?.contactName ?? '').trim()
   // Cadastro acima do limite do Omie faz o envio parar no cadastro do cliente.
   const camposForaDoLimite = camposExcedidos(customer)
@@ -684,6 +727,18 @@ function CustomerCard({
           <div>
             <div className="flex items-center gap-2">
               <p className="font-semibold text-purple-900">{customer?.name || "Cliente"}</p>
+              {/* Abre a ficha da empresa no Bitrix num slider por cima do app:
+                  o cadastro se corrige lá, e o formulário continua aberto. */}
+              {customer?.bitrixCompanyId && (
+                <button
+                  type="button"
+                  onClick={() => abrirEmpresaBitrix(customer.bitrixCompanyId, recarregarDoBitrix)}
+                  title="Abrir a empresa no Bitrix para editar o cadastro"
+                  className="shrink-0 inline-flex items-center gap-1 text-[11px] font-medium text-purple-600 hover:text-purple-800 underline underline-offset-2 decoration-dotted"
+                >
+                  <ExternalLink className="w-3 h-3" /> Bitrix
+                </button>
+              )}
               {filiaisDoCliente.length === 0 ? (
                 <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full border bg-gray-100 text-gray-500 border-gray-300">
                   sem alocação
@@ -916,6 +971,7 @@ export function CustomersTab({ form }: CustomersTabProps) {
       localId: crypto.randomUUID(),
       branch:  company.branch || 'barueri',
       customer: {
+        bitrixCompanyId:   Number(company.id) || undefined,
         cnpj:              company.cnpj,
         name:              company.name,
         stateRegistration: company.stateRegistration || "",

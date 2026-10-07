@@ -50,6 +50,9 @@ import {
 
 // ─── Schema ────────────────────────────────────────────────────────────────────
 const companySchema = z.object({
+  // ID da empresa no CRM do Bitrix, quando ela veio de lá. Serve para abrir a
+  // ficha no Bitrix a partir do card do cliente.
+  bitrixCompanyId:   z.number().optional(),
   cnpj:              z.string().refine(isCNPJComplete, "CNPJ deve ter 14 dígitos"),
   name:              z.string().min(1),
   stateRegistration: z.string().optional(),
@@ -529,6 +532,7 @@ export function MultiStepForm({
         localId: crypto.randomUUID(),
         branch: 'barueri' as const,
         customer: {
+          bitrixCompanyId:   Number(clientCompany.id) || undefined,
           cnpj:              clientCompany.cnpj ? formatCNPJ(clientCompany.cnpj) : "",
           name:              clientCompany.name,
           stateRegistration: clientCompany.stateRegistration || "",

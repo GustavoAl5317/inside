@@ -288,9 +288,11 @@ export async function getBitrixCompanyDetailsAction(companyId: number) {
     const details = await BitrixService.getCRMCompanyFullDetails(companyId)
     return { success: true, ...details }
   } catch (error) {
+    // Mesmo formato do caminho feliz: faltava contactName, e quem consome
+    // precisa do objeto com as mesmas chaves nos dois ramos.
     return { success: false, cnpj: '', name: '', email: '', phone: '',
       address: '', number: '', complement: '', neighborhood: '',
-      city: '', state: '', zipCode: '', stateRegistration: '' }
+      city: '', state: '', zipCode: '', stateRegistration: '', contactName: '' }
   }
 }
 

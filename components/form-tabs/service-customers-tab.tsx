@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { Badge } from "@/components/ui/badge"
-import { Trash2, Plus, Wrench, Building2, Eye } from "lucide-react"
+import { Trash2, Plus, Wrench, Building2, Eye, ExternalLink } from "lucide-react"
+import { abrirEmpresaBitrix } from "@/lib/bx24-open"
 import { formatCurrency } from "@/lib/utils"
 import { CustomerDialog } from "./customers-tab"
 import { toast } from "sonner"
@@ -50,7 +51,9 @@ export function ServiceCustomersTab({ form }: ServiceCustomersTabProps) {
       append({
         localId: newLocalId(),
         branch: "barueri",
-        customer: company,
+        // bitrixCompanyId e o que o link para a ficha do Bitrix usa; o dialogo
+        // devolve o id da empresa do CRM em `id`.
+        customer: { ...company, bitrixCompanyId: Number(company.id) || undefined },
         items: [],
       })
     }
@@ -140,6 +143,17 @@ export function ServiceCustomersTab({ form }: ServiceCustomersTabProps) {
                     <p className="font-semibold text-gray-800 truncate">
                       {entry.customer?.name || "Cliente sem nome"}
                     </p>
+                    {/* Abre a ficha da empresa no Bitrix num slider sobre o app. */}
+                    {entry.customer?.bitrixCompanyId && (
+                      <button
+                        type="button"
+                        onClick={() => abrirEmpresaBitrix(entry.customer.bitrixCompanyId)}
+                        title="Abrir a empresa no Bitrix para editar o cadastro"
+                        className="shrink-0 inline-flex items-center gap-1 text-[11px] font-medium text-teal-700 hover:text-teal-900 underline underline-offset-2 decoration-dotted"
+                      >
+                        <ExternalLink className="w-3 h-3" /> Bitrix
+                      </button>
+                    )}
                   </div>
                   <p className="text-xs text-gray-500 font-mono mt-0.5">
                     {entry.customer?.cnpj || "—"}
