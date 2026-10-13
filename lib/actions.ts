@@ -1527,6 +1527,17 @@ export async function saveDraftAction(
     }
 
     if (targetId) {
+      // Negócio já enviado não volta a 'pending' por uma gravação de rascunho:
+      // o envio tem o seu próprio fluxo (Atualização), e rebaixar o status faria
+      // o reenvio tratar como novo e duplicar os pedidos no Omie.
+      const [atual] = await sql`SELECT status FROM deals WHERE id = ${targetId}`
+      if (String(atual?.status ?? '') === 'sent') {
+        console.log(`[saveDraft] deal #${targetId} já enviado — rascunho não gravado`)
+        return {
+          success: false as const,
+          error: 'Este negócio já foi enviado ao Omie. Use Operações → Atualização para alterá-lo.',
+        }
+      }
       await preservaNumerosDoBanco(targetId, payload)
       await sql`
         UPDATE deals
@@ -1993,16 +2004,16 @@ export async function getDealsHistoryAction(limit = 40, offset = 0) {
 
 export async function getDraftByBitrixDealIdAction(bitrixDealId: string) {
   try {
-    // Pendente, aprovado ou com falha — só o já enviado com sucesso fica de fora.
-    // Carregar apenas 'pending' fazia o card abrir vazio depois de um envio
-    // interrompido ('approved') ou que falhou ('failed'): o negócio seguia no
-    // banco, mas o próximo envio criava outro, com códigos de integração novos, e
-    // duplicava no Omie os pedidos que o anterior já tinha criado.
-    console.log(`[getDraft] buscando bitrix_deal_id="${bitrixDealId}" (pendente, aprovado ou com falha)`)
+    // Qualquer status, inclusive 'sent'. Filtrar por status fazia o card abrir
+    // vazio: o negócio estava no banco com o payload inteiro, mas a tela não o
+    // carregava, e o próximo envio criava outro deal, com códigos de integração
+    // novos, duplicando no Omie os pedidos que o anterior já tinha criado.
+    // O 'sent' entrou por último: card na etapa Processamento que já foi enviado
+    // abria em branco, e era isso que parecia dado perdido.
+    console.log(`[getDraft] buscando bitrix_deal_id="${bitrixDealId}"`)
     const [deal] = await sql`
       SELECT id, status, payload, omie_response FROM deals
       WHERE bitrix_deal_id = ${bitrixDealId}
-        AND status IN ('pending', 'approved', 'failed')
       ORDER BY updated_at DESC
       LIMIT 1
     `
@@ -2015,7 +2026,15 @@ export async function getDraftByBitrixDealIdAction(bitrixDealId: string) {
     const omie = typeof deal.omie_response === 'string' ? JSON.parse(deal.omie_response) : deal.omie_response
     // Pedidos já criados no Omie, também de envio que falhou no meio: a tela do
     // card mostra, e o reenvio cria só o que falta.
-    return { success: true as const, deal: { id: deal.id as number, payload, resumo: omie?.resumo ?? null } }
+    return {
+      success: true as const,
+      deal: {
+        id: deal.id as number,
+        status: String(deal.status ?? ''),
+        payload,
+        resumo: omie?.resumo ?? null,
+      },
+    }
   } catch (error) {
     return { success: false as const, error: error instanceof Error ? error.message : 'Erro desconhecido' }
   }
