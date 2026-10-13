@@ -48,6 +48,8 @@ function SupplierDialog({
   const [selected, setSelected] = useState<any>(null)
   const [cnpjOverride, setCnpjOverride] = useState("")
   const [manual, setManual] = useState<typeof emptyManual>(isEdit && initialData ? { ...emptyManual, ...initialData } : emptyManual)
+  // "manual" ficou só para editar um fornecedor já adicionado: fornecedor novo
+  // entra apenas pela lista do Bitrix, que é o cadastro de verdade.
   const [mode, setMode] = useState<"list" | "manual">(isEdit ? "manual" : "list")
   const [branch, setBranch] = useState<'barueri' | 'es'>(initialData?.branch === 'es' ? 'es' : 'barueri')
 
@@ -67,7 +69,7 @@ function SupplierDialog({
     const data = await getBitrixSuppliersAction(q)
     setLoading(false)
     if (!data || (data as any[]).length === 0) {
-      setError(q ? "Nenhum fornecedor encontrado para esse termo." : "Nenhum fornecedor cadastrado ainda. Use 'Adicionar Manualmente' para cadastrar.")
+      setError(q ? "Nenhum fornecedor encontrado para esse termo." : "Nenhum fornecedor cadastrado ainda. Cadastre no Bitrix primeiro.")
       return
     }
     setResults(data as any[])
@@ -115,12 +117,6 @@ function SupplierDialog({
     onClose()
   }
 
-  const handleModeChange = (newMode: "list" | "manual") => {
-    setMode(newMode)
-    setError(""); setSelected(null); setResults([])
-    if (newMode === "list") handleSearchList("")
-  }
-
   return (
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
@@ -131,30 +127,11 @@ function SupplierDialog({
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-4 pt-2">
-          {/* Seletor de modo — oculto no modo edição */}
           {!isEdit && (
-            <div className="flex gap-2">
-              <button
-                onClick={() => handleModeChange("list")}
-                className={`px-3 py-1.5 text-sm rounded border transition-colors ${
-                  mode === "list"
-                    ? "bg-blue-600 text-white border-blue-600"
-                    : "text-gray-600 border-gray-300 hover:bg-gray-50"
-                }`}
-              >
-                Lista de Fornecedores
-              </button>
-              <button
-                onClick={() => handleModeChange("manual")}
-                className={`px-3 py-1.5 text-sm rounded border transition-colors ${
-                  mode === "manual"
-                    ? "bg-blue-600 text-white border-blue-600"
-                    : "text-gray-600 border-gray-300 hover:bg-gray-50"
-                }`}
-              >
-                Adicionar Manualmente
-              </button>
-            </div>
+            <p className="text-xs text-gray-500">
+              O cadastro dos fornecedores fica no Bitrix. Para incluir um que não aparece
+              aqui, cadastre-o lá primeiro.
+            </p>
           )}
 
           {/* ── Modo: Lista de Fornecedores ── */}
@@ -217,7 +194,7 @@ function SupplierDialog({
             </>
           )}
 
-          {/* ── Modo: Adicionar Manualmente ── */}
+          {/* ── Modo: edição de um fornecedor já adicionado ── */}
           {mode === "manual" && (
             <div className="space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
