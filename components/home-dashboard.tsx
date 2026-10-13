@@ -191,7 +191,7 @@ function ProcessEntryCards({ onStart }: { onStart?: () => void }) {
       key: 'backlog',
       icon: ClipboardList,
       title: 'Backlog',
-      desc: 'Preencha o formulário e salve como rascunho com PDF.',
+      desc: 'Preencha o formulário e salve como rascunho — a planilha da OC baixa junto.',
       color: 'border-blue-200 bg-blue-50 hover:bg-blue-100 hover:border-blue-300',
       iconBg: 'bg-blue-500',
       badge: 'Etapa 1',

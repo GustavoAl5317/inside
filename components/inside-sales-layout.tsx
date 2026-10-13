@@ -16,7 +16,7 @@ const MODE_CONFIG: Record<FormMode, { label: string; color: string; icon: typeof
     label: 'Backlog',
     color: 'bg-blue-100 text-blue-700 border-blue-200',
     icon: FileText,
-    desc: 'Preencha o formulário e salve como rascunho com PDF.',
+    desc: 'Preencha o formulário e salve como rascunho — a planilha da OC baixa junto.',
   },
   omie: {
     label: 'Processamento',
