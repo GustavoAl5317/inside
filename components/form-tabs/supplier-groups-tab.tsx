@@ -474,14 +474,6 @@ function ProductRow({
   // continuam na lista por causa de negócios e rascunhos já gravados.
   const isSRV = ['SVI', 'LIC', 'SFW', 'SVT', 'SRV', 'LC', 'SW', 'ST'].includes(productNature)
 
-  // Auto-seleciona família "Outros" quando nature é serviço
-  useEffect(() => {
-    if (isSRV) {
-      const current = form.getValues(`${basePath}.family`)
-      if (current !== SRV_FAMILY_CODE) form.setValue(`${basePath}.family`, SRV_FAMILY_CODE)
-    }
-  }, [productNature, isSRV, basePath, form])
-
   // Rascunho antigo pode ter ficado com outra UF, e a do fornecedor pode mudar
   // depois: mantém o produto alinhado.
   useEffect(() => {
@@ -493,16 +485,37 @@ function ProductRow({
   // Só as famílias da filial do "Faturamento via" do fornecedor. O teste antigo
   // era por substring e `includes('sp')` casava "espirito santo", então as duas
   // filiais apareciam sempre; familyMatchesBranch compara com limite de palavra.
-  // Sem família o Omie cadastra o produto sem classificação; serviço tem a sua
-  // fixa, então só produto normal cobra.
-  const familiaFaltando = !isSRV && !String(form.watch(`${basePath}.family`) ?? '').trim()
+  // Sem família o Omie cadastra o produto sem classificação. Vale para todos:
+  // licença, software e serviço também têm família própria no Omie.
+  const familiaFaltando = !String(form.watch(`${basePath}.family`) ?? '').trim()
 
+  /**
+   * Família padrão de licença, software e serviço: a "Outros" da filial que
+   * fatura. Só preenche quando o produto está sem família — o campo é editável,
+   * e licença e software têm família própria no Omie.
+   *
+   * SRV_FAMILY_CODE é o "Outros" de Barueri; o ES tem o seu, com outro código.
+   * Fixar o de Barueri mandava produto faturado por ES para uma família que não
+   * existe naquela empresa.
+   */
   const filteredFamilies = families.length === 0 ? [] : (() => {
     const hasLocation = families.some(f => f.location)
     if (!hasLocation) return families
     const branch = productState === 'ES' ? 'es' : 'barueri'
     return families.filter(f => familyMatchesBranch(f.location, branch))
   })()
+
+  // Licença, software e serviço nascem na família "Outros" da filial que fatura,
+  // e seguem editáveis. Só preenche o que está vazio: família escolhida à mão
+  // não é sobrescrita, nem quando o "Faturamento via" muda.
+  useEffect(() => {
+    if (!isSRV || !filteredFamilies.length) return
+    if (String(form.getValues(`${basePath}.family`) ?? '').trim()) return
+    const outros = filteredFamilies.find(f => f.name.trim().toLowerCase().startsWith('outros'))
+    const codigo = outros?.omieCode || outros?.id || SRV_FAMILY_CODE
+    form.setValue(`${basePath}.family`, codigo, { shouldDirty: true })
+  }, [isSRV, filteredFamilies, basePath, form])
+
 
   const updateTotals = (value: number) => {
     const qty = form.getValues(`${basePath}.quantity`) || 1
@@ -595,12 +608,11 @@ function ProductRow({
           <Select
             value={form.watch(`${basePath}.family`) || ""}
             onValueChange={v => form.setValue(`${basePath}.family`, v, { shouldDirty: true })}
-            disabled={isSRV}
           >
             <SelectTrigger className={`h-7 text-[11px] bg-white ${
-              isSRV ? 'opacity-60' : familiaFaltando ? 'border-red-300 focus:ring-red-400' : ''
+              familiaFaltando ? 'border-red-300 focus:ring-red-400' : ''
             }`}>
-              <SelectValue placeholder={isSRV ? "Outros (serviço)" : "Selecione a família"} />
+              <SelectValue placeholder="Selecione a família" />
             </SelectTrigger>
             <SelectContent>
               {filteredFamilies.length === 0 ? (
