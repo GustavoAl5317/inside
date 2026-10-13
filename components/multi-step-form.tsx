@@ -14,7 +14,6 @@ import { NotesTab } from "./form-tabs/notes-tab"
 import { OcNumbersTab } from "./form-tabs/oc-numbers-tab"
 import { SupplierGroupsTab } from "./form-tabs/supplier-groups-tab"
 import { CustomersTab } from "./form-tabs/customers-tab"
-import { generateDealPDFs } from "@/lib/generate-pdf"
 import { downloadOcExcels } from "@/lib/download-oc-excel"
 import { INTERATELL_COMPANIES } from "@/lib/interatell-companies"
 import { ServiceCustomersTab } from "./form-tabs/service-customers-tab"
@@ -41,8 +40,8 @@ import {
   Loader2,
   ChevronRight,
   ChevronLeft,
-  FileDown,
   FileSpreadsheet,
+  Save,
   Send,
   RefreshCw,
 } from "lucide-react"
@@ -667,29 +666,51 @@ export function MultiStepForm({
     return true
   }
 
+  /**
+   * Grava o rascunho com o que já está preenchido.
+   *
+   * Antes o rascunho só nascia no botão final: quem parava no meio perdia tudo.
+   * Agora salva a cada avanço de etapa e no botão "Salvar rascunho", que não
+   * exige o formulário completo — saveDraftAction só guarda o JSON.
+   *
+   * Só no Backlog: em Processamento e Atualização o deal já existe e tem status
+   * próprio, e gravar como 'pending' por cima desfaria o envio.
+   */
+  const salvarRascunho = async (silencioso = true): Promise<boolean> => {
+    if (mode !== 'backlog') return true
+    try {
+      const payload = payloadDosValores(form.getValues())
+      const r = await saveDraftAction(payload as any, existingDeal?.id ?? dealId ?? undefined)
+      if (!r.success) {
+        if (!silencioso) toast.error(r.error || "Erro ao salvar rascunho.")
+        return false
+      }
+      if (r.dealId) setDealId(r.dealId)
+      if (!silencioso) toast.success("Rascunho salvo!")
+      return true
+    } catch (err: any) {
+      if (!silencioso) toast.error("Erro ao salvar rascunho: " + (err?.message || ""))
+      return false
+    }
+  }
+
+  const [salvandoRascunho, setSalvandoRascunho] = useState(false)
+  const handleSalvarRascunho = async () => {
+    setSalvandoRascunho(true)
+    try { await salvarRascunho(false) } finally { setSalvandoRascunho(false) }
+  }
+
   const handleNext = async () => {
     const ok = await validateTab(tabs[currentIdx].id)
     if (!ok) return
     if (!completedTabs.includes(tabs[currentIdx].id)) setCompleted(p => [...p, tabs[currentIdx].id])
+    // Grava antes de trocar de aba: avançou, está salvo.
+    await salvarRascunho()
     if (currentIdx < tabs.length - 1) setActiveTab(tabs[currentIdx + 1].id)
   }
 
   const handleBack = () => {
     if (currentIdx > 0) setActiveTab(tabs[currentIdx - 1].id)
-  }
-
-  // ── Baixar PDF (sem envio) ────────────────────────────────────────────────
-  const handleDownloadPDF = async () => {
-    setGeneratingPDF(true)
-    try {
-      normalizeFormCNPJs(form)
-      const n = await generateDealPDFs(form.getValues())
-      toast.success(n > 1 ? `${n} PDFs gerados (um por documento)!` : "PDF gerado com sucesso!")
-    } catch (err: any) {
-      toast.error("Erro ao gerar PDF: " + (err?.message || ""))
-    } finally {
-      setGeneratingPDF(false)
-    }
   }
 
   /**
@@ -1034,8 +1055,24 @@ export function MultiStepForm({
           </Button>
 
           <div className="flex items-center gap-2">
-            {/* Atualizacao leva a planilha do que mudou; os outros fluxos seguem
-                com o PDF dos documentos do negocio. */}
+            {/* Salvar rascunho em qualquer etapa: não exige o formulário
+                completo, só grava o que já foi preenchido. */}
+            {mode === 'backlog' && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleSalvarRascunho}
+                disabled={salvandoRascunho}
+                className="gap-1.5 text-blue-700 border-blue-200 hover:bg-blue-50 hover:border-blue-400"
+              >
+                {salvandoRascunho
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Salvando...</>
+                  : <><Save className="w-4 h-4" /> Salvar rascunho</>
+                }
+              </Button>
+            )}
+
+            {/* A planilha da OC é baixada na gravação final e na Atualização. */}
             {isUpdate ? (
               existingDeal && (
                 <Button
@@ -1051,20 +1088,7 @@ export function MultiStepForm({
                   }
                 </Button>
               )
-            ) : (existingDeal || isLastTab) && (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleDownloadPDF}
-                disabled={isGeneratingPDF}
-                className="gap-1.5 text-blue-600 border-blue-200 hover:bg-blue-50 hover:border-blue-400"
-              >
-                {isGeneratingPDF
-                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Gerando...</>
-                  : <><FileDown className="w-4 h-4" /> Baixar PDF</>
-                }
-              </Button>
-            )}
+            ) : null}
 
             {isLastTab ? (
               updateBlocked ? (
