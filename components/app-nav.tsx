@@ -70,7 +70,6 @@ const NAV_GROUPS: NavGroup[] = [
     emoji: '🗂️',
     items: [
       { href: '/fornecedores',       label: 'Fornecedores', emoji: '🏭', area: 'cadastros' },
-      { href: '/familias',           label: 'Famílias',     emoji: '📁', area: 'cadastros' },
       { href: '/condicoes-pagamento',label: 'Pagamentos',   emoji: '💳', area: 'cadastros' },
     ],
   },

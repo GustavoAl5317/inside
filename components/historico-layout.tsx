@@ -7,7 +7,7 @@ import type { HistoryDeal } from './omie-stage-sidebar'
 import {
   RefreshCw, CheckCircle2, XCircle, Clock, FileText,
   Building2, Package, History, Download, ShoppingCart,
-  TrendingUp, Wrench, X, User, ShieldCheck, Trash2, Loader2,
+  TrendingUp, Wrench, X, User, Trash2, Loader2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useCurrentUser } from '@/components/current-user-provider'
@@ -342,141 +342,9 @@ function fmtRelative(s?: string) {
 }
 
 // ── Histórico de aprovações ────────────────────────────────────────────────────
-interface ApprovalRecord {
-  id: number
-  deal_id: number
-  status: 'pending' | 'approved' | 'rejected'
-  reason?: string | null
-  review_note?: string | null
-  requested_by_name?: string | null
-  reviewed_by_name?: string | null
-  created_at?: string
-  reviewed_at?: string
-  business_name?: string | null
-  proposal?: string | null
-  customer_name?: string | null
-}
-
-function ApprovalHistory() {
-  const [records, setRecords] = useState<ApprovalRecord[]>([])
-  const [loading, setLoading] = useState(true)
-  const [search, setSearch]   = useState('')
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const r = await listUpdateRequestsAction(undefined)
-      if (r.success) setRecords(r.requests as ApprovalRecord[])
-    } finally { setLoading(false) }
-  }, [])
-
-  useEffect(() => { load() }, [load])
-
-  const filtered = records.filter(r => {
-    if (!search) return true
-    const q = search.toLowerCase()
-    return (
-      r.proposal?.toLowerCase().includes(q) ||
-      r.business_name?.toLowerCase().includes(q) ||
-      r.customer_name?.toLowerCase().includes(q) ||
-      r.requested_by_name?.toLowerCase().includes(q)
-    )
-  })
-
-  const statusCfg = {
-    pending:  { label: 'Pendente',  cls: 'bg-amber-50 text-amber-700 ring-amber-200',   dot: 'bg-amber-400'   },
-    approved: { label: 'Aprovada',  cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200', dot: 'bg-emerald-400' },
-    rejected: { label: 'Recusada', cls: 'bg-red-50 text-red-700 ring-red-200',          dot: 'bg-red-400'     },
-  }
-
-  return (
-    <div className="flex h-full overflow-hidden">
-      <aside className="w-80 flex-shrink-0 flex flex-col border-r border-gray-200 bg-white h-full overflow-hidden">
-        <div className="px-3 pt-3 pb-2 border-b border-gray-100 space-y-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <ShieldCheck size={15} className="text-violet-500" />
-              <span className="text-sm font-semibold text-gray-800">Aprovações</span>
-              {records.length > 0 && (
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700">{records.length}</span>
-              )}
-            </div>
-            <button onClick={load} className="p-1 rounded-lg text-gray-400 hover:text-violet-600 hover:bg-violet-50 transition-colors">
-              <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-            </button>
-          </div>
-          <input
-            type="text"
-            placeholder="Buscar por proposta, cliente..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="w-full text-xs px-3 py-1.5 rounded-lg border border-gray-200 bg-gray-50 text-gray-700 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-violet-300"
-          />
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2">
-          {loading ? (
-            <div className="space-y-2">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="h-16 bg-gray-100 rounded-xl animate-pulse" />
-              ))}
-            </div>
-          ) : filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-44 text-center select-none">
-              <ShieldCheck size={32} className="mb-3 text-gray-200" />
-              <p className="text-xs text-gray-400 font-medium">{search ? 'Nenhum resultado' : 'Nenhuma solicitação'}</p>
-            </div>
-          ) : filtered.map(rec => {
-            const cfg = statusCfg[rec.status] ?? statusCfg.pending
-            return (
-              <div key={rec.id} className="bg-white border border-gray-200 rounded-xl p-3 text-left hover:border-violet-200 hover:bg-violet-50/30 transition-all">
-                <div className="flex items-start justify-between gap-2 mb-1">
-                  <p className="text-[13px] font-semibold text-gray-800 leading-tight truncate">
-                    {rec.proposal ? `Proposta ${rec.proposal}` : rec.business_name ?? `Deal #${rec.deal_id}`}
-                  </p>
-                  <span className={`shrink-0 flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full ring-1 ${cfg.cls}`}>
-                    <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />
-                    {cfg.label}
-                  </span>
-                </div>
-                {rec.customer_name && (
-                  <p className="flex items-center gap-1 text-[10px] text-gray-400 mb-0.5">
-                    <Building2 size={9} />{rec.customer_name}
-                  </p>
-                )}
-                {rec.requested_by_name && (
-                  <p className="flex items-center gap-1 text-[10px] text-gray-400 mb-0.5">
-                    <User size={9} />Solicitado por {rec.requested_by_name}
-                  </p>
-                )}
-                {rec.reviewed_by_name && (
-                  <p className="flex items-center gap-1 text-[10px] text-gray-400">
-                    <ShieldCheck size={9} />{rec.status === 'approved' ? 'Aprovado' : 'Recusado'} por {rec.reviewed_by_name}
-                  </p>
-                )}
-                <p className="text-[10px] text-gray-400 mt-1">{fmtRelative(rec.created_at)}</p>
-              </div>
-            )
-          })}
-        </div>
-      </aside>
-
-      <main className="flex-1 overflow-y-auto bg-gray-50 p-6">
-        <div className="max-w-2xl mx-auto">
-          <div className="flex flex-col items-center justify-center h-64 text-center text-gray-400 select-none">
-            <ShieldCheck size={40} className="mb-4 text-gray-300" />
-            <p className="text-base font-medium text-gray-500">Histórico de aprovações</p>
-            <p className="text-sm mt-1">Selecione um item na lista para ver detalhes</p>
-          </div>
-        </div>
-      </main>
-    </div>
-  )
-}
-
 // ── Layout principal ───────────────────────────────────────────────────────────
 export function HistoricoLayout() {
-  const [view, setView]         = useState<'envios' | 'aprovacoes'>('envios')
+  // A aba "Aprovações" saiu daqui: o mesmo conteúdo vive em Operações/Solicitações.
   const PAGE = 40
   const [deals, setDeals]         = useState<HistoryDeal[]>([])
   const [loading, setLoading]     = useState(true)
@@ -523,33 +391,9 @@ export function HistoricoLayout() {
   return (
     <div className="flex flex-col h-[calc(100vh-64px)] overflow-hidden">
 
-      {/* Tab switch */}
-      <div className="flex bg-white border-b border-gray-200 px-4 pt-2 gap-1 flex-shrink-0">
-        <button
-          onClick={() => setView('envios')}
-          className={`flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-t-lg border-b-2 transition-colors ${
-            view === 'envios'
-              ? 'border-amber-500 text-amber-700 bg-amber-50/60'
-              : 'border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50'
-          }`}
-        >
-          <ShoppingCart size={14} /> Envios ao Omie
-        </button>
-        <button
-          onClick={() => setView('aprovacoes')}
-          className={`flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-t-lg border-b-2 transition-colors ${
-            view === 'aprovacoes'
-              ? 'border-violet-500 text-violet-700 bg-violet-50/60'
-              : 'border-transparent text-gray-500 hover:text-gray-800 hover:bg-gray-50'
-          }`}
-        >
-          <ShieldCheck size={14} /> Aprovações
-        </button>
-      </div>
-
       {/* Content */}
       <div className="flex-1 overflow-hidden">
-        {view === 'aprovacoes' ? <ApprovalHistory /> : (
+        {(
           <div className="flex h-full overflow-hidden">
 
             {/* Sidebar envios */}

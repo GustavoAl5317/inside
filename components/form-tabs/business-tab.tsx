@@ -202,7 +202,7 @@ export function BusinessTab({ form }: BusinessTabProps) {
         />
 
         {/* Serviço Interatell (SRV): não passa por fornecedor, é vendido direto
-            ao cliente — por isso abre um step próprio e gera um PDF separado. */}
+            ao cliente — por isso abre um step próprio e gera uma planilha separada. */}
         <FormField
           control={form.control}
           name="business.hasInteratellService"
@@ -224,7 +224,7 @@ export function BusinessTab({ form }: BusinessTabProps) {
                   </FormLabel>
                   <p className="text-xs text-teal-700 mt-1">
                     Serviço próprio (natureza SRV) não passa por fornecedor. Ao marcar, abre o
-                    step <strong>Cliente Serviço</strong> e o serviço vai em um PDF separado.
+                    step <strong>Cliente Serviço</strong> e o serviço vai em uma planilha separada.
                   </p>
                 </div>
               </div>

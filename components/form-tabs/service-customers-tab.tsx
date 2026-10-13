@@ -100,7 +100,7 @@ export function ServiceCustomersTab({ form }: ServiceCustomersTabProps) {
           </h2>
           <p className="text-sm text-gray-500 mt-1">
             Serviço próprio, sem fornecedor. Adicione o cliente e digite os serviços —
-            eles geram uma <strong>OS de natureza SRV</strong> e um <strong>PDF separado</strong>.
+            eles geram uma <strong>OS de natureza SRV</strong> e uma <strong>planilha separada</strong>.
           </p>
         </div>
         <Button
