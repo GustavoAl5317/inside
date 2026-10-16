@@ -300,9 +300,17 @@ async function omieCall(interatellCnpj: string, url: string, call: string, param
       // passo aparecia vermelho na tela de processamento, como se fosse falha.
       const isNotFound = typeof data?.faultstring === 'string' &&
         /não cadastrado|nao cadastrado|not found|n[ãa]o existem registros/i.test(data.faultstring)
-      const level: 'success' | 'info' | 'error' =
+      // Falhas que o envio resolve sozinho logo em seguida. O pedido e o produto
+      // sao criados direto, sem consultar antes, para gastar menos chamada; o
+      // Omie recusa a duplicata e o codigo recupera pelo que vem no proprio erro
+      // (ver ensureProduto e upsertOV/upsertOC). Em vermelho pareciam falha de
+      // envio num envio que terminou bem.
+      const isRecuperavel = typeof data?.faultstring === 'string' &&
+        /j[áa] cadastrad[oa]|j[áa] est[áa] sendo utilizada/i.test(data.faultstring)
+      const level: 'success' | 'info' | 'warning' | 'error' =
         httpStatus >= 200 && httpStatus < 300 ? 'success'
         : (isCheckStep && isNotFound) ? 'info'
+        : isRecuperavel ? 'warning'
         : 'error'
 
       if (level === 'error') {
