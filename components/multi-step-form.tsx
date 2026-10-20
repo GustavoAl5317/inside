@@ -95,6 +95,9 @@ const supplierGroupSchema = z.object({
   // Prazo de entrega por fornecedor: cada compra chega numa data. Era um campo
   // só do negócio, e com vários fornecedores a data de um valia para todos.
   deliveryDeadline: z.string().default(""),
+  // Condição de pagamento da compra deste fornecedor. Vazia cai na do negócio,
+  // que serve de padrão — cada fornecedor negocia o seu prazo.
+  purchasePaymentCondition: z.string().default(""),
   supplier: companySchema,
   products: z.array(productSchema),
   // Número de Ordem de Compra desta OC na lista #35 do Bitrix, ex. "9178/26".

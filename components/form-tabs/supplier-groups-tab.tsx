@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { Trash2, Plus, Search, Package, ChevronDown, ChevronUp, Building2, Pencil, Truck } from "lucide-react"
-import { getBitrixSuppliersAction, searchBitrixProductsAction, searchProductsAction, getBitrixFamiliesFullAction } from "@/lib/actions"
+import { getBitrixSuppliersAction, searchBitrixProductsAction, searchProductsAction, getBitrixFamiliesFullAction, getBitrixAllPaymentConditionsAction } from "@/lib/actions"
 import { formatCurrency, isCNPJComplete, formatCNPJ, familyMatchesBranch, codigoProduto } from "@/lib/utils"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -681,12 +681,14 @@ function SupplierGroupCard({
   onRemoveGroup,
   onEditSupplier,
   families,
+  purchaseConditions,
 }: {
   groupIndex: number
   form: UseFormReturn<any>
   onRemoveGroup: () => void
   onEditSupplier: () => void
   families: FamilyItem[]
+  purchaseConditions: any[]
 }) {
   const [expanded, setExpanded] = useState(true)
   const [productDialogOpen, setProductDialogOpen] = useState(false)
@@ -704,6 +706,11 @@ function SupplierGroupCard({
   // Cadastro acima do limite do Omie faz o envio parar no cadastro do fornecedor.
   const camposForaDoLimite = camposExcedidos(supplier)
   const prazoFaltando = !prazoEntrega.trim()
+  // Condicao de compra deste fornecedor. Vazia, vale a do negocio — e o padrao
+  // de quem nao negociou prazo diferente.
+  const condicaoCompra: string = form.watch(`supplierGroups.${groupIndex}.purchasePaymentCondition`) || ''
+  const condicaoDoNegocio: string = form.watch('business.purchasePaymentCondition') || ''
+  const condicaoEfetiva = condicaoCompra || condicaoDoNegocio
   const totalCusto = (form.watch(`supplierGroups.${groupIndex}.products`) || [])
     .reduce((s: number, p: any) => s + (p.totalCost || 0), 0)
 
@@ -833,7 +840,7 @@ function SupplierGroupCard({
 
         {/* Campos da compra deste fornecedor. Rótulo em cima do campo e larguras
             iguais: os três têm o mesmo peso e vão para o mesmo Pedido de Compra. */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 px-4 pb-3 pt-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 px-4 pb-3 pt-3">
           <div className="min-w-0">
             <label className="block text-[10px] font-semibold uppercase tracking-wide text-blue-700/70 mb-1">
               Faturamento via
@@ -866,6 +873,36 @@ function SupplierGroupCard({
                 `supplierGroups.${groupIndex}.deliveryDeadline`, e.target.value, { shouldDirty: true },
               )}
             />
+          </div>
+
+          <div className="min-w-0">
+            <label className="block text-[10px] font-semibold uppercase tracking-wide text-blue-700/70 mb-1">
+              Cond. pagamento compra
+            </label>
+            <Select
+              value={condicaoEfetiva}
+              onValueChange={v => form.setValue(
+                `supplierGroups.${groupIndex}.purchasePaymentCondition`, v, { shouldDirty: true },
+              )}
+            >
+              <SelectTrigger className="h-8 text-xs bg-white">
+                <SelectValue placeholder={condicaoDoNegocio ? "Mesma do negocio" : "Selecione"} />
+              </SelectTrigger>
+              <SelectContent>
+                {purchaseConditions.length === 0 ? (
+                  <div className="px-3 py-2 text-xs text-gray-400">Nenhuma condicao carregada</div>
+                ) : (
+                  // Mantem o valor gravado que saiu da lista do Bitrix, senao o
+                  // campo abriria em branco e a escolha pareceria perdida.
+                  (!condicaoEfetiva || purchaseConditions.some((c: any) => (c.code || c.name) === condicaoEfetiva)
+                    ? purchaseConditions
+                    : [...purchaseConditions, { id: `__salvo__${condicaoEfetiva}`, code: condicaoEfetiva, name: `${condicaoEfetiva} (fora da lista atual)` }]
+                  ).map((c: any) => (
+                    <SelectItem key={c.id} value={c.code || c.name} className="text-xs">{c.name}</SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="min-w-0">
@@ -971,12 +1008,17 @@ export function SupplierGroupsTab({ form }: SupplierGroupsTabProps) {
   const [supplierDialogOpen, setSupplierDialogOpen] = useState(false)
   const [editingSupplierIdx, setEditingSupplierIdx] = useState<number | null>(null)
   const [families, setFamilies] = useState<FamilyItem[]>([])
+  // Condições de pagamento de compra: cada fornecedor pode ter a sua.
+  const [purchaseConditions, setPurchaseConditions] = useState<any[]>([])
 
   // Famílias lidas direto do Omie, das duas filiais (lib/omie-familias).
   useEffect(() => {
     getBitrixFamiliesFullAction().then(res => {
       if (res.success) setFamilies(res.families)
     })
+    getBitrixAllPaymentConditionsAction().then(res => {
+      if (res.success) setPurchaseConditions(res.purchase)
+    }).catch(() => {})
   }, [])
 
   const { fields: groupFields, append: appendGroup, remove: removeGroup } = useFieldArray({
@@ -1032,6 +1074,8 @@ export function SupplierGroupsTab({ form }: SupplierGroupsTabProps) {
       branch:   company.branch || 'barueri',
       hasFreight:   false,
       freightValue: 0,
+      // Nasce com a condicao do negocio; o usuario ajusta por fornecedor.
+      purchasePaymentCondition: String(form.getValues("business.purchasePaymentCondition") ?? ""),
       // Prefill com a data de fechamento do card Bitrix, que o step Negocio ja
       // carrega. O usuario ajusta por fornecedor quando os prazos diferem.
       deliveryDeadline: String(form.getValues("business.deliveryDeadline") ?? ""),
@@ -1089,6 +1133,7 @@ export function SupplierGroupsTab({ form }: SupplierGroupsTabProps) {
             onRemoveGroup={() => handleRemoveGroup(gIdx)}
             onEditSupplier={() => setEditingSupplierIdx(gIdx)}
             families={families}
+            purchaseConditions={purchaseConditions}
           />
         ))}
       </div>

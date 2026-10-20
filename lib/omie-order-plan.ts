@@ -341,8 +341,9 @@ export function buildOmiePlan(
       parteTipo: 'Fornecedor',
       parteNome: String(group.supplier?.name ?? ''),
       parteCnpj: String(group.supplier?.cnpj ?? ''),
-      condicaoPagamento: opts.condicaoCompra,
-      condicaoPagamentoLabel: opts.rotulo(business.purchasePaymentCondition),
+      // Condicao de compra do fornecedor; vazia, vale a do negocio.
+      condicaoPagamento: String(group.purchasePaymentCondition ?? '').trim() || opts.condicaoCompra,
+      condicaoPagamentoLabel: opts.rotulo(group.purchasePaymentCondition || business.purchasePaymentCondition),
       etapa: '',
       dataPrevisao: toOmieDate(group.deliveryDeadline || business?.deliveryDeadline),
       numeroPedidoCliente: '',
@@ -504,8 +505,14 @@ export function buildOmiePlan(
     // Compra para estoque nao tem venda: campo vazio fica vazio, nao vira a
     // data de hoje (toOmieDate cai em hoje quando a entrada e vazia).
     previsaoFaturamento: business?.expectedBillingDate ? toOmieDate(business.expectedBillingDate) : '',
-    condicaoCompra: opts.condicaoCompra,
-    condicaoCompraLabel: opts.rotulo(business?.purchasePaymentCondition),
+    // Recortado por fornecedor: a condicao dele. No plano inteiro, a do negocio.
+    condicaoCompra: (escopo?.groupLocalId
+      ? String(supplierGroups[0]?.purchasePaymentCondition ?? '').trim()
+      : '') || opts.condicaoCompra,
+    condicaoCompraLabel: opts.rotulo(
+      (escopo?.groupLocalId ? supplierGroups[0]?.purchasePaymentCondition : '')
+      || business?.purchasePaymentCondition,
+    ),
     condicaoVenda: opts.condicaoVenda,
     condicaoVendaLabel: opts.rotulo(business?.salePaymentCondition),
     obsExterna, obsInterna,

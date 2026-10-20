@@ -1338,7 +1338,12 @@ async function processDeal(body: any, dealId: number) {
       const codDistribuidor = ctx().fornecedorCache.get(`${branchCnpj}:${digits(group.supplier?.cnpj)}`)
       if (!codDistribuidor) continue
       const valorFrete = group.hasFreight ? Number(group.freightValue ?? 0) : 0
-      const res = await upsertOC(branchCnpj, codDistribuidor, group.products ?? [], business, obs, dealId, gIdx, upsertOpts, purchaseCodParc, valorFrete, String(group.deliveryDeadline ?? ''))
+      // Condicao de compra do fornecedor; vazia, vale a do negocio.
+      const condGrupo = String(group.purchasePaymentCondition ?? '').trim()
+      const codParcGrupo = condGrupo
+        ? await resolvePaymentCodeForOmie(condGrupo, 'purchase')
+        : purchaseCodParc
+      const res = await upsertOC(branchCnpj, codDistribuidor, group.products ?? [], business, obs, dealId, gIdx, upsertOpts, codParcGrupo, valorFrete, String(group.deliveryDeadline ?? ''))
       if (res) ocResults.push({ ...res, _supplier: group.supplier?.name, _groupIdx: gIdx })
     }
 

@@ -389,7 +389,8 @@ function preencheAba(
   set('K4', paraData(group?.deliveryDeadline || business.deliveryDeadline))
   set('O4', paraData(business.expectedBillingDate))
   const condicao = (v: unknown) => { const c = txt(v); return condicoes.get(c) || c }
-  set('K6', condicao(business.purchasePaymentCondition))
+  // Condicao de compra deste fornecedor; vazia, vale a do negocio.
+  set('K6', condicao(group?.purchasePaymentCondition || business.purchasePaymentCondition))
   set('O6', condicao(business.salePaymentCondition))
 
   // ── Distribuidor / Fornecedor ──────────────────────────────────────────────
