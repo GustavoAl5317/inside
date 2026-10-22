@@ -6,7 +6,9 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
-import { Trash2, Plus, Search, Users, Building2, ChevronDown, ChevronUp, Eye, Loader2, ExternalLink } from "lucide-react"
+import { Trash2, Plus, Search, Users, Building2, ChevronDown, ChevronUp, Eye, Loader2, ExternalLink, RefreshCw } from "lucide-react"
+import { PaymentConditionSelect } from "@/components/payment-condition-select"
+import { faltaNoCliente } from "@/lib/dados-obrigatorios"
 import { searchBitrixCompaniesAction, getBitrixCompanyDetailsAction, createBitrixClientAction, lookupCnpjAction } from "@/lib/actions"
 import { isCNPJComplete, formatCNPJ, formatCurrency } from "@/lib/utils"
 import { CurrencyInput } from "@/components/ui/currency-input"
@@ -695,20 +697,48 @@ function CustomerCard({
    * dados de antes da correção. Contato e PO ficam como estão: são digitados
    * aqui e não vêm do Bitrix.
    */
-  const recarregarDoBitrix = async () => {
+  const recarregarDoBitrix = async (avisar = false) => {
     const id = Number(customer?.bitrixCompanyId)
-    if (!id) return
-    const { success, ...dados } = await getBitrixCompanyDetailsAction(id)
-    if (!success || !dados.name) return
-    form.setValue(`${basePath}.customer`, {
-      ...customer, ...dados,
-      contactName:   customer?.contactName || dados.contactName || "",
-      purchaseOrder: customer?.purchaseOrder ?? "",
-    }, { shouldDirty: true })
-    toast.success("Cadastro recarregado do Bitrix.")
+    if (!id) {
+      if (avisar) toast.error("Este cliente não veio da base do Bitrix. Remova e adicione de novo pela busca.")
+      return
+    }
+    setRecarregando(true)
+    try {
+      const { success, ...dados } = await getBitrixCompanyDetailsAction(id)
+      if (!success || !dados.name) {
+        if (avisar) toast.error("Não foi possível ler o cadastro no Bitrix.")
+        return
+      }
+      form.setValue(`${basePath}.customer`, {
+        ...customer, ...dados,
+        contactName:   customer?.contactName || dados.contactName || "",
+        purchaseOrder: customer?.purchaseOrder ?? "",
+      }, { shouldDirty: true })
+      if (!avisar) { toast.success("Cadastro recarregado do Bitrix."); return }
+
+      const faltando = faltaNoCliente({ ...customer, ...dados })
+      if (faltando.length) {
+        toast.warning(`Atualizado, mas o Bitrix não tem ${faltando.join(', ')}.`, {
+          description: 'Corrija no Bitrix pelo link ao lado do nome e atualize de novo.',
+          duration: 10000,
+        })
+      } else {
+        toast.success("Cadastro atualizado pelo Bitrix.")
+      }
+    } finally {
+      setRecarregando(false)
+    }
   }
 
+  const [recarregando, setRecarregando] = useState(false)
   const contactMissing = !String(customer?.contactName ?? '').trim()
+  // O que o Omie exige e o Bitrix nem sempre tem — sem UF, por exemplo, a OS cai
+  // com "Cidade não cadastrada" depois de a OC já ter sido criada.
+  const faltandoNoCadastro = faltaNoCliente(customer)
+  const condicaoVendaFaltando = !String(
+    form.watch(`${basePath}.salePaymentCondition`) || form.watch('business.salePaymentCondition') || '',
+  ).trim()
   // Cadastro acima do limite do Omie faz o envio parar no cadastro do cliente.
   const camposForaDoLimite = camposExcedidos(customer)
 
@@ -739,6 +769,19 @@ function CustomerCard({
                   <ExternalLink className="w-3 h-3" /> Bitrix
                 </button>
               )}
+              {/* Busca de novo o cadastro no Bitrix: endereço e contato mudam lá
+                  depois que o negócio foi montado, e era o dado velho que ia ao Omie. */}
+              <button
+                type="button"
+                onClick={() => recarregarDoBitrix(true)}
+                disabled={recarregando}
+                title="Buscar os dados atualizados desta empresa no Bitrix"
+                className="shrink-0 inline-flex items-center gap-1 text-[11px] font-medium text-purple-600 hover:text-purple-800 underline underline-offset-2 decoration-dotted disabled:opacity-50"
+              >
+                {recarregando
+                  ? <Loader2 className="w-3 h-3 animate-spin" />
+                  : <RefreshCw className="w-3 h-3" />} Atualizar
+              </button>
               {filiaisDoCliente.length === 0 ? (
                 <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full border bg-gray-100 text-gray-500 border-gray-300">
                   sem alocação
@@ -794,6 +837,29 @@ function CustomerCard({
       {camposForaDoLimite.length > 0 && (
         <div className="px-4 pt-3">
           <OmieLimitAlert company={customer} />
+        </div>
+      )}
+
+      {/* Condição de pagamento da venda deste cliente. Saiu da aba Negócio:
+          cada cliente pode ter um prazo, e a OV/OS dele vai com ele. */}
+      <div className="px-4 py-2.5 border-b border-gray-100 bg-white flex items-center gap-3">
+        <label className={`text-[11px] font-semibold uppercase shrink-0 ${
+          condicaoVendaFaltando ? 'text-red-600' : 'text-gray-500'
+        }`}>
+          Cond. venda {condicaoVendaFaltando && '*'}
+        </label>
+        <PaymentConditionSelect
+          kind="sale"
+          className={`h-7 text-xs max-w-xs ${condicaoVendaFaltando ? 'border-red-300' : ''}`}
+          value={form.watch(`${basePath}.salePaymentCondition`) || ""}
+          onChange={v => form.setValue(`${basePath}.salePaymentCondition`, v, { shouldDirty: true })}
+        />
+      </div>
+
+      {/* O Omie recusa o envio no meio quando falta algum destes. */}
+      {faltandoNoCadastro.length > 0 && (
+        <div className="px-4 py-2 border-b border-red-100 bg-red-50 text-[11px] text-red-700">
+          Cadastro incompleto: falta {faltandoNoCadastro.join(', ')}. Corrija no Bitrix e clique em Atualizar.
         </div>
       )}
 

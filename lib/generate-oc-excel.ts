@@ -391,7 +391,7 @@ function preencheAba(
   const condicao = (v: unknown) => { const c = txt(v); return condicoes.get(c) || c }
   // Condicao de compra deste fornecedor; vazia, vale a do negocio.
   set('K6', condicao(group?.purchasePaymentCondition || business.purchasePaymentCondition))
-  set('O6', condicao(business.salePaymentCondition))
+  set('O6', condicao(entry?.salePaymentCondition || business.salePaymentCondition))
 
   // ── Distribuidor / Fornecedor ──────────────────────────────────────────────
   // O bloco inteiro vinha de VLOOKUP em Fornecedores_Pasta, que vira #NOME?
@@ -575,9 +575,20 @@ export async function generateOcExcelFiles(values: any, dealId?: number | null):
   const codigoCond = async (raw: unknown, kind: 'purchase' | 'sale') => {
     try { return await resolvePaymentCodeForOmie(txt(raw), kind) } catch { return txt(raw) || '—' }
   }
+  // A condicao de venda e de cada cliente. Resolve uma vez por valor distinto e
+  // guarda no mapa: varios clientes costumam usar a mesma.
+  const porCliente = new Map<string, string>()
+  for (const raw of [
+    ...(values?.customers ?? []).map((c: any) => c?.salePaymentCondition),
+    ...(values?.serviceCustomers ?? []).map((c: any) => c?.salePaymentCondition),
+  ]) {
+    const chave = txt(raw)
+    if (chave && !porCliente.has(chave)) porCliente.set(chave, await codigoCond(chave, 'sale'))
+  }
   const condicoesOmie = {
     condicaoCompra: await codigoCond(business.purchasePaymentCondition, 'purchase'),
     condicaoVenda:  await codigoCond(business.salePaymentCondition, 'sale'),
+    condicaoVendaDe: (entry: any) => porCliente.get(txt(entry?.salePaymentCondition)) ?? '',
     rotulo: (v: unknown) => { const c = txt(v); return condicoes.get(c) || c },
   }
   const saida: OcExcelFile[] = []

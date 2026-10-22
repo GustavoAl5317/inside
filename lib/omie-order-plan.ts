@@ -267,7 +267,14 @@ function itemDeProduto(e: any, seq: number, valor: number, ncmZeradoParaServico:
 export function buildOmiePlan(
   values: any,
   dealId: number | null,
-  opts: { condicaoCompra: string; condicaoVenda: string; rotulo: (v: string) => string },
+  // condicaoVendaDe resolve a condicao de cada cliente; condicaoVenda e a reserva
+  // dos negocios gravados antes de ela passar a ser por cliente.
+  opts: {
+    condicaoCompra: string
+    condicaoVenda: string
+    rotulo: (v: string) => string
+    condicaoVendaDe?: (entry: any) => string
+  },
   escopo?: { groupLocalId?: string; servicoInteratell?: boolean },
 ): OmiePlan {
   const business = values?.business ?? {}
@@ -363,8 +370,8 @@ export function buildOmiePlan(
       parteTipo: 'Cliente' as const,
       parteNome: String(cliente.name ?? ''),
       parteCnpj: String(cliente.cnpj ?? ''),
-      condicaoPagamento: opts.condicaoVenda,
-      condicaoPagamentoLabel: opts.rotulo(business.salePaymentCondition),
+      condicaoPagamento: opts.condicaoVendaDe?.(entry) || opts.condicaoVenda,
+      condicaoPagamentoLabel: opts.rotulo(entry.salePaymentCondition || business.salePaymentCondition),
       numeroPedidoCliente: pedidoCliente,
       valorFrete: 0,
     }
@@ -478,8 +485,8 @@ export function buildOmiePlan(
       parteTipo: 'Cliente',
       parteNome: String(cliente.name ?? ''),
       parteCnpj: String(cliente.cnpj ?? ''),
-      condicaoPagamento: opts.condicaoVenda,
-      condicaoPagamentoLabel: opts.rotulo(business.salePaymentCondition),
+      condicaoPagamento: opts.condicaoVendaDe?.(entry) || opts.condicaoVenda,
+      condicaoPagamentoLabel: opts.rotulo(entry.salePaymentCondition || business.salePaymentCondition),
       etapa: '20',
       dataPrevisao: dtPrevisao,
       numeroPedidoCliente: pedidoCliente,
@@ -513,8 +520,14 @@ export function buildOmiePlan(
       (escopo?.groupLocalId ? supplierGroups[0]?.purchasePaymentCondition : '')
       || business?.purchasePaymentCondition,
     ),
-    condicaoVenda: opts.condicaoVenda,
-    condicaoVendaLabel: opts.rotulo(business?.salePaymentCondition),
+    // Recortado: a condicao do cliente daquele arquivo. Sem recorte, a do negocio.
+    condicaoVenda: (todosClientes.length === 1 || soServico
+      ? opts.condicaoVendaDe?.(todosClientes[0] ?? (values?.serviceCustomers ?? [])[0])
+      : '') || opts.condicaoVenda,
+    condicaoVendaLabel: opts.rotulo(
+      (todosClientes.length === 1 ? todosClientes[0]?.salePaymentCondition : '')
+      || business?.salePaymentCondition,
+    ),
     obsExterna, obsInterna,
     docs,
   }

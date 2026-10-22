@@ -34,6 +34,7 @@ import OmieLogsModal from "@/components/omie-logs-modal"
 import { toast } from "sonner"
 import { formatCNPJ, isCNPJComplete } from "@/lib/utils"
 import { formatPaymentConditionLabel } from "@/lib/payment-condition-utils"
+import { faltaNoCliente, resumoPendencias } from "@/lib/dados-obrigatorios"
 import {
   CheckCircle,
   AlertCircle,
@@ -124,6 +125,9 @@ const customerEntrySchema = z.object({
     purchaseOrder: z.string().optional(),
   }),
   productAllocations: z.array(productAllocationSchema),
+  // Condicao de pagamento da venda para este cliente. Saiu da aba Negocio: cada
+  // cliente pode ter um prazo, e a OV/OS dele vai com ele.
+  salePaymentCondition: z.string().optional(),
 })
 
 /**
@@ -147,6 +151,7 @@ const serviceCustomerSchema = z.object({
     purchaseOrder: z.string().optional(),
   }),
   items: z.array(serviceItemSchema).min(1, "Adicione pelo menos um serviço"),
+  salePaymentCondition: z.string().optional(),
   // Número de Ordem de Compra da OS de serviço Interatell (lista #35 do Bitrix).
   ocNumber:    z.string().optional(),
   ocElementId: z.number().optional(),
@@ -191,15 +196,10 @@ const formSchema = z.object({
 }).superRefine((v, ctx) => {
   const semServico = !(v.serviceCustomers?.length ?? 0)
   const msgServico = 'Adicione pelo menos um cliente de serviço Interatell'
+  // A condição de venda é de cada cliente; aqui fica só o que é do negócio.
   // Sempre há venda: produto comprado e não alocado simplesmente não entra na
-  // OV, mas o negócio continua tendo cliente e condição de venda.
+  // OV, mas o negócio continua tendo cliente e previsão de faturamento.
   const exigeVenda = () => {
-    if (!String(v.business.salePaymentCondition ?? '').trim()) {
-      ctx.addIssue({
-        code: "custom", path: ['business', 'salePaymentCondition'],
-        message: 'Condição de pagamento de venda é obrigatória',
-      })
-    }
     if (!String(v.business.expectedBillingDate ?? '').trim()) {
       ctx.addIssue({
         code: "custom", path: ['business', 'expectedBillingDate'],
@@ -207,6 +207,15 @@ const formSchema = z.object({
       })
     }
   }
+
+  ;(v.serviceCustomers ?? []).forEach((c, i) => {
+    if (!String(c.salePaymentCondition || v.business.salePaymentCondition || '').trim()) {
+      ctx.addIssue({
+        code: "custom", path: ['serviceCustomers', i, 'salePaymentCondition'],
+        message: 'Informe a condição de pagamento de venda deste cliente de serviço',
+      })
+    }
+  })
 
   if (v.business.onlyInteratellService) {
     if (semServico) ctx.addIssue({ code: "custom", path: ['serviceCustomers'], message: msgServico })
@@ -217,12 +226,22 @@ const formSchema = z.object({
   if (!v.supplierGroups.length) {
     ctx.addIssue({ code: "custom", path: ['supplierGroups'], message: 'Adicione pelo menos um fornecedor' })
   }
-  if (!String(v.business.purchasePaymentCondition ?? '').trim()) {
-    ctx.addIssue({
-      code: "custom", path: ['business', 'purchasePaymentCondition'],
-      message: 'Condição de pagamento de compra é obrigatória',
-    })
-  }
+  v.supplierGroups.forEach((g, i) => {
+    if (!String(g.purchasePaymentCondition || v.business.purchasePaymentCondition || '').trim()) {
+      ctx.addIssue({
+        code: "custom", path: ['supplierGroups', i, 'purchasePaymentCondition'],
+        message: 'Informe a condição de pagamento de compra deste fornecedor',
+      })
+    }
+  })
+  v.customers.forEach((c, i) => {
+    if (!String(c.salePaymentCondition || v.business.salePaymentCondition || '').trim()) {
+      ctx.addIssue({
+        code: "custom", path: ['customers', i, 'salePaymentCondition'],
+        message: 'Informe a condição de pagamento de venda deste cliente',
+      })
+    }
+  })
 
   if (!v.customers.length) {
     ctx.addIssue({ code: "custom", path: ['customers'], message: 'Adicione pelo menos um cliente' })
@@ -608,12 +627,6 @@ export function MultiStepForm({
       // A condição de compra saiu do schema base (negócio só de serviço não tem
       // compra); sem esta checagem o campo vazio só apareceria no envio final.
       const b = form.getValues("business")
-      if (!b.onlyInteratellService && !String(b.purchasePaymentCondition ?? '').trim()) {
-        form.setError("business.purchasePaymentCondition", {
-          type: "manual", message: "Condição de pagamento de compra é obrigatória",
-        })
-        return false
-      }
       return true
     }
     if (tabId === "suppliers") {
@@ -621,6 +634,16 @@ export function MultiStepForm({
       if (!groups?.length) { toast.error("Adicione pelo menos um fornecedor com produtos."); return false }
       if (groups.some((g: any) => !g.products?.length)) {
         toast.error("Todos os grupos de fornecedores precisam ter pelo menos um produto."); return false
+      }
+      const reservaCompra = form.getValues("business.purchasePaymentCondition")
+      const semCondicaoCompra = groups
+        .filter((g: any) => !String(g.purchasePaymentCondition || reservaCompra || '').trim())
+        .map((g: any) => g.supplier?.name || 'Fornecedor sem nome')
+      if (semCondicaoCompra.length) {
+        toast.error("Informe a condição de pagamento de compra antes de prosseguir.", {
+          description: semCondicaoCompra.join(' · '), duration: 8000,
+        })
+        return false
       }
       // O prazo é por fornecedor e vai como dDtPrevisao da OC dele.
       const semPrazo = groups
@@ -642,15 +665,27 @@ export function MultiStepForm({
       if (customers.some((c: any) => !c.productAllocations?.filter((a: any) => a.quantity > 0).length)) {
         toast.error("Todos os clientes precisam ter pelo menos um produto alocado."); return false
       }
-      const semContato = customers
-        .map((c: any, i: number) => (!String(c.customer?.contactName ?? '').trim() ? i + 1 : 0))
-        .filter(Boolean)
-      if (semContato.length) {
-        toast.error(
-          semContato.length === 1
-            ? `Informe o contato do cliente ${semContato[0]}.`
-            : `Informe o contato dos clientes ${semContato.join(', ')}.`
-        )
+      // O Omie recusa o envio no meio quando falta CNPJ, cidade, UF ou contato —
+      // cliente sem UF faz a OS cair com "Cidade não cadastrada", depois de a OC
+      // já ter sido criada. A conferência fica aqui, antes de prosseguir.
+      const pendencias = resumoPendencias(
+        customers.map((c: any) => ({ nome: c.customer?.name, faltando: faltaNoCliente(c.customer) })),
+      )
+      if (pendencias) {
+        toast.error("Corrija o cadastro do cliente antes de prosseguir.", {
+          description: `${pendencias}. Use o botão Atualizar para buscar no Bitrix, ou o link Bitrix para corrigir lá.`,
+          duration: 12000,
+        })
+        return false
+      }
+      const reservaVenda = form.getValues("business.salePaymentCondition")
+      const semCondicaoVenda = customers
+        .filter((c: any) => !String(c.salePaymentCondition || reservaVenda || '').trim())
+        .map((c: any) => c.customer?.name || 'Cliente sem nome')
+      if (semCondicaoVenda.length) {
+        toast.error("Informe a condição de pagamento de venda antes de prosseguir.", {
+          description: semCondicaoVenda.join(' · '), duration: 8000,
+        })
         return false
       }
       return true
@@ -663,6 +698,26 @@ export function MultiStepForm({
       }
       if (svc.some((s: any) => s.items.some((i: any) => !String(i.description ?? '').trim()))) {
         toast.error("Descreva todos os serviços adicionados."); return false
+      }
+      const pendenciasSvc = resumoPendencias(
+        svc.map((c: any) => ({ nome: c.customer?.name, faltando: faltaNoCliente(c.customer) })),
+      )
+      if (pendenciasSvc) {
+        toast.error("Corrija o cadastro do cliente de serviço antes de prosseguir.", {
+          description: `${pendenciasSvc}. Use o botão Atualizar para buscar no Bitrix, ou o link Bitrix para corrigir lá.`,
+          duration: 12000,
+        })
+        return false
+      }
+      const reservaSvc = form.getValues("business.salePaymentCondition")
+      const semCondicaoSvc = svc
+        .filter((c: any) => !String(c.salePaymentCondition || reservaSvc || '').trim())
+        .map((c: any) => c.customer?.name || 'Cliente sem nome')
+      if (semCondicaoSvc.length) {
+        toast.error("Informe a condição de pagamento de venda antes de prosseguir.", {
+          description: semCondicaoSvc.join(' · '), duration: 8000,
+        })
+        return false
       }
       return true
     }
@@ -789,6 +844,16 @@ export function MultiStepForm({
       values.business.deliveryDeadline = deriveDeliveryDeadline(
         values.supplierGroups, values.business.expectedBillingDate ?? '',
       )
+      // PDF, relatório e o diff de alterações leem a condição no negócio. Ela
+      // agora mora no fornecedor e no cliente, então o campo do negócio guarda a
+      // primeira delas, como resumo.
+      values.business.purchasePaymentCondition =
+        String(values.business.purchasePaymentCondition ?? '').trim()
+        || String(values.supplierGroups?.[0]?.purchasePaymentCondition ?? '')
+      values.business.salePaymentCondition =
+        String(values.business.salePaymentCondition ?? '').trim()
+        || String(values.customers?.[0]?.salePaymentCondition ?? values.serviceCustomers?.[0]?.salePaymentCondition ?? '')
+
       pruneAllocations(values)
       const payload = {
         bitrixDealId:       values.bitrixDealId || null,

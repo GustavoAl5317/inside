@@ -4,53 +4,15 @@ import { useState, useEffect } from "react"
 import type { UseFormReturn } from "react-hook-form"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { getBitrixAllPaymentConditionsAction } from "@/lib/actions"
 
 interface BusinessTabProps {
   form: UseFormReturn<any>
 }
 
 export function BusinessTab({ form }: BusinessTabProps) {
-  const [purchaseConditions, setPurchaseConditions] = useState<any[]>([])
-  const [saleConditions, setSaleConditions] = useState<any[]>([])
-  const [isLoadingConditions, setIsLoadingConditions] = useState(true)
-  // false = BX24 disponível, true = fora do Bitrix24 (digitar manualmente)
-  const [manualMode, setManualMode] = useState(false)
-  // Negócio só de serviço Interatell não tem compra: some a condição de compra.
+
+  // Negócio só de serviço Interatell: sem fornecedor e sem compra.
   const onlyService = !!form.watch("business.onlyInteratellService")
-
-  /**
-   * Garante que o valor salvo no rascunho apareca no Select mesmo quando a opcao
-   * nao vem mais da lista do Bitrix (condicao desativada, renomeada ou fora da
-   * pagina retornada). Sem isso o campo abre em branco e a selecao do rascunho
-   * parece ter sumido.
-   */
-  const withSaved = (options: any[], value: unknown) => {
-    const v = String(value ?? '').trim()
-    if (!v || options.some(c => (c.code || c.name) === v)) return options
-    return [...options, { id: `__saved__${v}`, code: v, name: `${v} (fora da lista atual)` }]
-  }
-
-  useEffect(() => {
-    const load = async () => {
-      setIsLoadingConditions(true)
-      try {
-        const res = await getBitrixAllPaymentConditionsAction()
-        if (res.success) {
-          setPurchaseConditions(res.purchase)
-          setSaleConditions(res.sale)
-        } else {
-          setManualMode(true)
-        }
-      } catch {
-        setManualMode(true)
-      } finally {
-        setIsLoadingConditions(false)
-      }
-    }
-    load()
-  }, [])
 
   // Número da proposta comercial sempre com o prefixo "2026." e travado.
   const commercialProposal = form.watch("business.commercialProposal")
@@ -127,79 +89,6 @@ export function BusinessTab({ form }: BusinessTabProps) {
           />
         </div>
 
-        <div className="grid grid-cols-1 gap-4">
-          {!onlyService && (
-          <FormField
-            control={form.control}
-            name="business.purchasePaymentCondition"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Condição de Pagamento de Compra</FormLabel>
-                {manualMode ? (
-                  <FormControl>
-                    <Input placeholder="Ex: A28 - Para 28 Dias" {...field} />
-                  </FormControl>
-                ) : (
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder={isLoadingConditions ? "Carregando..." : "Selecione uma condição"} />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {isLoadingConditions ? (
-                        <SelectItem value="__loading__" disabled>Carregando...</SelectItem>
-                      ) : purchaseConditions.length > 0 ? (
-                        withSaved(purchaseConditions, field.value).map((c) => (
-                          <SelectItem key={c.id} value={c.code || c.name}>{c.name}</SelectItem>
-                        ))
-                      ) : (
-                        <SelectItem value="__none__" disabled>Nenhuma condição cadastrada</SelectItem>
-                      )}
-                    </SelectContent>
-                  </Select>
-                )}
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          )}
-        </div>
-
-        <FormField
-          control={form.control}
-          name="business.salePaymentCondition"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Condição de Pagamento de Venda</FormLabel>
-              {manualMode ? (
-                <FormControl>
-                  <Input placeholder="Ex: T54 - Para 30 Dias" {...field} />
-                </FormControl>
-              ) : (
-                <Select onValueChange={field.onChange} value={field.value}>
-                  <FormControl>
-                    <SelectTrigger>
-                      <SelectValue placeholder={isLoadingConditions ? "Carregando..." : "Selecione uma condição"} />
-                    </SelectTrigger>
-                  </FormControl>
-                  <SelectContent>
-                    {isLoadingConditions ? (
-                      <SelectItem value="__loading__" disabled>Carregando...</SelectItem>
-                    ) : saleConditions.length > 0 ? (
-                      withSaved(saleConditions, field.value).map((c) => (
-                        <SelectItem key={c.id} value={c.code || c.name}>{c.name}</SelectItem>
-                      ))
-                    ) : (
-                      <SelectItem value="__none__" disabled>Nenhuma condição cadastrada</SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
-              )}
-              <FormMessage />
-            </FormItem>
-          )}
-        />
 
         {/* Serviço Interatell (SRV): não passa por fornecedor, é vendido direto
             ao cliente — por isso abre um step próprio e gera uma planilha separada. */}

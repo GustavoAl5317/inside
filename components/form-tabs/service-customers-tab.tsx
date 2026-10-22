@@ -6,7 +6,10 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { Badge } from "@/components/ui/badge"
-import { Trash2, Plus, Wrench, Building2, Eye, ExternalLink } from "lucide-react"
+import { Trash2, Plus, Wrench, Building2, Eye, ExternalLink, RefreshCw } from "lucide-react"
+import { PaymentConditionSelect } from "@/components/payment-condition-select"
+import { getBitrixCompanyDetailsAction } from "@/lib/actions"
+import { faltaNoCliente } from "@/lib/dados-obrigatorios"
 import { abrirEmpresaBitrix } from "@/lib/bx24-open"
 import { formatCurrency } from "@/lib/utils"
 import { CustomerDialog } from "./customers-tab"
@@ -74,6 +77,38 @@ export function ServiceCustomersTab({ form }: ServiceCustomersTabProps) {
     const items = [...(form.getValues(path) || [])]
     items.splice(itemIdx, 1)
     form.setValue(path, items, { shouldDirty: true })
+  }
+
+  /**
+   * Busca de novo o cadastro da empresa no Bitrix e avisa o que ainda falta:
+   * sem UF o Omie recusa a OS com "Cidade não cadastrada".
+   */
+  const atualizarDoBitrix = async (idx: number, entry: any) => {
+    const id = Number(entry?.customer?.bitrixCompanyId)
+    if (!id) {
+      toast.error("Este cliente não veio da base do Bitrix. Remova e adicione de novo pela busca.")
+      return
+    }
+    const { success, ...dados } = await getBitrixCompanyDetailsAction(id)
+    if (!success || !dados.name) {
+      toast.error("Não foi possível ler o cadastro no Bitrix.")
+      return
+    }
+    const atualizado = {
+      ...entry.customer, ...dados,
+      bitrixCompanyId: id,
+      contactName: entry.customer?.contactName || dados.contactName || "",
+    }
+    form.setValue(`serviceCustomers.${idx}.customer`, atualizado, { shouldDirty: true })
+    const faltando = faltaNoCliente(atualizado)
+    if (faltando.length) {
+      toast.warning(`Atualizado, mas o Bitrix não tem ${faltando.join(', ')}.`, {
+        description: 'Corrija no Bitrix pelo link ao lado do nome e atualize de novo.',
+        duration: 10000,
+      })
+    } else {
+      toast.success("Cadastro atualizado pelo Bitrix.")
+    }
   }
 
   /** Recalcula o total da linha sempre que quantidade ou valor muda. */
@@ -154,6 +189,16 @@ export function ServiceCustomersTab({ form }: ServiceCustomersTabProps) {
                         <ExternalLink className="w-3 h-3" /> Bitrix
                       </button>
                     )}
+                    {/* Busca de novo o cadastro no Bitrix: endereço e contato
+                        mudam lá depois que o negócio foi montado. */}
+                    <button
+                      type="button"
+                      onClick={() => atualizarDoBitrix(idx, entry)}
+                      title="Buscar os dados atualizados desta empresa no Bitrix"
+                      className="shrink-0 inline-flex items-center gap-1 text-[11px] font-medium text-teal-700 hover:text-teal-900 underline underline-offset-2 decoration-dotted"
+                    >
+                      <RefreshCw className="w-3 h-3" /> Atualizar
+                    </button>
                   </div>
                   <p className="text-xs text-gray-500 font-mono mt-0.5">
                     {entry.customer?.cnpj || "—"}
@@ -181,6 +226,24 @@ export function ServiceCustomersTab({ form }: ServiceCustomersTabProps) {
                 </div>
               </div>
 
+              {/* Condição de pagamento da venda deste cliente de serviço. */}
+              <div className="flex items-center gap-3 mt-2">
+                <label className="text-[11px] font-semibold uppercase shrink-0 text-gray-500">
+                  Cond. venda
+                </label>
+                <PaymentConditionSelect
+                  kind="sale"
+                  className="h-7 text-xs max-w-xs bg-white"
+                  value={form.watch(`serviceCustomers.${idx}.salePaymentCondition`) || ""}
+                  onChange={v => form.setValue(`serviceCustomers.${idx}.salePaymentCondition`, v, { shouldDirty: true })}
+                />
+              </div>
+
+              {faltaNoCliente(entry.customer).length > 0 && (
+                <p className="mt-2 text-[11px] text-red-700">
+                  Cadastro incompleto: falta {faltaNoCliente(entry.customer).join(', ')}. Corrija no Bitrix e clique em Atualizar.
+                </p>
+              )}
             </div>
 
             {/* Itens de serviço */}

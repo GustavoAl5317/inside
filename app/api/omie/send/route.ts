@@ -1284,7 +1284,15 @@ async function processDeal(body: any, dealId: number) {
     const purchaseCodParc = supplierGroups.length
       ? await resolvePaymentCodeForOmie(business?.purchasePaymentCondition ?? '', 'purchase')
       : ''
-    const saleCodParc = await resolvePaymentCodeForOmie(business?.salePaymentCondition ?? '', 'sale')
+    // A condicao de venda e de cada cliente; a do negocio e a reserva dos que
+    // foram montados antes disso. O cache evita repetir a consulta ao Bitrix
+    // quando varios clientes usam a mesma condicao.
+    const parcelaCache = new Map<string, string>()
+    const codigoVenda = async (entry: any) => {
+      const valor = String(entry?.salePaymentCondition || business?.salePaymentCondition || '').trim()
+      if (!parcelaCache.has(valor)) parcelaCache.set(valor, await resolvePaymentCodeForOmie(valor, 'sale'))
+      return parcelaCache.get(valor)!
+    }
 
     // 1a) Garantir FORNECEDORES no Omie — usa credenciais da filial do grupo
     for (const group of supplierGroups) {
@@ -1351,6 +1359,7 @@ async function processDeal(body: any, dealId: number) {
     //    dois pedidos quando recebe itens comprados em filiais diferentes.
     for (let cIdx = 0; cIdx < customers.length; cIdx++) {
       const entry = customers[cIdx]
+      const saleCodParc = await codigoVenda(entry)
       const porFilial = itensPorFilial(entry, supplierGroups)
 
       // SRV e sempre faturado por Barueri, venha de onde vier a compra. Sai do
@@ -1406,7 +1415,7 @@ async function processDeal(body: any, dealId: number) {
       // previsão de faturamento do negócio.
       const os = await upsertOS(
         CNPJ_BARUERI, codCliente, entry.customer, items, 'SRV', '',
-        business, obs, dealId, customers.length + sIdx, upsertOpts, saleCodParc, 'barueri',
+        business, obs, dealId, customers.length + sIdx, upsertOpts, await codigoVenda(entry), 'barueri',
       )
       if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: 'SRV', _interatellService: true, _filial: 'barueri', _servicoIdx: sIdx })
     }
