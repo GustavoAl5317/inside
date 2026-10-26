@@ -32,7 +32,7 @@ import type { BitrixInsideSalesItem, CardDetails } from "@/lib/bitrix-service"
 import type { FormMode } from "./inside-sales-layout"
 import OmieLogsModal from "@/components/omie-logs-modal"
 import { toast } from "sonner"
-import { formatCNPJ, isCNPJComplete } from "@/lib/utils"
+import { formatCNPJ, isCNPJComplete, codigoProduto } from "@/lib/utils"
 import { formatPaymentConditionLabel } from "@/lib/payment-condition-utils"
 import { faltaNoCliente, resumoPendencias } from "@/lib/dados-obrigatorios"
 import {
@@ -227,6 +227,17 @@ const formSchema = z.object({
     ctx.addIssue({ code: "custom", path: ['supplierGroups'], message: 'Adicione pelo menos um fornecedor' })
   }
   v.supplierGroups.forEach((g, i) => {
+    // Sem família o Omie cadastra o produto sem classificação, e o pedido sai
+    // errado para o financeiro. Vale para todos: licença, software e serviço
+    // também têm família própria.
+    g.products.forEach((p, j) => {
+      if (!String(p.family ?? '').trim()) {
+        ctx.addIssue({
+          code: "custom", path: ['supplierGroups', i, 'products', j, 'family'],
+          message: 'Informe a família Omie deste produto',
+        })
+      }
+    })
     if (!String(g.purchasePaymentCondition || v.business.purchasePaymentCondition || '').trim()) {
       ctx.addIssue({
         code: "custom", path: ['supplierGroups', i, 'purchasePaymentCondition'],
@@ -634,6 +645,17 @@ export function MultiStepForm({
       if (!groups?.length) { toast.error("Adicione pelo menos um fornecedor com produtos."); return false }
       if (groups.some((g: any) => !g.products?.length)) {
         toast.error("Todos os grupos de fornecedores precisam ter pelo menos um produto."); return false
+      }
+      const semFamilia = groups.flatMap((g: any) =>
+        (g.products ?? [])
+          .filter((p: any) => !String(p.family ?? '').trim())
+          .map((p: any) => `${g.supplier?.name || 'Fornecedor sem nome'}: ${codigoProduto(p) || p.description || 'produto sem código'}`),
+      )
+      if (semFamilia.length) {
+        toast.error("Informe a família Omie antes de prosseguir.", {
+          description: semFamilia.join(' · '), duration: 10000,
+        })
+        return false
       }
       const reservaCompra = form.getValues("business.purchasePaymentCondition")
       const semCondicaoCompra = groups
