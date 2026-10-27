@@ -12,8 +12,9 @@ import { aguardaFreio, freioDepois } from './omie-freio'
  *   - Omie, PesquisarPedCompra: número da OC, fornecedor, itens, quantidade,
  *     custo unitário e data do pedido.
  *   - Omie, ListarNF: NF do distribuidor (tpNF 0) e NF da Interatell (tpNF 1).
- *     A de entrada liga à OC por ConsultarRecebimento; a de saída traz o id do
- *     Pedido de Venda em compl.nIdPedido.
+ *     A de entrada liga à OC por ConsultarRecebimento, pelo id ou pelo número do
+ *     pedido que cada item do recebimento guarda; a de saída traz o id do Pedido
+ *     de Venda em compl.nIdPedido.
  *   - Bitrix, card de Inside Sales: cliente, proposta, Account e o Número de
  *     Ordem de Compra da lista #35 ("3187/25"). O card guarda esses números em
  *     texto ("OC 9174/26 - 2602010345 - HW"), e é por ele que a OC do Omie se
@@ -162,26 +163,35 @@ async function buscaNotas(filial: Filial, de: string, ate: string, ctx: { chamad
   return { entrada, saida }
 }
 
+interface NotaDeEntrada { nf: string; data: string }
+
 /**
  * NF de entrada por Ordem de Compra.
  *
  * A nota não aponta para a OC: aponta para o recebimento, e é o recebimento que
- * guarda o id do pedido em cada item. Uma consulta por nota.
+ * guarda o vínculo em cada item. Uma consulta por nota.
+ *
+ * O vínculo vem em dois lugares do item, e os dois servem: `itensCabec.nIdPedido`
+ * é o id interno do pedido e `itensInfoAdic.nNumPedCompra` é o número dele. Por
+ * isso saem dois índices: quando o id não vem preenchido, o número encontra.
  */
 async function notasPorOC(filial: Filial, entrada: any[], ctx: { chamadas: number }) {
-  const porPedido = new Map<number, { nf: string; data: string }>()
+  const porId = new Map<number, NotaDeEntrada>()
+  const porNumero = new Map<string, NotaDeEntrada>()
   for (const nf of entrada) {
     const idReceb = Number(nf?.compl?.nIdReceb ?? 0)
     if (!idReceb) continue
     const d = await chamada(filial, OMIE_URL.RECEBIMENTO, 'ConsultarRecebimento', { nIdReceb: idReceb }, ctx)
     if (d?.faultstring) continue
-    const dados = { nf: semZeros(nf?.ide?.nNF), data: paraISO(nf?.ide?.dEmi) }
+    const dados: NotaDeEntrada = { nf: semZeros(nf?.ide?.nNF), data: paraISO(nf?.ide?.dEmi) }
     for (const item of (d?.itensRecebimento ?? [])) {
-      const idPedido = Number(item?.nIdPedido ?? 0)
-      if (idPedido && !porPedido.has(idPedido)) porPedido.set(idPedido, dados)
+      const idPedido = Number(item?.itensCabec?.nIdPedido ?? 0)
+      if (idPedido && !porId.has(idPedido)) porId.set(idPedido, dados)
+      const numero = semZeros(item?.itensInfoAdic?.nNumPedCompra)
+      if (numero && !porNumero.has(numero)) porNumero.set(numero, dados)
     }
   }
-  return porPedido
+  return { porId, porNumero }
 }
 
 /** Razão social do fornecedor, uma consulta por código distinto. */
@@ -296,11 +306,14 @@ export async function montaStatusOc(de: string, ate: string): Promise<StatusOcRe
       continue
     }
 
-    let notaEntradaPorPedido = new Map<number, { nf: string; data: string }>()
+    let entradaPorId = new Map<number, NotaDeEntrada>()
+    let entradaPorNumero = new Map<string, NotaDeEntrada>()
     let notasSaida: any[] = []
     try {
       const notas = await buscaNotas(filial, de, ate, ctx)
-      notaEntradaPorPedido = await notasPorOC(filial, notas.entrada, ctx)
+      const indice = await notasPorOC(filial, notas.entrada, ctx)
+      entradaPorId = indice.porId
+      entradaPorNumero = indice.porNumero
       notasSaida = notas.saida
     } catch (err) {
       avisos.push(`Filial ${filial}, notas fiscais: ${err instanceof Error ? err.message : err}`)
@@ -319,7 +332,7 @@ export async function montaStatusOc(de: string, ate: string): Promise<StatusOcRe
       const cab = pedido?.cabecalho_consulta ?? {}
       const numeroOC = semZeros(cab.cNumero)
       const doCard = indiceBitrix.get(numeroOC)
-      const entrada = notaEntradaPorPedido.get(Number(cab.nCodPed ?? 0))
+      const entrada = entradaPorId.get(Number(cab.nCodPed ?? 0)) ?? entradaPorNumero.get(numeroOC)
 
       const fornecedor = apelidoFornecedor(
         await razaoSocial(filial, Number(cab.nCodFor ?? 0), cacheFornecedor, ctx),
@@ -365,7 +378,9 @@ export async function montaStatusOc(de: string, ate: string): Promise<StatusOcRe
           // FATURADO quando a nota do distribuidor chegou; o resto do time
           // preenche (prazo em dias, COMODATO), como já fazia na planilha.
           statusDistribuidor: entrada ? 'FATURADO' : '',
-          envioPedido: paraISO(cab.dDtPrevEnt || cab.dDtRegistro),
+          // `dIncData` é a data em que a OC foi emitida; `dDtPrevisao` fica de
+          // reserva. O Omie não devolve `dDtPrevEnt` nem `dDtRegistro` aqui.
+          envioPedido: paraISO(cab.dIncData || cab.dDtPrevisao),
         })
       }
     }
