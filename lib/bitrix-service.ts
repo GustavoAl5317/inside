@@ -693,6 +693,69 @@ export class BitrixService {
     }
   }
 
+  /**
+   * Cards de Inside Sales com os campos "Sistema Financeiro (Omie)" preenchidos.
+   *
+   * Esses campos guardam linhas como "OC 9174/26 - 2602010345 - HW": o primeiro
+   * número é o da lista #35 e o segundo é o do pedido no Omie. É o único vínculo
+   * entre os dois sistemas, e é por ele que a planilha de status liga a Ordem de
+   * Compra do Omie ao negócio, ao cliente e ao Pedido de Venda.
+   *
+   * Cliente e Account são resolvidos no fim, uma vez por id distinto.
+   */
+  static async listInsideSalesCardsComFinanceiro(): Promise<Array<{
+    proposta: string; cliente: string; account: string
+    compra: string; compraServico: string; venda: string; ordemServico: string
+  }>> {
+    const CAMPOS = {
+      compra:        'ufCrm7_1702651646',
+      compraServico: 'ufCrm7_1702651690',
+      venda:         'ufCrm7_1702651668',
+      ordemServico:  'ufCrm7_1702651712',
+    } as const
+
+    const cards: any[] = []
+    for (let start = 0; ; ) {
+      const j: any = await bPost('/crm.item.list.json', {
+        entityTypeId: ENTITY_TYPE_ID,
+        // Só o que já foi ao Omie: card sem número de pedido não entra na planilha.
+        filter: { [`!=${CAMPOS.compra}`]: '' },
+        select: ['id', 'title', 'xmlId', 'companyId', 'assignedById', ...Object.values(CAMPOS)],
+        order: { id: 'desc' },
+        start,
+      }).catch(() => null)
+      const lote: any[] = j?.result?.items ?? []
+      cards.push(...lote)
+      if (j?.next == null || !lote.length) break
+      start = Number(j.next)
+    }
+
+    const empresas = new Map<number, string>()
+    const usuarios = new Map<number, string>()
+    for (const c of cards) {
+      const e = Number(c.companyId ?? 0), u = Number(c.assignedById ?? 0)
+      if (e > 0) empresas.set(e, '')
+      if (u > 0) usuarios.set(u, '')
+    }
+    for (const id of [...empresas.keys()]) {
+      empresas.set(id, await BitrixService.getCRMCompanyById(id).then(c => c?.name ?? '').catch(() => ''))
+    }
+    for (const id of [...usuarios.keys()]) {
+      usuarios.set(id, await BitrixService.getBitrixUser(id).then(u => u?.fullName ?? '').catch(() => ''))
+    }
+
+    return cards.map(c => ({
+      // A planilha usa "2025 10463"; o card guarda "2025.10463" no xmlId.
+      proposta: String(c.xmlId ?? '').trim() || String(c.title ?? '').trim(),
+      cliente: empresas.get(Number(c.companyId ?? 0)) ?? '',
+      account: usuarios.get(Number(c.assignedById ?? 0)) ?? '',
+      compra:        String(c[CAMPOS.compra] ?? ''),
+      compraServico: String(c[CAMPOS.compraServico] ?? ''),
+      venda:         String(c[CAMPOS.venda] ?? ''),
+      ordemServico:  String(c[CAMPOS.ordemServico] ?? ''),
+    }))
+  }
+
   /** Busca o CNPJ de uma empresa do CRM via requisitos (crm.requisite) */
   static async getCRMCompanyCnpj(companyId: number): Promise<string> {
     const details = await BitrixService.getCRMCompanyFullDetails(companyId)

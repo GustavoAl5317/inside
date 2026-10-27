@@ -63,6 +63,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: '/solicitacoes',label: 'Solicitações',emoji: '🔐', area: 'solicitacoes' },
       { href: '/historico',   label: 'Histórico',   emoji: '📋', area: 'historico' },
       { href: '/estoque',     label: 'Estoque',     emoji: '📦', area: 'estoque' },
+      { href: '/status-oc',   label: 'Status OC',   emoji: '📊', area: 'historico' },
     ],
   },
   {
