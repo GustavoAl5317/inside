@@ -41,12 +41,15 @@ export function StatusOcView() {
   const [status, setStatus] = useState("__todos__")
   const [busca, setBusca] = useState("")
 
+  // Com o app servido em uma subrota (NEXT_PUBLIC_BASE_PATH), uma URL começando
+  // em "/" cai na raiz do domínio, que é outro app. O prefixo tem de ir junto.
+  const api = (busca: string) => `${process.env.NEXT_PUBLIC_BASE_PATH ?? ''}/api/status-oc?${busca}`
   const periodo = () => `de=${encodeURIComponent(de)}&ate=${encodeURIComponent(ate)}`
 
   const consultar = async () => {
     setCarregando(true)
     try {
-      const r = await fetch(`/api/status-oc?${periodo()}`, { cache: 'no-store' })
+      const r = await fetch(api(periodo()), { cache: 'no-store' })
       const j = await r.json()
       if (!j.success) { toast.error(j.error || 'Erro ao consultar.'); return }
       setLinhas(j.linhas)
@@ -62,7 +65,7 @@ export function StatusOcView() {
   const baixar = async () => {
     setBaixando(true)
     try {
-      const r = await fetch(`/api/status-oc?${periodo()}&formato=xlsx`, { cache: 'no-store' })
+      const r = await fetch(api(`${periodo()}&formato=xlsx`), { cache: 'no-store' })
       if (!r.ok) {
         const j = await r.json().catch(() => null)
         toast.error(j?.error || `Falha ao gerar a planilha (HTTP ${r.status})`)
