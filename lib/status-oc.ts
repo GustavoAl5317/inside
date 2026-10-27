@@ -194,19 +194,40 @@ async function razaoSocial(filial: Filial, codigo: number, cache: Map<string, st
   return nome
 }
 
-/** Valor de venda de cada produto, a partir do Pedido de Venda. */
-async function vendaPorProduto(filial: Filial, numeroOV: string, cache: Map<string, Map<string, number>>, ctx: { chamadas: number }) {
+interface PedidoDeVenda {
+  /** Valor unitário de venda por código de produto. */
+  precos: Map<string, number>
+  /** `codigo_pedido`, por onde a NF de saída aponta para o pedido. */
+  codigoPedido: number
+}
+
+/**
+ * Pedido de Venda do Omie: preços por produto e o id interno do pedido.
+ *
+ * As duas informações saem da mesma resposta, então basta uma consulta por
+ * pedido, guardada em cache porque várias Ordens de Compra podem apontar para a
+ * mesma venda.
+ */
+async function pedidoDeVenda(
+  filial: Filial, numeroOV: string, cache: Map<string, PedidoDeVenda>, ctx: { chamadas: number },
+): Promise<PedidoDeVenda> {
   const chave = `${filial}:${numeroOV}`
-  if (cache.has(chave)) return cache.get(chave)!
-  const mapa = new Map<string, number>()
+  const emCache = cache.get(chave)
+  if (emCache) return emCache
+
+  const precos = new Map<string, number>()
   const d = await chamada(filial, OMIE_URL.PEDIDOS_VENDA, 'ConsultarPedido', { numero_pedido: numeroOV }, ctx)
   for (const linha of (d?.pedido_venda_produto?.det ?? [])) {
     const p = linha?.produto ?? {}
     const codigo = texto(p.codigo_produto_integracao || p.codigo || p.codigo_produto).toUpperCase()
-    if (codigo) mapa.set(codigo, numero(p.valor_unitario))
+    if (codigo) precos.set(codigo, numero(p.valor_unitario))
   }
-  cache.set(chave, mapa)
-  return mapa
+  const resultado: PedidoDeVenda = {
+    precos,
+    codigoPedido: Number(d?.pedido_venda_produto?.cabecalho?.codigo_pedido ?? 0),
+  }
+  cache.set(chave, resultado)
+  return resultado
 }
 
 type DadosDoCard = { cliente: string; proposta: string; account: string; oc: string; ovs: string[] }
@@ -262,7 +283,7 @@ export async function montaStatusOc(de: string, ate: string): Promise<StatusOcRe
   const avisos: string[] = []
   const linhas: StatusOcLinha[] = []
   const cacheFornecedor = new Map<string, string>()
-  const cacheVenda = new Map<string, Map<string, number>>()
+  const cacheVenda = new Map<string, PedidoDeVenda>()
 
   const indiceBitrix = await indicePorPedidoOmie(avisos)
 
@@ -309,11 +330,9 @@ export async function montaStatusOc(de: string, ate: string): Promise<StatusOcRe
       let saida: { nf: string; data: string } | undefined
       for (const ov of (doCard?.ovs ?? [])) {
         try {
-          const mapa = await vendaPorProduto(filial, ov, cacheVenda, ctx)
-          for (const [k, v] of mapa) if (!vendas.has(k)) vendas.set(k, v)
-          const d = await chamada(filial, OMIE_URL.PEDIDOS_VENDA, 'ConsultarPedido', { numero_pedido: ov }, ctx)
-          const codigoPedido = Number(d?.pedido_venda_produto?.cabecalho?.codigo_pedido ?? 0)
-          saida ??= notaSaidaPorPedidoId.get(codigoPedido)
+          const venda = await pedidoDeVenda(filial, ov, cacheVenda, ctx)
+          for (const [k, v] of venda.precos) if (!vendas.has(k)) vendas.set(k, v)
+          saida ??= notaSaidaPorPedidoId.get(venda.codigoPedido)
         } catch { /* venda fica em branco */ }
       }
 

@@ -737,11 +737,39 @@ export class BitrixService {
       if (e > 0) empresas.set(e, '')
       if (u > 0) usuarios.set(u, '')
     }
-    for (const id of [...empresas.keys()]) {
-      empresas.set(id, await BitrixService.getCRMCompanyById(id).then(c => c?.name ?? '').catch(() => ''))
+    // Em lote: uma consulta por empresa e por usuário deixava a varredura
+    // lenta demais quando o período tem centenas de cards.
+    const emLotes = <T,>(itens: T[], tamanho: number) => {
+      const lotes: T[][] = []
+      for (let i = 0; i < itens.length; i += tamanho) lotes.push(itens.slice(i, i + tamanho))
+      return lotes
     }
-    for (const id of [...usuarios.keys()]) {
-      usuarios.set(id, await BitrixService.getBitrixUser(id).then(u => u?.fullName ?? '').catch(() => ''))
+
+    for (const lote of emLotes([...empresas.keys()], 50)) {
+      for (let start = 0; ; ) {
+        const j: any = await bPost('/crm.company.list.json', {
+          filter: { ID: lote },
+          select: ['ID', 'TITLE'],
+          start,
+        }).catch(() => null)
+        for (const e of (j?.result ?? [])) empresas.set(Number(e.ID), String(e.TITLE ?? '').trim())
+        if (j?.next == null) break
+        start = Number(j.next)
+      }
+    }
+
+    // `user.get` consulta um id por vez, então vai pelo `batch`, que aceita 50
+    // comandos por requisição.
+    for (const lote of emLotes([...usuarios.keys()], 50)) {
+      const cmd: Record<string, string> = {}
+      lote.forEach((id, i) => { cmd[`u${i}`] = `user.get?ID=${id}` })
+      const j: any = await bPost('/batch.json', { halt: 0, cmd }).catch(() => null)
+      const resultados = j?.result?.result ?? {}
+      lote.forEach((id, i) => {
+        const u = (resultados[`u${i}`] ?? [])[0]
+        if (!u) return
+        usuarios.set(id, [String(u.NAME ?? '').trim(), String(u.LAST_NAME ?? '').trim()].filter(Boolean).join(' '))
+      })
     }
 
     return cards.map(c => ({
