@@ -11,6 +11,7 @@ import {
   FileEdit, Hash,
 } from 'lucide-react'
 import { Loader2 } from 'lucide-react'
+import { casaBusca } from '@/lib/busca'
 
 type AtualizacaoView = 'deal' | 'pedido-omie'
 
@@ -137,16 +138,9 @@ export function AtualizacaoLayout() {
 
   useEffect(() => { loadDeals() }, [])
 
-  const filtered = deals.filter(d => {
-    if (!search) return true
-    const q = search.toLowerCase()
-    return (
-      d.businessName?.toLowerCase().includes(q) ||
-      d.proposal?.toLowerCase().includes(q) ||
-      d.supplierName?.toLowerCase().includes(q) ||
-      d.customerName?.toLowerCase().includes(q)
-    )
-  })
+  const filtered = deals.filter(d =>
+    casaBusca(search, d.businessName, d.proposal, d.supplierName, d.customerName),
+  )
 
   const existingDeal = useMemo(
     () => (selected ? { id: selected.id, payload: selected.payload } : null),

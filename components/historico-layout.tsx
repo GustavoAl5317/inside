@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useCurrentUser } from '@/components/current-user-provider'
+import { casaBusca } from '@/lib/busca'
 
 const STATUS_CFG: Record<string, { label: string; dot: string; badge: string; icon: typeof CheckCircle2 }> = {
   pending:  { label: 'Rascunho', dot: 'bg-blue-400',    badge: 'bg-blue-50 text-blue-700 ring-blue-200',          icon: FileText     },
@@ -376,17 +377,9 @@ export function HistoricoLayout() {
 
   useEffect(() => { loadDeals(true) }, [])
 
-  const filtered = deals.filter(d => {
-    if (!search) return true
-    const q = search.toLowerCase()
-    return (
-      d.businessName?.toLowerCase().includes(q) ||
-      d.proposal?.toLowerCase().includes(q) ||
-      d.supplierName?.toLowerCase().includes(q) ||
-      d.customerName?.toLowerCase().includes(q) ||
-      d.status?.toLowerCase().includes(q)
-    )
-  })
+  const filtered = deals.filter(d =>
+    casaBusca(search, d.businessName, d.proposal, d.supplierName, d.customerName, d.status),
+  )
 
   return (
     <div className="flex flex-col h-[calc(100vh-64px)] overflow-hidden">

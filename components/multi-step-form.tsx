@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react"
+import { useState, useEffect, useRef, useCallback, useMemo, type SyntheticEvent } from "react"
 import { useForm, type UseFormReturn } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import * as z from "zod"
@@ -45,6 +45,7 @@ import {
   Save,
   Send,
   RefreshCw,
+  Lock,
 } from "lucide-react"
 
 // ─── Schema ────────────────────────────────────────────────────────────────────
@@ -323,6 +324,8 @@ function payloadDosValores(values: any) {
   } else {
     v.interatellBranches = deriveBranches(v.supplierGroups)
   }
+  // Cliente Serviço pré-carregado fica para trás se o serviço for desmarcado.
+  if (!v.business?.onlyInteratellService && !v.business?.hasInteratellService) v.serviceCustomers = []
   if (v.business) {
     v.business.deliveryDeadline = deriveDeliveryDeadline(
       v.supplierGroups, v.business.expectedBillingDate,
@@ -418,6 +421,21 @@ export function MultiStepForm({
   const [justApproved, setJustApproved] = useState(false)
 
   const isUpdate = mode === 'update'
+  // Etapa 6 do Bitrix (Processamento no Omie): só conferir e enviar, nada se
+  // edita. O que precisar mudar volta para o Backlog.
+  const travado = mode === 'omie'
+  const ultimoAvisoTrava = useRef(0)
+  const barraEdicao = (e: SyntheticEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const agora = Date.now()
+    if (agora - ultimoAvisoTrava.current < 3000) return
+    ultimoAvisoTrava.current = agora
+    toast.warning("Edição bloqueada na etapa 6 (Processamento no Omie).", {
+      description: "Para alterar, devolva o card ao Backlog no Bitrix.",
+      duration: 5000,
+    })
+  }
   const needsApproval = isUpdate && user?.role === 'insidesales'
   const approvalStatus = approval?.status
   const hasApproval = approvalStatus === 'approved'
@@ -618,17 +636,37 @@ export function MultiStepForm({
     [hasInteratellService, onlyInteratellService],
   )
 
-  // Ao marcar "só serviço", o cliente que veio do card Bitrix (pré-carregado na
-  // aba Clientes, que sai do fluxo) passa para Cliente Serviço — é o mesmo cliente.
+  // Com serviço Interatell, o Cliente Serviço já começa com a empresa do card,
+  // igual ao passo Clientes: é quase sempre o mesmo cliente. Vem do cliente
+  // pré-carregado em Clientes e, na falta dele, direto da empresa do card.
   useEffect(() => {
-    if (!onlyInteratellService) return
+    if (!onlyInteratellService && !hasInteratellService) return
     if ((form.getValues("serviceCustomers") ?? []).length) return
+    const empresa = cardDetails?.clientCompany
     const origem = (form.getValues("customers") ?? [])[0]?.customer
+      ?? (empresa?.name ? {
+        bitrixCompanyId:   Number(empresa.id) || undefined,
+        cnpj:              empresa.cnpj ? formatCNPJ(empresa.cnpj) : "",
+        name:              empresa.name,
+        stateRegistration: empresa.stateRegistration || "",
+        zipCode:           empresa.zipCode || "",
+        city:              empresa.city || "",
+        state:             empresa.state || "",
+        neighborhood:      empresa.neighborhood || "",
+        address:           empresa.address || "",
+        number:            empresa.number || "",
+        complement:        empresa.complement || "",
+        contactName:       empresa.contactName || "",
+        phone:             empresa.phone || "",
+        email:             empresa.email || "",
+        isTaxpayer:        false,
+        purchaseOrder:     "",
+      } : null)
     if (!origem?.name) return
     form.setValue("serviceCustomers", [{
-      localId: crypto.randomUUID(), branch: 'barueri', customer: origem, items: [],
+      localId: crypto.randomUUID(), branch: 'barueri', customer: { ...origem }, items: [],
     }])
-  }, [onlyInteratellService, form])
+  }, [onlyInteratellService, hasInteratellService, cardDetails, form])
 
   const currentIdx = tabs.findIndex(t => t.id === activeTab)
 
@@ -863,6 +901,11 @@ export function MultiStepForm({
       } else {
         values.interatellBranches = deriveBranches(values.supplierGroups)
       }
+      // Cliente Serviço pré-carregado fica para trás se o serviço for desmarcado:
+      // sem isto o envio ainda cadastraria o cliente na filial de Barueri.
+      if (!values.business.onlyInteratellService && !values.business.hasInteratellService) {
+        values.serviceCustomers = []
+      }
       values.business.deliveryDeadline = deriveDeliveryDeadline(
         values.supplierGroups, values.business.expectedBillingDate ?? '',
       )
@@ -1007,6 +1050,17 @@ export function MultiStepForm({
     <Form {...form}>
       <form onSubmit={e => e.preventDefault()} className="space-y-6">
 
+        {/* Etapa 6 (Processamento no Omie): o formulário só é conferido e enviado. */}
+        {travado && (
+          <div className="flex items-start gap-2.5 rounded-xl border border-purple-200 bg-purple-50 px-4 py-3 text-sm text-purple-800">
+            <Lock className="mt-0.5 h-4 w-4 shrink-0" />
+            <p>
+              <strong>Etapa 6 · Processamento no Omie: edição bloqueada.</strong>{" "}
+              Confira os dados e envie. Para alterar qualquer coisa, devolva o card ao Backlog no Bitrix.
+            </p>
+          </div>
+        )}
+
         {/* Progress bar */}
         <div className="flex items-center gap-1">
           {tabs.map(tab => (
@@ -1036,8 +1090,11 @@ export function MultiStepForm({
                 value={tab.id}
                 disabled={!completedTabs.includes(tab.id) && tab.id !== activeTab}
                 className="text-xs sm:text-sm min-w-0 gap-1"
+                title={travado ? `${tab.label}: edição bloqueada na etapa 6 (Processamento no Omie)` : undefined}
               >
-                {completedTabs.includes(tab.id) && tab.id !== activeTab && (
+                {travado ? (
+                  <Lock className="w-3 h-3 shrink-0 text-purple-500" />
+                ) : completedTabs.includes(tab.id) && tab.id !== activeTab && (
                   <CheckCircle className="w-3 h-3 shrink-0 text-green-500" />
                 )}
                 <span className="truncate">{tab.label}</span>
@@ -1045,7 +1102,22 @@ export function MultiStepForm({
             ))}
           </TabsList>
 
-          <div className="mt-6">
+          {/* Travado: os campos ficam desabilitados, cliques são barrados e,
+              ao passar o mouse, aparece o aviso. Rolagem continua livre. */}
+          <div
+            className={`mt-6 ${travado ? "relative group/trava" : ""}`}
+            onClickCapture={travado ? barraEdicao : undefined}
+            onPointerDownCapture={travado ? barraEdicao : undefined}
+          >
+            {travado && (
+              <div className="pointer-events-none sticky top-3 z-30 flex h-0 justify-center">
+                <span className="flex items-center gap-1.5 rounded-full bg-purple-700 px-3 py-1.5 text-xs font-medium text-white shadow-lg opacity-0 transition-opacity duration-200 group-hover/trava:opacity-100">
+                  <Lock className="h-3.5 w-3.5" />
+                  Etapa 6: nada pode ser editado aqui
+                </span>
+              </div>
+            )}
+            <fieldset disabled={travado} className={travado ? "cursor-not-allowed opacity-90 [&_*]:cursor-not-allowed" : "contents"}>
             <TabsContent value="business">
               <BusinessTab form={form} />
             </TabsContent>
@@ -1056,6 +1128,7 @@ export function MultiStepForm({
             )}
             <TabsContent value="notes"><NotesTab form={form} /></TabsContent>
             <TabsContent value="ocNumbers"><OcNumbersTab form={form} /></TabsContent>
+            </fieldset>
           </div>
         </Tabs>
 

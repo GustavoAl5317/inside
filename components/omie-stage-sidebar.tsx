@@ -3,16 +3,17 @@
 import { useState, useEffect, useCallback } from 'react'
 import { getInsideSalesByStageAction } from '@/lib/actions'
 import type { BitrixInsideSalesItem } from '@/lib/bitrix-service'
+import { casaBusca } from '@/lib/busca'
 import {
   RefreshCw,
   ClipboardList,
-  Settings2,
   CheckCircle2,
   XCircle,
   Clock,
   FileText,
   Building2,
   Package,
+  Lock,
 } from 'lucide-react'
 
 const BACKLOG_STAGE = 'DT129_13:NEW'
@@ -212,24 +213,19 @@ export function OmieStageSidebar({
 
   const TAB_DEFS = [
     { id: 'backlog' as StageTab, icon: ClipboardList, label: 'Backlog',       count: backlogItems.length, activeCls: 'bg-blue-500 text-white'   },
-    { id: 'omie'   as StageTab, icon: Settings2,      label: 'Processamento', count: omieItems.length,   activeCls: 'bg-violet-500 text-white' },
+    { id: 'omie'   as StageTab, icon: Lock,           label: 'Processamento', count: omieItems.length,   activeCls: 'bg-violet-500 text-white' },
   ]
 
   const descMap: Record<StageTab, { text: string; cls: string }> = {
     backlog: { text: 'Elaboração de OC',       cls: 'text-blue-500'   },
-    omie:    { text: 'Processamento no Omie',  cls: 'text-violet-500' },
+    omie:    { text: 'Processamento no Omie · só conferir e enviar', cls: 'text-violet-500' },
   }
 
   const rawItems = tab === 'backlog' ? backlogItems : omieItems
+  // Sem acento e com as palavras em qualquer ordem: "vernova eletricas" acha
+  // "GE VERNOVA E&S ELÉTRICAS".
   const items = search
-    ? rawItems.filter(it => {
-        const q = search.toLowerCase()
-        return (
-          (it.title ?? '').toLowerCase().includes(q) ||
-          (it.companyName ?? '').toLowerCase().includes(q) ||
-          String(it.xmlId ?? '').toLowerCase().includes(q)
-        )
-      })
+    ? rawItems.filter(it => casaBusca(search, it.title, it.companyName, it.xmlId, it.id))
     : rawItems
   const accent  = tab === 'backlog' ? 'blue' : 'purple'
   const empty   = tab === 'backlog' ? '📋' : '⚙️'

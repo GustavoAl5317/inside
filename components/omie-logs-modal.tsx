@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { PedidosOmie } from '@/components/pedidos-omie';
+import { EnvioAoVivo, ResultadoEnvio, type EtapaCena } from '@/components/omie-envio-animacao';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -58,94 +59,6 @@ type StepKey = typeof steps[number]['key'];
 
 const normalizeType = (t: string): StepKey | '' =>
   (t === 'createOC' ? 'createOCResult' : (steps.some(s => s.key === t) ? (t as StepKey) : ''));
-
-/** Overlay 3D exibido no fim do envio ao Omie: emblema holográfico girando
- *  em perspectiva com anéis neon (sucesso) ou glitch com tremor 3D (erro). */
-const Result3DOverlay: React.FC<{ kind: 'success' | 'error' }> = ({ kind }) => {
-  const ok = kind === 'success';
-  const color = ok ? '#10b981' : '#ef4444';
-  const glow = ok ? 'rgba(16,185,129,0.55)' : 'rgba(239,68,68,0.55)';
-  const particles = Array.from({ length: 14 }, (_, i) => {
-    const angle = (i / 14) * Math.PI * 2;
-    return { x: Math.cos(angle) * 130, y: Math.sin(angle) * 130, delay: 0.25 + (i % 5) * 0.05 };
-  });
-
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="absolute inset-0 z-[60] flex items-center justify-center pointer-events-none"
-      style={{ perspective: 1000, background: 'radial-gradient(ellipse at center, rgba(11,16,41,0.72), rgba(11,16,41,0.45))', backdropFilter: 'blur(6px)' }}
-    >
-      {/* Anéis neon expandindo em 3D */}
-      {[0, 0.18, 0.36].map((d, i) => (
-        <motion.div
-          key={i}
-          className="absolute rounded-full border-2"
-          style={{ width: 120, height: 120, borderColor: color, transformStyle: 'preserve-3d' }}
-          initial={{ scale: 0.4, opacity: 0.9, rotateX: 55 }}
-          animate={{ scale: 2.6 + i * 0.5, opacity: 0, rotateX: 55 }}
-          transition={{ duration: 1.4, delay: d, ease: 'easeOut', repeat: Infinity, repeatDelay: 0.4 }}
-        />
-      ))}
-
-      {/* Partículas orbitando */}
-      {particles.map((p, i) => (
-        <motion.div
-          key={`p${i}`}
-          className="absolute w-1.5 h-1.5 rounded-full"
-          style={{ background: color, boxShadow: `0 0 8px 2px ${glow}` }}
-          initial={{ x: 0, y: 0, opacity: 0, scale: 0.4 }}
-          animate={{ x: p.x, y: p.y, opacity: [0, 1, 0], scale: [0.4, 1.1, 0.3] }}
-          transition={{ duration: 1.3, delay: p.delay, ease: 'easeOut' }}
-        />
-      ))}
-
-      {/* Emblema central com flip 3D */}
-      <motion.div
-        className="relative flex flex-col items-center gap-3"
-        style={{ transformStyle: 'preserve-3d' }}
-        initial={{ rotateY: -180, scale: 0.3, opacity: 0 }}
-        animate={
-          ok
-            ? { rotateY: 0, scale: 1, opacity: 1 }
-            : { rotateY: 0, scale: 1, opacity: 1, x: [0, -12, 12, -8, 8, -4, 4, 0], rotateZ: [0, -2, 2, -1.5, 1.5, 0] }
-        }
-        transition={
-          ok
-            ? { type: 'spring', stiffness: 190, damping: 16 }
-            : { rotateY: { type: 'spring', stiffness: 190, damping: 16 }, scale: { type: 'spring', stiffness: 190, damping: 16 }, x: { duration: 0.55, delay: 0.35 }, rotateZ: { duration: 0.55, delay: 0.35 } }
-        }
-      >
-        <div
-          className="w-24 h-24 rounded-3xl flex items-center justify-center"
-          style={{
-            background: ok
-              ? 'linear-gradient(135deg, rgba(16,185,129,0.25), rgba(34,211,238,0.18))'
-              : 'linear-gradient(135deg, rgba(239,68,68,0.28), rgba(139,92,246,0.15))',
-            border: `2px solid ${color}`,
-            boxShadow: `0 0 42px 6px ${glow}, inset 0 0 24px ${glow}`,
-            transform: 'translateZ(40px)',
-          }}
-        >
-          {ok
-            ? <CheckCircle className="w-12 h-12" style={{ color, filter: `drop-shadow(0 0 10px ${glow})` }} />
-            : <XCircle className="w-12 h-12" style={{ color, filter: `drop-shadow(0 0 10px ${glow})` }} />}
-        </div>
-        <motion.p
-          className="text-base font-bold tracking-wide"
-          style={{ color, textShadow: `0 0 18px ${glow}`, transform: 'translateZ(30px)' }}
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.35 }}
-        >
-          {ok ? 'Enviado ao Omie com sucesso!' : 'Falha no envio ao Omie'}
-        </motion.p>
-      </motion.div>
-    </motion.div>
-  );
-};
 
 // tenta inferir o step pelo TEXTO quando _type vem genérico
 const inferStepFromMessage = (msg?: string): StepKey | '' => {
@@ -249,14 +162,20 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
 
   // Overlay 3D de resultado (sucesso/erro) — dispara na transição do estado
   const [resultFx, setResultFx] = useState<'success' | 'error' | null>(null);
+  // Muda a cada cena: a animação remonta do zero a cada envio, inclusive no
+  // reenvio depois de um erro.
+  const [fxSeq, setFxSeq] = useState(0);
   const prevCompleteRef = useRef(false);
   const prevErrorRef = useRef(false);
+  // Sucesso some rápido; o erro fica mais, para dar tempo de ler a mensagem.
+  const DURACAO_CENA_MS = { success: 4500, error: 12000 } as const;
   useEffect(() => {
     const rose = isComplete && !prevCompleteRef.current;
     prevCompleteRef.current = isComplete;
     if (rose) {
+      setFxSeq(s => s + 1);
       setResultFx('success');
-      const t = setTimeout(() => setResultFx(null), 2400);
+      const t = setTimeout(() => setResultFx(null), DURACAO_CENA_MS.success);
       return () => clearTimeout(t);
     }
   }, [isComplete]);
@@ -264,8 +183,9 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
     const rose = isFailed && !isComplete && !prevErrorRef.current;
     prevErrorRef.current = isFailed;
     if (rose) {
+      setFxSeq(s => s + 1);
       setResultFx('error');
-      const t = setTimeout(() => setResultFx(null), 2400);
+      const t = setTimeout(() => setResultFx(null), DURACAO_CENA_MS.error);
       return () => clearTimeout(t);
     }
   }, [isFailed, isComplete]);
@@ -300,6 +220,10 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
   const lastHashRef = useRef<string>('');
   const isCompleteRef = useRef(false);
   const runStartedAtRef = useRef<string>('');
+  // Execução que a janela acompanha. Começa com a do formulário e troca a cada
+  // reenvio feito daqui; sem isso o reenvio ficava invisível, filtrado pela
+  // execução antiga.
+  const runIdRef = useRef<string>(runId);
 
   const clearTimer = () => {
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -371,8 +295,9 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
       //    relógio entre cliente e servidor).
       // 2) Se não houver runId (execuções antigas), caímos no filtro por timestamp.
       let scopedLogs: OmieLog[];
-      if (runId) {
-        scopedLogs = parsedAll.filter(l => l.runId === runId);
+      const runAtual = runIdRef.current;
+      if (runAtual) {
+        scopedLogs = parsedAll.filter(l => l.runId === runAtual);
       } else {
         const runStartedAt = runStartedAtRef.current
           ? new Date(runStartedAtRef.current).getTime()
@@ -444,6 +369,7 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
       clearTimer();
       return;
     }
+    runIdRef.current = runId;
     resetModalState();
     void fetchOmieLogs(false);
     scheduleNext(1500);
@@ -765,6 +691,13 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
     setExpandedLogs(newExpanded);
   };
 
+  /** Nova execução: a janela passa a acompanhar só os logs dela. */
+  const novoRunId = () => {
+    const id = crypto.randomUUID();
+    runIdRef.current = id;
+    return id;
+  };
+
   const resetModalState = () => {
     setRawLogs([]);
     setHasLoadedOnce(false);
@@ -772,6 +705,11 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
     isCompleteRef.current = false;
     runStartedAtRef.current = new Date().toISOString();
     setHasError(false);
+    setIsFailed(false);
+    prevErrorRef.current = false;
+    prevCompleteRef.current = false;
+    setResultFx(null);
+    setCurrentStep('');
     setCompletedSteps(new Set());
     setFailedSteps(new Set());
     setTouchedSteps(new Set());
@@ -806,7 +744,7 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
       const res = await fetch('/api/omie/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dealId: transactionId }),
+        body: JSON.stringify({ dealId: transactionId, runId: novoRunId() }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
@@ -884,7 +822,7 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
       const res = await fetch('/api/omie/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dealId: transactionId }),
+        body: JSON.stringify({ dealId: transactionId, runId: novoRunId() }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
@@ -897,12 +835,45 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
     }
   };
 
+  // Checagem das etapas para a animação, no mesmo critério dos cartões.
+  const etapasCena: EtapaCena[] = steps.map(s => {
+    const st = getStepStatus(s.key);
+    return {
+      chave: s.key,
+      rotulo: s.label,
+      status: st === 'completed' ? 'ok'
+        : st === 'warning' ? 'aviso'
+        : st === 'error' ? 'erro'
+        : st === 'current' || st === 'touched' ? 'atual'
+        : 'pendente',
+    };
+  });
+
+  // O que o Omie respondeu: a mensagem do log final de erro, sem o prefixo.
+  const mensagemErro = (() => {
+    const erros = rawLogs.filter(l => l.level === 'error');
+    const final = [...erros].reverse().find(l => normalizeType(l.type) === 'result') ?? erros[erros.length - 1];
+    if (!final) return '';
+    return final.message
+      .replace(/^result:\s*Erro\s*[—-]\s*/i, '')
+      .replace(/ERROR:\s*/g, '')
+      .trim();
+  })();
+
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) clearTimer(); onOpenChange(o); }}>
       <DialogContent className="w-[95vw] max-w-4xl max-h-[90vh] flex flex-col overflow-hidden p-0">
         {/* Efeito 3D de resultado (sucesso/erro) */}
         <AnimatePresence>
-          {resultFx && <Result3DOverlay key={resultFx} kind={resultFx} />}
+          {resultFx && (
+            <ResultadoEnvio
+              key={`${resultFx}-${fxSeq}`}
+              tipo={resultFx === 'success' ? 'sucesso' : 'erro'}
+              detalhe={resultFx === 'error' ? mensagemErro : undefined}
+              etapas={etapasCena}
+              aoFechar={() => setResultFx(null)}
+            />
+          )}
         </AnimatePresence>
         <DialogHeader className="px-4 pt-4 pb-3 border-b shrink-0">
           <DialogTitle className="flex items-center gap-2 text-base">
@@ -920,13 +891,17 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
                   <p className="text-gray-600 text-sm">Aguardando primeiros logs do Omie…</p>
                 </div>
               ) : rawLogs.filter(l => l.source === 'omie').length === 0 && !isComplete ? (
-                <div className="flex flex-col items-center justify-center py-12">
-                  <Loader2 className="w-8 h-8 animate-spin mb-3" />
-                  <p className="text-gray-600 text-sm">Processando envio ao Omie…</p>
-                  <p className="text-gray-400 text-xs mt-1">Os logs aparecerão em instantes</p>
+                <div className="py-6">
+                  <EnvioAoVivo etapa="Preparando o envio" />
                 </div>
               ) : (
                 <>
+                  {!isComplete && !isFailed && (
+                    <EnvioAoVivo etapa={steps.find(s => s.key === currentStep)?.label} etapas={etapasCena} />
+                  )}
+                  {/* Durante o envio a faixa já mostra a checagem; os cartões
+                      voltam no fim, com o detalhe de cada etapa. */}
+                  {(isComplete || isFailed) && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {steps.map((step, index) => (
                       <motion.div
@@ -947,6 +922,7 @@ const OmieLogsModal: React.FC<OmieLogsModalProps> = ({
                       </motion.div>
                     ))}
                   </div>
+                  )}
 
                   {cadastrosNovos.length > 0 && (
                     <div className="rounded-lg border-2 border-yellow-300 bg-yellow-50 p-3">

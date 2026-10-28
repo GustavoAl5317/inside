@@ -1,5 +1,6 @@
 import { formatCNPJ, normalizeCNPJDigits } from './utils'
 import { proximoNumeroOc, type CamposFinanceiros } from './oc-numbers'
+import { casaBusca, termoPrincipal } from './busca'
 import { consultarCnpj } from './cnpj-lookup'
 
 interface BitrixDeal {
@@ -657,7 +658,11 @@ export class BitrixService {
   static async searchCRMCompanies(query: string, limit = 200): Promise<Array<{
     id: number; name: string; cnpj?: string; city?: string; state?: string
   }>> {
-    const q = String(query ?? '').trim()
+    const busca = String(query ?? '').trim()
+    // O Bitrix só acha o texto em sequência: "vernova eletricas" não acha
+    // "GE VERNOVA E&S ELÉTRICAS". Vai a palavra mais longa e as outras são
+    // conferidas aqui, sem acento e em qualquer ordem.
+    const q = termoPrincipal(busca)
     const teto = q ? limit : 50
     const out: Array<{ id: number; name: string; cnpj?: string; city?: string; state?: string }> = []
     try {
@@ -672,6 +677,7 @@ export class BitrixService {
         })
         const items: any[] = Array.isArray(j?.result) ? j.result : []
         for (const i of items) {
+          if (!casaBusca(busca, i.TITLE)) continue
           out.push({
             id: Number(i.ID),
             name: String(i.TITLE || ''),
