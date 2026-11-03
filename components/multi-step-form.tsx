@@ -105,6 +105,9 @@ const supplierGroupSchema = z.object({
   // Número de Ordem de Compra desta OC na lista #35 do Bitrix, ex. "9178/26".
   ocNumber:    z.string().optional(),
   ocElementId: z.number().optional(),
+  // Segunda OC do fornecedor com hardware e com software/licença/serviço.
+  ocNumberServico:    z.string().optional(),
+  ocElementIdServico: z.number().optional(),
 })
 
 const productAllocationSchema = z.object({

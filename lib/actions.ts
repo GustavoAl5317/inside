@@ -4,7 +4,7 @@ import { createTransaction } from "./db"
 import { consultarCnpj, type CnpjLookupResult } from "./cnpj-lookup"
 import { sql } from "./db"
 import { validateCNPJ, formatZipCode, formatPhoneNumber, normalizeCNPJDigits, familyMatchesBranch } from "./utils"
-import { BitrixService } from "./bitrix-service"
+import { type BitrixSupplier, BitrixService } from "./bitrix-service"
 import { naturezaCatalogo, preservaNumerosOc } from "./oc-numbers"
 import { garanteNumerosOc } from "./oc-numbers-bitrix"
 import { listOmieStock, compareStockWithCatalog, type CatalogEntry } from './omie-stock'
@@ -651,6 +651,54 @@ export async function getSuppliersAction(query = "") {
         `
   } catch {
     return []
+  }
+}
+
+// ─── Tela de Fornecedores (lista #61) pela conta do app ─────────────────────
+// A tela usava o BX24 de quem abria: sem permissão na lista #61 no Bitrix, a
+// pessoa não via nada. Pelo servidor vale o acesso do app, e a permissão passa a
+// ser a do próprio app (usuário com sessão ativa). Excluir fica com o admin.
+
+async function exigeSessao() {
+  const u = await getSessionUser()
+  if (!u) throw new Error('Sessão expirada. Abra o app de novo pelo Bitrix.')
+  return u
+}
+
+export async function listarFornecedoresListaAction() {
+  try {
+    await exigeSessao()
+    return { success: true as const, fornecedores: await BitrixService.getSuppliers() }
+  } catch (error) {
+    return { success: false as const, error: error instanceof Error ? error.message : 'Erro desconhecido' }
+  }
+}
+
+export async function salvarFornecedorListaAction(id: string | null, data: Omit<BitrixSupplier, 'id'>) {
+  try {
+    const u = await exigeSessao()
+    if (id) {
+      await BitrixService.updateSupplier(id, data)
+      console.log(`[Fornecedores] ${u.name ?? u.bitrixUserId} atualizou ${data.name} (#${id})`)
+      return { success: true as const, id }
+    }
+    const novo = await BitrixService.createSupplier(data)
+    console.log(`[Fornecedores] ${u.name ?? u.bitrixUserId} criou ${data.name} (#${novo})`)
+    return { success: true as const, id: novo }
+  } catch (error) {
+    return { success: false as const, error: error instanceof Error ? error.message : 'Erro desconhecido' }
+  }
+}
+
+export async function excluirFornecedorListaAction(id: string) {
+  try {
+    const u = await exigeSessao()
+    if (u.role !== 'admin') throw new Error('Só o administrador pode excluir fornecedor da lista.')
+    await BitrixService.deleteSupplier(id)
+    console.log(`[Fornecedores] ${u.name ?? u.bitrixUserId} excluiu o fornecedor #${id}`)
+    return { success: true as const }
+  } catch (error) {
+    return { success: false as const, error: error instanceof Error ? error.message : 'Erro desconhecido' }
   }
 }
 
@@ -1315,7 +1363,10 @@ async function preservaNumerosDoBanco(dealId: number, payload: any): Promise<voi
 /** Aba "Nº Ordem de Compra": cria na lista #35 os números que ainda faltam. */
 export async function generateOcNumbersAction(values: any) {
   const numeros = (lista: any[] | undefined) =>
-    (lista ?? []).map((x: any) => ({ ocNumber: x?.ocNumber ?? '', ocElementId: x?.ocElementId }))
+    (lista ?? []).map((x: any) => ({
+      ocNumber: x?.ocNumber ?? '', ocElementId: x?.ocElementId,
+      ocNumberServico: x?.ocNumberServico ?? '', ocElementIdServico: x?.ocElementIdServico,
+    }))
   const { criados, erros } = await garanteNumerosOc(values)
   return {
     success: !erros.length,

@@ -15,7 +15,7 @@ import { sql } from '@/lib/db'
 import { addOmieRawLog } from '@/lib/unified-log-service'
 import { BitrixService } from '@/lib/bitrix-service'
 import { descricaoOmie } from '@/lib/omie-descricao'
-import { camposFinanceirosCard, naturezaInterna } from '@/lib/oc-numbers'
+import { camposFinanceirosCard, grupoMisto, naturezaInterna, partesDoGrupo, produtosDaParte, sufixoDaParte, type ParteOc } from '@/lib/oc-numbers'
 import { garanteNumerosOc } from '@/lib/oc-numbers-bitrix'
 import { aguardaFreio, freioDepois } from '@/lib/omie-freio'
 import { companyForBranch } from '@/lib/interatell-companies'
@@ -767,10 +767,13 @@ async function upsertOC(
   obs: { externa: string; interna: string },
   dealId: number, groupIdx: number, opts: { isUpdate: boolean; retryCount: number },
   codParc: string, valorFrete: number, prazoEntrega: string,
+  // '-SV' na OC de software/licença/serviço de um fornecedor que também tem
+  // hardware. Vazio no resto, que mantém o código de sempre.
+  sufixo = '',
 ) {
   const ocItems = agrupaIguais(items.filter(i => normalizeNatureza(i.nature) !== 'SRV'))
   if (!ocItems.length || !codDistribuidor) return null
-  const baseCode = `OC-${dealId}-G${groupIdx}`
+  const baseCode = `OC-${dealId}-G${groupIdx}${sufixo}`
   const createCode = opts.isUpdate ? baseCode : `${baseCode}${opts.retryCount > 0 ? `-R${opts.retryCount}` : ''}`
 
   const produtosUpsert = ocItems.map((e, i) => ({
@@ -812,6 +815,9 @@ async function upsertOC(
     _action: action,
     _numero: res?.cNumero ?? res?.nCodPed ?? found?.cab?.cNumero ?? found?.cab?.nCodPed ?? intCode,
     _codigo: res?.nCodPed ?? found?.cab?.nCodPed,
+    // Com o sufixo da parte: o resumo junta tentativas por este código, e as
+    // duas OCs do mesmo fornecedor não podem virar uma.
+    _intCode: baseCode,
   }
 }
 
@@ -1168,6 +1174,8 @@ function montaResumo(dealId: number, ocResults: any[], ovResults: any[], osResul
       // De qual fornecedor saiu a OC — os campos do card do Bitrix usam para
       // achar o Número de Ordem de Compra.
       grupoIdx: r._groupIdx,
+      // HW ou SV. Ausente nas OCs de antes da separação, que levam tudo.
+      parte: r._parte,
       erro: omieFaultMessage(r) ?? undefined,
     })),
     ov: ovResults.map((r, i) => ({
@@ -1224,6 +1232,56 @@ function soCriados(resumo: any) {
   return { ...resumo, oc: ok(resumo?.oc), ov: ok(resumo?.ov), os: ok(resumo?.os) }
 }
 
+/**
+ * Fornecedores mistos (hardware e serviço) que já foram ao Omie numa OC só,
+ * antes da separação HW × serviço. Reconhecidos pelo resumo do envio anterior:
+ * OC daquele fornecedor sem `parte`. Ficam numa OC só nos reenvios, porque a
+ * OC do Omie não exclui item pelo upsert — separar deixaria os itens de serviço
+ * na OC antiga e os repetiria na nova.
+ */
+function gruposSemSeparar(deal: any, supplierGroups: any[]): Set<string> {
+  const saida = new Set<string>()
+  let resp: any = deal?.omie_response
+  try { if (typeof resp === 'string') resp = JSON.parse(resp) } catch { resp = null }
+  const ocs: any[] = resp?.resumo?.oc ?? []
+  if (!ocs.length) return saida
+  supplierGroups.forEach((g, i) => {
+    if (!grupoMisto(g)) return
+    const doGrupo = ocs.filter(o => !o?.erro &&
+      Number(o?.grupoIdx ?? /-G(\d+)/.exec(String(o?.codigoIntegracao ?? ''))?.[1]) === i)
+    if (doGrupo.length && doGrupo.every(o => !o?.parte && !/-G\d+-SV/.test(String(o?.codigoIntegracao ?? '')))) {
+      saida.add(String(g?.localId ?? ''))
+    }
+  })
+  return saida
+}
+
+/**
+ * Sufixo do código de integração de cada parte, para o reenvio casar com a OC
+ * que já existe no Omie. Vale o que o envio anterior usou para aquela parte; sem
+ * envio anterior, a regra padrão (sufixoDaParte). Se a parte nova cair num código
+ * que outra parte já ocupa — fornecedor que tinha só licença e ganhou hardware —
+ * ela recebe um código próprio, em vez de sobrescrever a OC da outra.
+ */
+function sufixosDasPartes(deal: any) {
+  let resp: any = deal?.omie_response
+  try { if (typeof resp === 'string') resp = JSON.parse(resp) } catch { resp = null }
+  const anteriores = new Map<string, string>()
+  for (const o of (resp?.resumo?.oc ?? []) as any[]) {
+    if (o?.erro || !o?.parte) continue
+    const m = /-G(\d+)(-SV|-HW)?(?:-R\d+)?$/.exec(String(o?.codigoIntegracao ?? ''))
+    if (m) anteriores.set(`${m[1]}:${o.parte}`, m[2] ?? '')
+  }
+  return (group: any, gIdx: number, parte: ParteOc): string => {
+    const anterior = anteriores.get(`${gIdx}:${parte}`)
+    if (anterior !== undefined) return anterior
+    const outra: ParteOc = parte === 'HW' ? 'SV' : 'HW'
+    const padrao = sufixoDaParte(group, parte)
+    if (anteriores.get(`${gIdx}:${outra}`) === padrao) return parte === 'HW' ? '-HW' : '-SV'
+    return padrao
+  }
+}
+
 async function processDeal(body: any, dealId: number) {
   // Fora do try: se o envio falhar no meio, o catch ainda sabe o que foi criado.
   const ocResults: any[] = [], ovResults: any[] = [], osResults: any[] = []
@@ -1240,8 +1298,12 @@ async function processDeal(body: any, dealId: number) {
     // de qualquer pedido, para o card sair com "OC 9178/26 - ...". Aqui, e não na
     // action, porque os reenvios da tela de processamento chamam esta rota direto.
     // Falha aqui não segura o envio: o card só fica sem o prefixo naquela linha.
+    const semSeparar = gruposSemSeparar(deal, payload?.supplierGroups ?? [])
+    if (semSeparar.size) {
+      console.log(`[OC] deal=${dealId} ${semSeparar.size} fornecedor(es) já enviado(s) numa OC só, antes da separação HW × serviço: mantidos assim`)
+    }
     try {
-      const { criados, erros } = await garanteNumerosOc(payload)
+      const { criados, erros } = await garanteNumerosOc(payload, { semSeparar })
       if (criados) await sql`UPDATE deals SET payload = ${JSON.stringify(payload)}, updated_at = NOW() WHERE id = ${dealId}`
       if (erros.length) console.error(`[OC] deal=${dealId} sem Número de Ordem de Compra:`, erros.join(' | '))
     } catch (err) {
@@ -1339,7 +1401,10 @@ async function processDeal(body: any, dealId: number) {
       }
     }
 
-    // 3) OC: 1 por grupo de fornecedor
+    // 3) OC por fornecedor e por parte: hardware numa OC; software, licença e
+    //    serviço de terceiro noutra (regra do time; ver partesDoGrupo). Quem já
+    //    foi ao Omie numa OC só, antes da separação, continua numa só: separar
+    //    agora deixaria os itens antigos na OC e duplicaria os de serviço.
     for (let gIdx = 0; gIdx < supplierGroups.length; gIdx++) {
       const group = supplierGroups[gIdx]
       const branchCnpj = getBranchCnpj(group.branch, fallbackCnpj)
@@ -1351,8 +1416,20 @@ async function processDeal(body: any, dealId: number) {
       const codParcGrupo = condGrupo
         ? await resolvePaymentCodeForOmie(condGrupo, 'purchase')
         : purchaseCodParc
-      const res = await upsertOC(branchCnpj, codDistribuidor, group.products ?? [], business, obs, dealId, gIdx, upsertOpts, codParcGrupo, valorFrete, String(group.deliveryDeadline ?? ''))
-      if (res) ocResults.push({ ...res, _supplier: group.supplier?.name, _groupIdx: gIdx })
+      const prazo = String(group.deliveryDeadline ?? '')
+      if (semSeparar.has(String(group.localId ?? ''))) {
+        const res = await upsertOC(branchCnpj, codDistribuidor, group.products ?? [], business, obs, dealId, gIdx, upsertOpts, codParcGrupo, valorFrete, prazo)
+        if (res) ocResults.push({ ...res, _supplier: group.supplier?.name, _groupIdx: gIdx })
+        continue
+      }
+      const partes = partesDoGrupo(group)
+      const sufixo = sufixosDasPartes(deal)
+      for (const parte of partes) {
+        // O frete vai numa OC só, a primeira (a de hardware, quando há).
+        const frete = parte === partes[0] ? valorFrete : 0
+        const res = await upsertOC(branchCnpj, codDistribuidor, produtosDaParte(group, parte), business, obs, dealId, gIdx, upsertOpts, codParcGrupo, frete, prazo, sufixo(group, gIdx, parte))
+        if (res) ocResults.push({ ...res, _supplier: group.supplier?.name, _groupIdx: gIdx, _parte: parte })
+      }
     }
 
     // 4) OV + OS: 1 por cliente E por filial de compra. O mesmo cliente gera

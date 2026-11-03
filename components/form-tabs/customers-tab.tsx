@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Trash2, Plus, Search, Users, Building2, ChevronDown, ChevronUp, Eye, Loader2, ExternalLink, RefreshCw } from "lucide-react"
 import { PaymentConditionSelect } from "@/components/payment-condition-select"
 import { faltaNoCliente } from "@/lib/dados-obrigatorios"
+import { partesDoGrupo } from "@/lib/oc-numbers"
 import { searchBitrixCompaniesAction, getBitrixCompanyDetailsAction, createBitrixClientAction, lookupCnpjAction } from "@/lib/actions"
 import { isCNPJComplete, formatCNPJ, formatCurrency } from "@/lib/utils"
 import { CurrencyInput } from "@/components/ui/currency-input"
@@ -1060,6 +1061,8 @@ export function CustomersTab({ form }: CustomersTabProps) {
 
   // Resumo: OC e OV
   const uniqueSuppliers = supplierGroups.length
+  // Hardware numa OC; software, licença e serviço de terceiro noutra.
+  const totalOCs = supplierGroups.reduce((soma: number, g: any) => soma + Math.max(1, partesDoGrupo(g).length), 0)
   const uniqueCustomers = customerFields.length
 
   // Uma OV por cliente E por filial: o mesmo cliente gera dois pedidos quando
@@ -1105,9 +1108,9 @@ export function CustomersTab({ form }: CustomersTabProps) {
       {(uniqueSuppliers > 0 || uniqueCustomers > 0) && (
         <div className="grid grid-cols-3 gap-3">
           <div className="border rounded-lg p-3 bg-blue-50 border-blue-200 text-center">
-            <p className="text-2xl font-bold text-blue-700">{uniqueSuppliers}</p>
+            <p className="text-2xl font-bold text-blue-700">{totalOCs}</p>
             <p className="text-sm text-blue-600">Ordem(ns) de Compra</p>
-            <p className="text-xs text-blue-500 mt-0.5">1 OC por fornecedor</p>
+            <p className="text-xs text-blue-500 mt-0.5">por fornecedor: HW numa, LIC/SFW/SVT noutra</p>
           </div>
           <div className="border rounded-lg p-3 bg-purple-50 border-purple-200 text-center">
             <p className="text-2xl font-bold text-purple-700">{totalOVs || uniqueCustomers}</p>

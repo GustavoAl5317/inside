@@ -1587,75 +1587,58 @@ export class BitrixService {
   }
 
   /**
-   * Cria fornecedor na lista usando PROPERTY_CODE diretamente.
-   * Retorna o ID do elemento criado.
+   * Campos de escrita da lista #61, pelo ID numérico da propriedade e com o
+   * valor direto, como a lista aceita (o formato por código não grava).
+   * Campo do tipo Número (CNPJ, IE, telefones, número, CEP) vai só com dígitos.
    */
+  private static _camposFornecedor(data: Partial<Omit<BitrixSupplier, 'id'>>): Record<string, any> {
+    const NUMERICOS = new Set(['CNPJ', 'IE', 'TELEFONE1', 'TELEFONE2', 'NUMERO', 'CEP'])
+    const porCodigo: Record<string, string | undefined> = {
+      CNPJ: data.cnpj, IE: data.ie, EMAIL: data.email, CONTATO: data.contato,
+      TELEFONE1: data.telefone1, TELEFONE2: data.telefone2, ENDERECO: data.endereco,
+      NUMERO: data.numero, COMPLEMENTO: data.complemento, BAIRRO: data.bairro,
+      CIDADE: data.cidade, ESTADO: data.estado, CEP: data.cep, ENDERECO_COMPLETO: data.enderecoCompleto,
+    }
+    const fields: Record<string, any> = {}
+    if (data.name !== undefined) fields.NAME = String(data.name ?? '').trim()
+    for (const [id, codigo] of Object.entries(BitrixService.SUPPLIER_PROP_IDS)) {
+      const bruto = porCodigo[codigo]
+      if (bruto === undefined) continue
+      const texto = String(bruto ?? '').trim()
+      fields[`PROPERTY_${id}`] = NUMERICOS.has(codigo) ? texto.replace(/\D/g, '') : texto
+    }
+    return fields
+  }
+
+  /** Cria fornecedor na lista #61. Retorna o ID do elemento criado. */
   static async createSupplier(
     data: Omit<BitrixSupplier, 'id'>,
     listId: number | string = 61
   ): Promise<string> {
-    const p = BitrixService._writeProp
     const elementCode = data.cnpj.replace(/\D/g, '') || String(Date.now())
-
     const j: any = await bPost('/lists.element.add.json', {
       IBLOCK_TYPE_ID: 'lists',
       IBLOCK_ID: listId,
       ELEMENT_CODE: elementCode,
-      fields: {
-        NAME:                      data.name,
-        PROPERTY_CNPJ:             p(data.cnpj),
-        PROPERTY_IE:               p(data.ie),
-        PROPERTY_EMAIL:            p(data.email),
-        PROPERTY_CONTATO:          p(data.contato),
-        PROPERTY_TELEFONE1:        p(data.telefone1),
-        PROPERTY_TELEFONE2:        p(data.telefone2),
-        PROPERTY_ENDERECO:         p(data.endereco),
-        PROPERTY_NUMERO:           p(data.numero),
-        PROPERTY_COMPLEMENTO:      p(data.complemento),
-        PROPERTY_BAIRRO:           p(data.bairro),
-        PROPERTY_CIDADE:           p(data.cidade),
-        PROPERTY_ESTADO:           p(data.estado),
-        PROPERTY_CEP:              p(data.cep),
-        PROPERTY_ENDERECO_COMPLETO: p(data.enderecoCompleto),
-      },
+      fields: BitrixService._camposFornecedor(data),
     })
-
+    if (j?.error) throw new Error(j.error_description || j.error)
     return String(j.result || '')
   }
 
-  /**
-   * Atualiza fornecedor na lista usando PROPERTY_CODE diretamente.
-   */
+  /** Atualiza fornecedor na lista #61. A tela manda sempre o cadastro completo. */
   static async updateSupplier(
     elementId: string,
-    data: Partial<Omit<BitrixSupplier, 'id'>>,
+    data: Omit<BitrixSupplier, 'id'>,
     listId: number | string = 61
   ): Promise<void> {
-    const p = BitrixService._writeProp
-    const fields: Record<string, any> = {}
-
-    if (data.name             !== undefined) fields.NAME                       = data.name
-    if (data.cnpj             !== undefined) fields.PROPERTY_CNPJ              = p(data.cnpj)
-    if (data.ie               !== undefined) fields.PROPERTY_IE                = p(data.ie)
-    if (data.email            !== undefined) fields.PROPERTY_EMAIL             = p(data.email)
-    if (data.contato          !== undefined) fields.PROPERTY_CONTATO           = p(data.contato)
-    if (data.telefone1        !== undefined) fields.PROPERTY_TELEFONE1         = p(data.telefone1)
-    if (data.telefone2        !== undefined) fields.PROPERTY_TELEFONE2         = p(data.telefone2)
-    if (data.endereco         !== undefined) fields.PROPERTY_ENDERECO          = p(data.endereco)
-    if (data.numero           !== undefined) fields.PROPERTY_NUMERO            = p(data.numero)
-    if (data.complemento      !== undefined) fields.PROPERTY_COMPLEMENTO       = p(data.complemento)
-    if (data.bairro           !== undefined) fields.PROPERTY_BAIRRO            = p(data.bairro)
-    if (data.cidade           !== undefined) fields.PROPERTY_CIDADE            = p(data.cidade)
-    if (data.estado           !== undefined) fields.PROPERTY_ESTADO            = p(data.estado)
-    if (data.cep              !== undefined) fields.PROPERTY_CEP               = p(data.cep)
-    if (data.enderecoCompleto !== undefined) fields.PROPERTY_ENDERECO_COMPLETO = p(data.enderecoCompleto)
-
-    await bPost('/lists.element.update.json', {
+    const j: any = await bPost('/lists.element.update.json', {
       IBLOCK_TYPE_ID: 'lists',
       IBLOCK_ID: listId,
       ELEMENT_ID: elementId,
-      fields,
+      fields: BitrixService._camposFornecedor(data),
     })
+    if (j?.error) throw new Error(j.error_description || j.error)
   }
 
   /** Remove fornecedor da lista. */

@@ -6,255 +6,51 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
+import { formatCNPJ, normalizeCNPJDigits } from '@/lib/utils'
+import { listarFornecedoresListaAction, salvarFornecedorListaAction, excluirFornecedorListaAction } from '@/lib/actions'
 import {
   Loader2, Plus, Search, Upload, Pencil, Trash2, X,
   ChevronUp, ChevronDown, RefreshCw, Building2,
   AlertTriangle, CheckCircle2, Info, AlertCircle,
 } from 'lucide-react'
 
-// ─── BX24 helpers (client-side) ───────────────────────────────────────────────
-
-declare const BX24: any
-
-const LIST_ID = 61
-
-/** Promisifica BX24.callMethod */
-function bx24Call(method: string, params: Record<string, any> = {}): Promise<any> {
-  return new Promise((resolve, reject) => {
-    if (typeof BX24 === 'undefined') {
-      reject(new Error('BX24 não disponível. Abra o app dentro do Bitrix24.'))
-      return
-    }
-    BX24.callMethod(method, params, (res: any) => {
-      if (res.error()) {
-        const e = res.error()
-        console.error(`[BX24] ${method} ERRO:`, e)
-        reject(new Error(`[${e.error}] ${e.error_description || e.error || 'Erro BX24'}`))
-      } else {
-        resolve(res.data())
-      }
-    })
-  })
-}
-
-type FieldMeta = { id: string; ptype: 'N' | 'HTML' | 'S' }
-
-/**
- * Mapeia CODE → { id, ptype } via lists.field.get.
- * ptype: 'N' = Número, 'HTML' = S:HTML, 'S' = String genérico
- */
-async function getFieldMap(listId: number): Promise<Record<string, FieldMeta>> {
-  try {
-    const data = await bx24Call('lists.field.get', {
-      IBLOCK_TYPE_ID: 'lists',
-      IBLOCK_ID: listId,
-    })
-    console.log('[BX24] lists.field.get raw:', JSON.stringify(data))
-    const map: Record<string, FieldMeta> = {}
-    for (const [key, info] of Object.entries(data as Record<string, any>)) {
-      const i = info as any
-      const isHtml = i.PROPERTY_USER_TYPE?.USER_TYPE === 'HTML' || String(i.TYPE || '').includes('HTML')
-      const rawType = String(i.PROPERTY_TYPE || i.TYPE || 'S')
-      const ptype: FieldMeta['ptype'] = isHtml ? 'HTML' : rawType === 'N' ? 'N' : 'S'
-      const propMatch = key.match(/^PROPERTY_(\d+)$/)
-      if (propMatch) {
-        const code = String(i.CODE || i.code || '').toUpperCase().trim()
-        if (code) map[code] = { id: propMatch[1], ptype }
-      } else {
-        const fid = String(i.FIELD_ID || i.field_id || i.ID || i.id || '').replace('PROPERTY_', '')
-        if (fid && /^\d+$/.test(fid)) map[key.toUpperCase().trim()] = { id: fid, ptype }
-      }
-    }
-    console.log('[BX24] field map:', JSON.stringify(map))
-    return map
-  } catch (e) {
-    console.warn('[BX24] lists.field.get falhou:', e)
-    return {}
-  }
-}
-
-/**
- * Formata valor conforme o tipo do campo Bitrix24.
- * Para lists.element.add/update com propriedades de valor único (MULTIPLE: N),
- * o Bitrix24 espera o VALOR DIRETO (string) — sem wrapper { VALUE: ... }.
- * O wrapper quebra o form-encoding do BX24 SDK e gera 400/ajaxError.
- */
-function makeVal(meta: FieldMeta | undefined, v: string | undefined): any {
-  if (!v?.trim()) return undefined
-  const val = v.trim()
-  if (meta?.ptype === 'N') {
-    // Número: apenas dígitos (ex: CNPJ "09.121.909/0001-72" → "09121909000172")
-    const digits = val.replace(/\D/g, '')
-    return digits || undefined
-  }
-  // HTML e String: texto plano direto
-  return val
-}
-
-// Cache do mapa de campos
-let _fieldMapCache: Record<string, FieldMeta> | null = null
-
-async function fieldMap(): Promise<Record<string, FieldMeta>> {
-  if (_fieldMapCache) return _fieldMapCache
-  _fieldMapCache = await getFieldMap(LIST_ID)
-  return _fieldMapCache
-}
-
-/** Extrai valor de PROPERTY_N lido do Bitrix24 (leitura) */
-function readProp(el: any, key: string): string {
-  const raw = el[key]
-  if (!raw) return ''
-  if (typeof raw === 'object' && !Array.isArray(raw)) {
-    const first = Object.values(raw)[0] as any
-    const val = first?.VALUE ?? first
-    // HTML: { TYPE: "html", TEXT: "..." }
-    if (val && typeof val === 'object' && val.TEXT !== undefined) return String(val.TEXT ?? '')
-    return String(val ?? '')
-  }
-  if (Array.isArray(raw)) return String(raw[0] ?? '')
-  return String(raw)
-}
-
-/** Converte elemento bruto em BitrixSupplier usando IDs numéricos reais */
-function parseElement(el: any, fm: Record<string, FieldMeta>): BitrixSupplier {
-  const g = (code: string) => {
-    const byCode = readProp(el, `PROPERTY_${code}`)
-    if (byCode) return byCode
-    const meta = fm[code]
-    return meta ? readProp(el, `PROPERTY_${meta.id}`) : ''
-  }
-  return {
-    id: String(el.ID || ''),
-    name: String(el.NAME || ''),
-    cnpj: g('CNPJ'), ie: g('IE'), email: g('EMAIL'),
-    contato: g('CONTATO'), telefone1: g('TELEFONE1'), telefone2: g('TELEFONE2'),
-    endereco: g('ENDERECO'), numero: g('NUMERO'), complemento: g('COMPLEMENTO'),
-    bairro: g('BAIRRO'), cidade: g('CIDADE'), estado: g('ESTADO'),
-    cep: g('CEP'), enderecoCompleto: g('ENDERECO_COMPLETO'),
-  }
-}
-
-// ─── CRUD via BX24 ────────────────────────────────────────────────────────────
+// ─── Lista #61 pelo servidor ──────────────────────────────────────────────────
+// Antes a tela falava com o Bitrix pelo BX24 de quem abria, e quem não tinha
+// permissão na lista #61 não via nada. Agora vai pelo servidor, com o acesso do
+// app: vale para todo usuário liberado no app.
 
 async function bx24GetSuppliers(
   onPage?: (partial: BitrixSupplier[]) => void
 ): Promise<BitrixSupplier[]> {
-  const fm = await fieldMap()
-  const all: BitrixSupplier[] = []
-  let start = 0
-
-  // SELECT enxuto: só os IDs reais (PROPERTY_329, etc.) — sem os codes inexistentes
-  const select = ['ID', 'NAME', ...Object.values(fm).map(m => `PROPERTY_${m.id}`)]
-
-  const seen = new Set<string>()
-  while (true) {
-    const data = await bx24Call('lists.element.get', {
-      IBLOCK_TYPE_ID: 'lists',
-      IBLOCK_ID: LIST_ID,
-      FILTER: { ACTIVE: 'Y' },
-      SELECT: select,
-      start,
-    })
-
-    const items: any[] = Array.isArray(data) ? data : Object.values(data || {})
-    for (const el of items) {
-      const sup = parseElement(el, fm)
-      if (sup.id && !seen.has(sup.id)) {
-        seen.add(sup.id)
-        all.push(sup)
-      }
-    }
-
-    // Render progressivo: entrega o que já carregou
-    onPage?.([...all])
-
-    if (items.length < 50) break
-    start += 50
-  }
-
-  return all
+  const r = await listarFornecedoresListaAction()
+  if (!r.success) throw new Error(r.error)
+  onPage?.(r.fornecedores)
+  return r.fornecedores
 }
 
 async function bx24CreateSupplier(data: Omit<BitrixSupplier, 'id'>): Promise<string> {
-  const fm = await fieldMap()
-  const pk  = (code: string) => fm[code] ? `PROPERTY_${fm[code].id}` : `PROPERTY_${code}`
-  const mv  = (code: string, v: string | undefined) => makeVal(fm[code], v)
-
-  const fields: Record<string, any> = { NAME: data.name }
-  const s = (code: string, v: string | undefined) => { const x = mv(code, v); if (x) fields[pk(code)] = x }
-  s('CNPJ',              data.cnpj)
-  s('IE',                data.ie)
-  s('EMAIL',             data.email)
-  s('CONTATO',           data.contato)
-  s('TELEFONE1',         data.telefone1)
-  s('TELEFONE2',         data.telefone2)
-  s('ENDERECO',          data.endereco)
-  s('NUMERO',            data.numero)
-  s('COMPLEMENTO',       data.complemento)
-  s('BAIRRO',            data.bairro)
-  s('CIDADE',            data.cidade)
-  s('ESTADO',            data.estado)
-  s('CEP',               data.cep)
-  s('ENDERECO_COMPLETO', data.enderecoCompleto)
-
-  const elementCode = data.cnpj.replace(/\D/g, '') || String(Date.now())
-  console.log('[BX24] create fields:', JSON.stringify(fields))
-
-  const result = await bx24Call('lists.element.add', {
-    IBLOCK_TYPE_ID: 'lists',
-    IBLOCK_ID: LIST_ID,
-    ELEMENT_CODE: elementCode,
-    fields,
-  })
-
-  return String(result || '')
+  const r = await salvarFornecedorListaAction(null, data)
+  if (!r.success) throw new Error(r.error)
+  return r.id
 }
 
-async function bx24UpdateSupplier(
-  elementId: string,
-  data: Partial<Omit<BitrixSupplier, 'id'>>
-): Promise<void> {
-  const fm = await fieldMap()
-  const pk  = (code: string) => fm[code] ? `PROPERTY_${fm[code].id}` : `PROPERTY_${code}`
-  const mv  = (code: string, v: string | undefined) => makeVal(fm[code], v) ?? ''
-
-  const fields: Record<string, any> = {}
-  if (data.name             !== undefined) fields.NAME              = data.name
-  if (data.cnpj             !== undefined) fields[pk('CNPJ')]              = mv('CNPJ',             data.cnpj)
-  if (data.ie               !== undefined) fields[pk('IE')]                = mv('IE',               data.ie)
-  if (data.email            !== undefined) fields[pk('EMAIL')]             = mv('EMAIL',            data.email)
-  if (data.contato          !== undefined) fields[pk('CONTATO')]           = mv('CONTATO',          data.contato)
-  if (data.telefone1        !== undefined) fields[pk('TELEFONE1')]         = mv('TELEFONE1',        data.telefone1)
-  if (data.telefone2        !== undefined) fields[pk('TELEFONE2')]         = mv('TELEFONE2',        data.telefone2)
-  if (data.endereco         !== undefined) fields[pk('ENDERECO')]          = mv('ENDERECO',         data.endereco)
-  if (data.numero           !== undefined) fields[pk('NUMERO')]            = mv('NUMERO',           data.numero)
-  if (data.complemento      !== undefined) fields[pk('COMPLEMENTO')]       = mv('COMPLEMENTO',      data.complemento)
-  if (data.bairro           !== undefined) fields[pk('BAIRRO')]            = mv('BAIRRO',           data.bairro)
-  if (data.cidade           !== undefined) fields[pk('CIDADE')]            = mv('CIDADE',           data.cidade)
-  if (data.estado           !== undefined) fields[pk('ESTADO')]            = mv('ESTADO',           data.estado)
-  if (data.cep              !== undefined) fields[pk('CEP')]               = mv('CEP',              data.cep)
-  if (data.enderecoCompleto !== undefined) fields[pk('ENDERECO_COMPLETO')] = mv('ENDERECO_COMPLETO',data.enderecoCompleto)
-
-  await bx24Call('lists.element.update', {
-    IBLOCK_TYPE_ID: 'lists',
-    IBLOCK_ID: LIST_ID,
-    ELEMENT_ID: elementId,
-    fields,
-  })
+async function bx24UpdateSupplier(elementId: string, data: Omit<BitrixSupplier, 'id'>): Promise<void> {
+  const r = await salvarFornecedorListaAction(elementId, data)
+  if (!r.success) throw new Error(r.error)
 }
 
 async function bx24DeleteSupplier(elementId: string): Promise<void> {
-  await bx24Call('lists.element.delete', {
-    IBLOCK_TYPE_ID: 'lists',
-    IBLOCK_ID: LIST_ID,
-    ELEMENT_ID: elementId,
-  })
+  const r = await excluirFornecedorListaAction(elementId)
+  if (!r.success) throw new Error(r.error)
 }
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
 type SupplierForm = Omit<BitrixSupplier, 'id'>
-const normCnpj = (s: string) => s.replace(/\D/g, '')
+// O campo CNPJ da lista #61 e do tipo Numero: o Bitrix guarda sem o zero a
+// esquerda (08... vira 8...). Completar os 14 digitos aqui e o que faz o aviso
+// de CNPJ ja cadastrado reconhecer esses fornecedores.
+const normCnpj = (s: string) => normalizeCNPJDigits(String(s ?? ''))
 
 const EMPTY: SupplierForm = {
   name:'', cnpj:'', ie:'', email:'', contato:'',
@@ -284,7 +80,7 @@ function DeleteModal({ s, onConfirm, onCancel, loading }: {
           </div>
           <div className="mt-4 p-3 bg-gray-50 border rounded-lg">
             <p className="text-sm font-semibold text-gray-800">{s.name}</p>
-            {s.cnpj && <p className="text-xs text-gray-500 font-mono mt-0.5">CNPJ: {s.cnpj}</p>}
+            {s.cnpj && <p className="text-xs text-gray-500 font-mono mt-0.5">CNPJ: {formatCNPJ(s.cnpj)}</p>}
             {s.cidade && <p className="text-xs text-gray-500 mt-0.5">{[s.cidade, s.estado].filter(Boolean).join(' / ')}</p>}
           </div>
           <p className="text-sm text-red-600 font-medium mt-3">Tem certeza que deseja excluir?</p>
@@ -384,9 +180,11 @@ function SupplierDialog({ open, onClose, initial, existing, onSaved }: {
   const set = (k: keyof SupplierForm, v: string) => {
     setForm(f => ({ ...f, [k]: v }))
     if (k === 'cnpj' && !initial) {
-      const norm = normCnpj(v)
-      if (norm.length >= 14)
-        setDuplicate(existing.find(s => normCnpj(s.cnpj) === norm) ?? null)
+      // Só confere com o CNPJ inteiro digitado; o completar de zeros vale para
+      // o que está gravado na lista.
+      const digitado = v.replace(/\D/g, '')
+      if (digitado.length === 14)
+        setDuplicate(existing.find(s => normCnpj(s.cnpj) === digitado) ?? null)
       else
         setDuplicate(null)
     }
@@ -404,6 +202,20 @@ function SupplierDialog({ open, onClose, initial, existing, onSaved }: {
 
   const handleSave = async () => {
     if (!form.name.trim()) { toast.error('Nome é obrigatório'); return }
+    // O que o Omie exige ao cadastrar o fornecedor no envio. Faltando, o envio
+    // para no meio (foi o caso da HP, sem e-mail).
+    const faltando = [
+      normCnpj(form.cnpj).length !== 14 && 'CNPJ',
+      !form.email.trim() && 'e-mail',
+      !form.cidade.trim() && 'cidade',
+      !form.estado.trim() && 'UF',
+    ].filter(Boolean)
+    if (faltando.length) { toast.error(`Preencha ${faltando.join(', ')}: o Omie exige no envio.`); return }
+    if (form.name.trim().length > 60) {
+      toast.error(`O nome tem ${form.name.trim().length} caracteres e o Omie aceita no máximo 60. Abrevie (ex.: LTDA, COM., SERV.).`)
+      return
+    }
+    if (form.estado.trim().length !== 2) { toast.error('UF deve ter 2 letras, como SP ou ES.'); return }
 
     if (initial) {
       const d = buildDiff(initial, form)
@@ -810,59 +622,14 @@ export default function FornecedoresPage() {
   const [search, setSearch]       = useState('')
   const [sortKey, setSortKey]     = useState<keyof BitrixSupplier>('name')
   const [sortAsc, setSortAsc]     = useState(true)
-  const [bx24Ready, setBx24Ready] = useState(false)
-  const [bx24Error, setBx24Error] = useState('')
+  // A lista vem pelo servidor: não depende mais do BX24 de quem abre a tela.
+  const bx24Ready = true
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing]       = useState<BitrixSupplier | null>(null)
   const [importOpen, setImportOpen] = useState(false)
   const [confirmDel, setConfirmDel] = useState<BitrixSupplier | null>(null)
   const [deleting, setDeleting]     = useState(false)
-
-  // Carrega o SDK do Bitrix24 e inicializa BX24
-  useEffect(() => {
-    let mounted = true
-
-    const initBX24 = () => {
-      if (!mounted) return
-      if (typeof BX24 === 'undefined' || !BX24) {
-        setBx24Error('BX24 não disponível. Abra o app dentro do Bitrix24.')
-        setLoading(false)
-        return
-      }
-      BX24.init(() => { if (mounted) setBx24Ready(true) })
-    }
-
-    // SDK já disponível (carregado por outra página/frame)
-    if (typeof BX24 !== 'undefined' && BX24) {
-      initBX24()
-      return () => { mounted = false }
-    }
-
-    // Script já existe no DOM mas pode não ter terminado de carregar
-    const existing = document.querySelector<HTMLScriptElement>(
-      'script[src="https://api.bitrix24.com/api/v1/"]'
-    )
-    if (existing) {
-      existing.addEventListener('load', initBX24, { once: true })
-      return () => { mounted = false; existing.removeEventListener('load', initBX24) }
-    }
-
-    // Injeta o SDK do Bitrix24
-    const script = document.createElement('script')
-    script.src = 'https://api.bitrix24.com/api/v1/'
-    script.async = true
-    script.onload = initBX24
-    script.onerror = () => {
-      if (mounted) {
-        setBx24Error('Falha ao carregar o SDK do Bitrix24. Verifique a conexão.')
-        setLoading(false)
-      }
-    }
-    document.head.appendChild(script)
-
-    return () => { mounted = false }
-  }, [])
 
   const load = useCallback(async () => {
     if (!bx24Ready) return
@@ -918,21 +685,12 @@ export default function FornecedoresPage() {
       onClick={() => handleSort(k)}>{children}<Si k={k}/></th>
   )
 
-  if (bx24Error) return (
-    <div className="flex items-center justify-center min-h-[400px]">
-      <div className="text-center p-6">
-        <AlertCircle className="w-10 h-10 text-red-400 mx-auto mb-3"/>
-        <p className="font-semibold text-gray-700">{bx24Error}</p>
-      </div>
-    </div>
-  )
-
   return (
     <div className="container mx-auto p-6 space-y-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Fornecedores</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Lista Bitrix24 #{LIST_ID} — {suppliers.length} cadastrado(s)</p>
+          <p className="text-sm text-gray-500 mt-0.5">Lista Bitrix24 #61 — {suppliers.length} cadastrado(s)</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={load} disabled={loading || !bx24Ready}>
@@ -993,7 +751,7 @@ export default function FornecedoresPage() {
                       <p className="font-medium text-gray-900">{s.name}</p>
                       {s.ie && <p className="text-xs text-gray-400 mt-0.5">IE: {s.ie}</p>}
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-gray-600">{s.cnpj||'—'}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-600">{s.cnpj ? formatCNPJ(s.cnpj) : '—'}</td>
                     <td className="px-4 py-3 text-gray-700">{s.contato||'—'}</td>
                     <td className="px-4 py-3 text-gray-700 whitespace-nowrap">
                       {s.telefone1||'—'}

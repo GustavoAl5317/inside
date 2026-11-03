@@ -4,6 +4,7 @@ import ExcelJS from 'exceljs'
 import { companyForBranch } from './interatell-companies'
 import { formatCNPJ, formatZipCode } from './utils'
 import { BitrixService } from './bitrix-service'
+import { parteDaNatureza, partesDoGrupo, rotuloNaturezas, produtosDaParte, type ParteOc } from './oc-numbers'
 import {
   buildOmiePlan, resolvePaymentCodeForOmie,
   type OmiePlan,
@@ -542,18 +543,36 @@ function nomeAba(cliente: string, indice: number, usados: Set<string>): string {
  */
 export async function generateOcExcelFiles(values: any, dealId?: number | null): Promise<OcExcelFile[]> {
   type Aba = { group: any; entry: any; itens: any[] }
-  type Arquivo = { fornecedor: string; abas: Aba[]; groupLocalId?: string; servico?: boolean }
+  type Arquivo = {
+    fornecedor: string; abas: Aba[]; groupLocalId?: string; servico?: boolean
+    parte?: ParteOc; comServicoProprio?: boolean
+  }
   const arquivos: Arquivo[] = []
 
+  // Um arquivo por OC. O fornecedor com hardware e com software/licença/serviço
+  // tem duas OCs (regra do time; ver partesDoGrupo), então dois arquivos. O
+  // serviço Interatell vendido junto, que não entra em OC, vai no primeiro.
   for (const group of (values?.supplierGroups ?? [])) {
-    const abas: Aba[] = []
-    for (const entry of (values?.customers ?? [])) {
-      const itens = itensDoPar(group, entry)
-      if (itens.length) abas.push({ group, entry, itens })
-    }
-    if (abas.length) {
-      arquivos.push({ fornecedor: txt(group?.supplier?.name), abas, groupLocalId: group?.localId })
-    }
+    const partes = partesDoGrupo(group)
+    const misto = partes.length > 1
+    partes.forEach((parte, i) => {
+      const comServicoProprio = i === 0
+      const naParte = (p: any) => {
+        const x = parteDaNatureza(p?.nature)
+        return x === parte || (x === null && comServicoProprio)
+      }
+      const abas: Aba[] = []
+      for (const entry of (values?.customers ?? [])) {
+        const itens = itensDoPar(group, entry).filter(naParte)
+        if (itens.length) abas.push({ group, entry, itens })
+      }
+      if (!abas.length) return
+      const rotulo = rotuloNaturezas(produtosDaParte(group, parte).map((p: any) => p?.nature))
+      arquivos.push({
+        fornecedor: misto ? `${txt(group?.supplier?.name)} ${rotulo}` : txt(group?.supplier?.name),
+        abas, groupLocalId: group?.localId, parte: misto ? parte : undefined, comServicoProprio,
+      })
+    })
   }
 
   const servico = grupoServicoInteratell()
@@ -594,7 +613,7 @@ export async function generateOcExcelFiles(values: any, dealId?: number | null):
   const saida: OcExcelFile[] = []
   const nomesUsados = new Set<string>()
 
-  for (const { fornecedor, abas, groupLocalId, servico } of arquivos) {
+  for (const { fornecedor, abas, groupLocalId, servico, parte, comServicoProprio } of arquivos) {
     const wb = new ExcelJS.Workbook()
     await wb.xlsx.readFile(TEMPLATE)
     const modelo = wb.getWorksheet(ABA)
@@ -619,7 +638,7 @@ export async function generateOcExcelFiles(values: any, dealId?: number | null):
 
     // Ultima aba: o pedido como ele vai para o Omie, recortado neste arquivo.
     montaAbaResumo(wb, buildOmiePlan(values, dealId ?? null, condicoesOmie,
-      servico ? { servicoInteratell: true } : { groupLocalId }))
+      servico ? { servicoInteratell: true } : { groupLocalId, parte, comServicoProprio }))
 
     // O mesmo distribuidor faturado por Barueri e por ES sao duas OCs, e dois
     // arquivos com o mesmo nome: o navegador sobrescreveria um com o outro.

@@ -7,7 +7,7 @@ import { Hash, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { generateOcNumbersAction } from "@/lib/actions"
-import { observacaoOc, OBSERVACAO_OS_SERVICO } from "@/lib/oc-numbers"
+import { grupoMisto, observacaoOc, OBSERVACAO_OS_SERVICO } from "@/lib/oc-numbers"
 
 interface OcNumbersTabProps {
   form: UseFormReturn<any>
@@ -25,16 +25,25 @@ export function OcNumbersTab({ form }: OcNumbersTabProps) {
   const grupos: any[] = form.watch("supplierGroups") || []
   const servicos: any[] = form.watch("serviceCustomers") || []
 
+  // Fornecedor com hardware e com software/licença/serviço tem duas OCs, cada
+  // uma com o seu número: a de hardware em ocNumber, a outra em ocNumberServico.
   const linhas = [
-    ...grupos.map((g, i) => ({
-      path: `supplierGroups.${i}`,
-      titulo: g?.supplier?.name || `Fornecedor ${i + 1}`,
-      observacao: observacaoOc(g),
-      numero: String(g?.ocNumber ?? ""),
-      semItens: !(g?.products ?? []).length,
-    })),
+    ...grupos.flatMap((g, i) => {
+      const titulo = g?.supplier?.name || `Fornecedor ${i + 1}`
+      const semItens = !(g?.products ?? []).length
+      if (!grupoMisto(g)) {
+        return [{ key: `g${i}`, path: `supplierGroups.${i}`, campo: "ocNumber", elemento: "ocElementId",
+          titulo, observacao: observacaoOc(g), numero: String(g?.ocNumber ?? ""), semItens }]
+      }
+      return [
+        { key: `g${i}`, path: `supplierGroups.${i}`, campo: "ocNumber", elemento: "ocElementId",
+          titulo, observacao: observacaoOc(g, "HW"), numero: String(g?.ocNumber ?? ""), semItens },
+        { key: `g${i}sv`, path: `supplierGroups.${i}`, campo: "ocNumberServico", elemento: "ocElementIdServico",
+          titulo, observacao: observacaoOc(g, "SV"), numero: String(g?.ocNumberServico ?? ""), semItens },
+      ]
+    }),
     ...servicos.map((s, i) => ({
-      path: `serviceCustomers.${i}`,
+      key: `s${i}`, path: `serviceCustomers.${i}`, campo: "ocNumber", elemento: "ocElementId",
       titulo: s?.customer?.name || `Cliente de serviço ${i + 1}`,
       observacao: OBSERVACAO_OS_SERVICO,
       numero: String(s?.ocNumber ?? ""),
@@ -45,9 +54,11 @@ export function OcNumbersTab({ form }: OcNumbersTabProps) {
 
   const aplica = (prefixo: "supplierGroups" | "serviceCustomers", lista: any[] | undefined) => {
     lista?.forEach((item, i) => {
-      if (!item?.ocNumber || item.ocNumber === form.getValues(`${prefixo}.${i}.ocNumber`)) return
-      form.setValue(`${prefixo}.${i}.ocNumber`, item.ocNumber, { shouldDirty: true })
-      form.setValue(`${prefixo}.${i}.ocElementId`, item.ocElementId, { shouldDirty: true })
+      for (const [campo, elemento] of [["ocNumber", "ocElementId"], ["ocNumberServico", "ocElementIdServico"]]) {
+        if (!item?.[campo] || item[campo] === form.getValues(`${prefixo}.${i}.${campo}`)) continue
+        form.setValue(`${prefixo}.${i}.${campo}`, item[campo], { shouldDirty: true })
+        form.setValue(`${prefixo}.${i}.${elemento}`, item[elemento], { shouldDirty: true })
+      }
     })
   }
 
@@ -77,9 +88,10 @@ export function OcNumbersTab({ form }: OcNumbersTabProps) {
       <div>
         <h2 className="text-2xl font-bold">Número de Ordem de Compra</h2>
         <p className="text-sm text-gray-500 mt-1">
-          Um número por Ordem de Compra (fornecedor) e por OS de serviço Interatell, criado na
-          lista de Números de Ordem de Compra do Bitrix. O que ficar em branco é criado
-          automaticamente no envio ao Omie.
+          Um número por Ordem de Compra e por OS de serviço Interatell, criado na lista de
+          Números de Ordem de Compra do Bitrix. Fornecedor com hardware e com software,
+          licença ou serviço tem duas OCs: uma de hardware e outra do resto. O que ficar em
+          branco é criado automaticamente no envio ao Omie.
         </p>
       </div>
 
@@ -90,7 +102,7 @@ export function OcNumbersTab({ form }: OcNumbersTabProps) {
       ) : (
         <div className="border rounded-xl divide-y">
           {linhas.map(l => (
-            <div key={l.path} className="flex flex-col sm:flex-row sm:items-center gap-3 p-4">
+            <div key={l.key} className="flex flex-col sm:flex-row sm:items-center gap-3 p-4">
               <div className="min-w-0 flex-1">
                 <p className="font-medium text-sm truncate" title={l.titulo}>{l.titulo}</p>
                 <p className="text-xs text-gray-500 mt-0.5">{l.observacao}</p>
@@ -102,9 +114,9 @@ export function OcNumbersTab({ form }: OcNumbersTabProps) {
                   placeholder={l.semItens ? "sem itens" : "ex: 9178/26"}
                   disabled={l.semItens}
                   onChange={e => {
-                    form.setValue(`${l.path}.ocNumber`, e.target.value, { shouldDirty: true })
+                    form.setValue(`${l.path}.${l.campo}`, e.target.value, { shouldDirty: true })
                     // Número digitado à mão não é mais o item que o app criou.
-                    form.setValue(`${l.path}.ocElementId`, undefined, { shouldDirty: true })
+                    form.setValue(`${l.path}.${l.elemento}`, undefined, { shouldDirty: true })
                   }}
                   className="h-9"
                 />

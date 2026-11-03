@@ -1,6 +1,7 @@
 import { companyForBranch } from './interatell-companies'
 import { naturezaInterna } from './oc-numbers'
 // codigoProduto mora em utils porque a tela de fornecedores tambem usa.
+import { parteDaNatureza, partesDoGrupo, produtosDaParte, sufixoDaParte, type ParteOc } from './oc-numbers'
 export { codigoProduto } from './utils'
 import { codigoProduto } from './utils'
 import { BitrixService } from './bitrix-service'
@@ -275,7 +276,10 @@ export function buildOmiePlan(
     rotulo: (v: string) => string
     condicaoVendaDe?: (entry: any) => string
   },
-  escopo?: { groupLocalId?: string; servicoInteratell?: boolean },
+  // parte: recorta numa das OCs do fornecedor (HW ou SV). comServicoProprio:
+  // o arquivo dessa parte também mostra o serviço Interatell vendido junto,
+  // que não entra em OC nenhuma.
+  escopo?: { groupLocalId?: string; servicoInteratell?: boolean; parte?: ParteOc; comServicoProprio?: boolean },
 ): OmiePlan {
   const business = values?.business ?? {}
   const todosGrupos: any[] = values?.supplierGroups ?? []
@@ -291,8 +295,13 @@ export function buildOmiePlan(
   // Serviço Interatell não passa por fornecedor, então fica fora do recorte de
   // um arquivo de OC.
   const serviceCustomers: any[] = escopo?.groupLocalId ? [] : (values?.serviceCustomers ?? [])
+  const naParte = (i: any) => {
+    if (!escopo?.parte) return true
+    const p = parteDaNatureza(i?.nature)
+    return p === escopo.parte || (p === null && escopo.comServicoProprio === true)
+  }
   const soDoGrupo = (lista: any[]) => (escopo?.groupLocalId
-    ? lista.filter(i => i._groupLocalId === escopo.groupLocalId)
+    ? lista.filter(i => i._groupLocalId === escopo.groupLocalId && naParte(i))
     : lista)
   const fallbackCnpj = digits(values?.interatell?.cnpj ?? '')
   const id = dealId ?? '?'
@@ -334,16 +343,20 @@ export function buildOmiePlan(
 
   const docs: OmiePlanDoc[] = []
 
-  // ── OC: 1 por grupo de fornecedor, com os produtos do grupo (exceto SRV) ────
+  // ── OC: por fornecedor e por parte (hardware numa, software/licença/serviço
+  //    de terceiro noutra), sem o serviço Interatell, que vai direto em OS ──────
   supplierGroups.forEach(group => {
     const gIdx = todosGrupos.indexOf(group)
-    const ocItems = (group.products ?? []).filter((i: any) => normalizeNatureza(i.nature) !== 'SRV')
+    const partes = partesDoGrupo(group)
+    partes.forEach(parteOc => {
+    if (escopo?.parte && escopo.parte !== parteOc) return
+    const ocItems = produtosDaParte(group, parteOc)
     if (!ocItems.length) return
     const itens = ocItems.map((e: any, i: number) => itemDeProduto(e, i + 1, Number(e.unitCost ?? 0), true))
     docs.push({
-      tipo: 'OC', natureza: '',
+      tipo: 'OC', natureza: parteOc === 'HW' ? 'HW' : '',
       chamada: 'produtos/pedidocompra → UpsertPedCompra',
-      codigoIntegracao: `OC-${id}-G${gIdx}`,
+      codigoIntegracao: `OC-${id}-G${gIdx}${sufixoDaParte(group, parteOc)}`,
       ...emissor(filialDoGrupo(group)),
       parteTipo: 'Fornecedor',
       parteNome: String(group.supplier?.name ?? ''),
@@ -354,10 +367,12 @@ export function buildOmiePlan(
       etapa: '',
       dataPrevisao: toOmieDate(group.deliveryDeadline || business?.deliveryDeadline),
       numeroPedidoCliente: '',
-      valorFrete: group.hasFreight ? Number(group.freightValue ?? 0) : 0,
+      // O frete vai numa OC só, a primeira do fornecedor.
+      valorFrete: group.hasFreight && parteOc === partes[0] ? Number(group.freightValue ?? 0) : 0,
       campoObsExterna: 'cObs', obsExterna,
       campoObsInterna: 'cObsInt', obsInterna,
       itens, total: soma(itens), recorte: '',
+    })
     })
   })
 

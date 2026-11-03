@@ -1,5 +1,7 @@
 "use client"
 
+import { numeroDaParte } from "@/lib/oc-numbers"
+
 interface PedidosOmieProps {
   /** Resumo gravado pelo envio ao Omie (omie_response.resumo ou o log final). */
   resumo: any
@@ -28,7 +30,8 @@ export function PedidosOmie({ resumo, payload }: PedidosOmieProps) {
       <p className="mb-1.5 font-semibold text-emerald-800">Pedidos já criados no Omie</p>
       <div className="flex flex-wrap gap-1.5">
         {oc.map((o, i) => {
-          const numeroOc = payload?.supplierGroups?.[o.grupoIdx]?.ocNumber
+          const grupo = payload?.supplierGroups?.[o.grupoIdx]
+          const numeroOc = o.parte ? numeroDaParte(grupo, o.parte) : grupo?.ocNumber
           return (
             <span key={`oc${i}`} className={`${chip} border-yellow-300 bg-yellow-50 text-yellow-800`} title={o.fornecedor}>
               OC {numeroOc ? `${numeroOc} · ` : ''}{semZeros(o.numero)}
