@@ -5,7 +5,7 @@ import { consultarCnpj, type CnpjLookupResult } from "./cnpj-lookup"
 import { sql } from "./db"
 import { validateCNPJ, formatZipCode, formatPhoneNumber, normalizeCNPJDigits, familyMatchesBranch } from "./utils"
 import { type BitrixSupplier, BitrixService } from "./bitrix-service"
-import { naturezaCatalogo, preservaNumerosOc } from "./oc-numbers"
+import { CAMPOS_NUMERO_OC, naturezaCatalogo, preservaNumerosOc } from "./oc-numbers"
 import { garanteNumerosOc } from "./oc-numbers-bitrix"
 import { listOmieStock, compareStockWithCatalog, type CatalogEntry } from './omie-stock'
 import { listarFamiliasOmie } from './omie-familias'
@@ -1363,10 +1363,8 @@ async function preservaNumerosDoBanco(dealId: number, payload: any): Promise<voi
 /** Aba "Nº Ordem de Compra": cria na lista #35 os números que ainda faltam. */
 export async function generateOcNumbersAction(values: any) {
   const numeros = (lista: any[] | undefined) =>
-    (lista ?? []).map((x: any) => ({
-      ocNumber: x?.ocNumber ?? '', ocElementId: x?.ocElementId,
-      ocNumberServico: x?.ocNumberServico ?? '', ocElementIdServico: x?.ocElementIdServico,
-    }))
+    (lista ?? []).map((x: any) => Object.fromEntries(CAMPOS_NUMERO_OC.flatMap(c =>
+      [[c.numero, x?.[c.numero] ?? ''], [c.elemento, x?.[c.elemento]]])))
   const { criados, erros } = await garanteNumerosOc(values)
   return {
     success: !erros.length,

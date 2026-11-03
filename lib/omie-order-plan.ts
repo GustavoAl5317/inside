@@ -276,7 +276,7 @@ export function buildOmiePlan(
     rotulo: (v: string) => string
     condicaoVendaDe?: (entry: any) => string
   },
-  // parte: recorta numa das OCs do fornecedor (HW ou SV). comServicoProprio:
+  // parte: recorta numa das OCs do fornecedor (uma por natureza). comServicoProprio:
   // o arquivo dessa parte também mostra o serviço Interatell vendido junto,
   // que não entra em OC nenhuma.
   escopo?: { groupLocalId?: string; servicoInteratell?: boolean; parte?: ParteOc; comServicoProprio?: boolean },
@@ -343,8 +343,8 @@ export function buildOmiePlan(
 
   const docs: OmiePlanDoc[] = []
 
-  // ── OC: por fornecedor e por parte (hardware numa, software/licença/serviço
-  //    de terceiro noutra), sem o serviço Interatell, que vai direto em OS ──────
+  // ── OC: por fornecedor e por natureza (hardware, software, licença, serviço
+  //    de terceiro), sem o serviço Interatell, que vai direto em OS ─────────────
   supplierGroups.forEach(group => {
     const gIdx = todosGrupos.indexOf(group)
     const partes = partesDoGrupo(group)
@@ -354,7 +354,7 @@ export function buildOmiePlan(
     if (!ocItems.length) return
     const itens = ocItems.map((e: any, i: number) => itemDeProduto(e, i + 1, Number(e.unitCost ?? 0), true))
     docs.push({
-      tipo: 'OC', natureza: parteOc === 'HW' ? 'HW' : '',
+      tipo: 'OC', natureza: parteOc,
       chamada: 'produtos/pedidocompra → UpsertPedCompra',
       codigoIntegracao: `OC-${id}-G${gIdx}${sufixoDaParte(group, parteOc)}`,
       ...emissor(filialDoGrupo(group)),

@@ -767,8 +767,8 @@ async function upsertOC(
   obs: { externa: string; interna: string },
   dealId: number, groupIdx: number, opts: { isUpdate: boolean; retryCount: number },
   codParc: string, valorFrete: number, prazoEntrega: string,
-  // '-SV' na OC de software/licença/serviço de um fornecedor que também tem
-  // hardware. Vazio no resto, que mantém o código de sempre.
+  // '-LC', '-ST', ... nas OCs além da primeira de um fornecedor com mais de uma
+  // natureza. Vazio na primeira, que mantém o código de sempre.
   sufixo = '',
 ) {
   const ocItems = agrupaIguais(items.filter(i => normalizeNatureza(i.nature) !== 'SRV'))
@@ -1174,7 +1174,7 @@ function montaResumo(dealId: number, ocResults: any[], ovResults: any[], osResul
       // De qual fornecedor saiu a OC — os campos do card do Bitrix usam para
       // achar o Número de Ordem de Compra.
       grupoIdx: r._groupIdx,
-      // HW ou SV. Ausente nas OCs de antes da separação, que levam tudo.
+      // Natureza da OC (HW, SW, LC, ST). Ausente nas OCs de antes da separação, que levam tudo.
       parte: r._parte,
       erro: omieFaultMessage(r) ?? undefined,
     })),
@@ -1233,11 +1233,11 @@ function soCriados(resumo: any) {
 }
 
 /**
- * Fornecedores mistos (hardware e serviço) que já foram ao Omie numa OC só,
- * antes da separação HW × serviço. Reconhecidos pelo resumo do envio anterior:
- * OC daquele fornecedor sem `parte`. Ficam numa OC só nos reenvios, porque a
- * OC do Omie não exclui item pelo upsert — separar deixaria os itens de serviço
- * na OC antiga e os repetiria na nova.
+ * Fornecedores com mais de uma natureza que já foram ao Omie numa OC só, antes
+ * da separação por natureza. Reconhecidos pelo resumo do envio anterior: OC
+ * daquele fornecedor sem `parte`. Ficam numa OC só nos reenvios, porque a OC do
+ * Omie não exclui item (nem pelo upsert nem pelo AlteraPedCompra): separar
+ * deixaria os itens na OC antiga e os repetiria nas novas.
  */
 function gruposSemSeparar(deal: any, supplierGroups: any[]): Set<string> {
   const saida = new Set<string>()
@@ -1249,7 +1249,7 @@ function gruposSemSeparar(deal: any, supplierGroups: any[]): Set<string> {
     if (!grupoMisto(g)) return
     const doGrupo = ocs.filter(o => !o?.erro &&
       Number(o?.grupoIdx ?? /-G(\d+)/.exec(String(o?.codigoIntegracao ?? ''))?.[1]) === i)
-    if (doGrupo.length && doGrupo.every(o => !o?.parte && !/-G\d+-SV/.test(String(o?.codigoIntegracao ?? '')))) {
+    if (doGrupo.length && doGrupo.every(o => !o?.parte && !/-G\d+-(?:HW|SW|LC|ST|SV)/.test(String(o?.codigoIntegracao ?? '')))) {
       saida.add(String(g?.localId ?? ''))
     }
   })
@@ -1260,7 +1260,7 @@ function gruposSemSeparar(deal: any, supplierGroups: any[]): Set<string> {
  * Sufixo do código de integração de cada parte, para o reenvio casar com a OC
  * que já existe no Omie. Vale o que o envio anterior usou para aquela parte; sem
  * envio anterior, a regra padrão (sufixoDaParte). Se a parte nova cair num código
- * que outra parte já ocupa — fornecedor que tinha só licença e ganhou hardware —
+ * que outra parte já ocupa (fornecedor que tinha só licença e ganhou hardware),
  * ela recebe um código próprio, em vez de sobrescrever a OC da outra.
  */
 function sufixosDasPartes(deal: any) {
@@ -1269,16 +1269,15 @@ function sufixosDasPartes(deal: any) {
   const anteriores = new Map<string, string>()
   for (const o of (resp?.resumo?.oc ?? []) as any[]) {
     if (o?.erro || !o?.parte) continue
-    const m = /-G(\d+)(-SV|-HW)?(?:-R\d+)?$/.exec(String(o?.codigoIntegracao ?? ''))
+    const m = /-G(\d+)(-(?:HW|SW|LC|ST|SV))?(?:-R\d+)?$/.exec(String(o?.codigoIntegracao ?? ''))
     if (m) anteriores.set(`${m[1]}:${o.parte}`, m[2] ?? '')
   }
   return (group: any, gIdx: number, parte: ParteOc): string => {
     const anterior = anteriores.get(`${gIdx}:${parte}`)
     if (anterior !== undefined) return anterior
-    const outra: ParteOc = parte === 'HW' ? 'SV' : 'HW'
     const padrao = sufixoDaParte(group, parte)
-    if (anteriores.get(`${gIdx}:${outra}`) === padrao) return parte === 'HW' ? '-HW' : '-SV'
-    return padrao
+    const ocupado = [...anteriores].some(([chave, sufixo]) => chave.startsWith(`${gIdx}:`) && sufixo === padrao)
+    return ocupado ? `-${parte}` : padrao
   }
 }
 
@@ -1401,10 +1400,10 @@ async function processDeal(body: any, dealId: number) {
       }
     }
 
-    // 3) OC por fornecedor e por parte: hardware numa OC; software, licença e
-    //    serviço de terceiro noutra (regra do time; ver partesDoGrupo). Quem já
-    //    foi ao Omie numa OC só, antes da separação, continua numa só: separar
-    //    agora deixaria os itens antigos na OC e duplicaria os de serviço.
+    // 3) OC por fornecedor e por natureza: hardware, software, licença e serviço
+    //    de terceiro, cada um na sua OC (regra do time; ver partesDoGrupo). Quem
+    //    já foi ao Omie numa OC só, antes da separação, continua numa só: separar
+    //    agora deixaria os itens antigos na OC e os duplicaria nas novas.
     for (let gIdx = 0; gIdx < supplierGroups.length; gIdx++) {
       const group = supplierGroups[gIdx]
       const branchCnpj = getBranchCnpj(group.branch, fallbackCnpj)

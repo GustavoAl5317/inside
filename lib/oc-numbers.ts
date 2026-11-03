@@ -57,26 +57,28 @@ export function rotuloNaturezas(naturezas: unknown[]): string {
 const filialNome = (branch: unknown) => (branch === 'es' ? 'ESPIRITO SANTO' : 'BARUERI')
 
 /**
- * Parte da compra: hardware numa OC; software, licença e serviço de terceiro
- * noutra. É a regra que o time sempre seguiu à mão — os campos "Pedido de
- * Compra" e "Pedido de Compra Serviço" do card existem por causa dela. Serviço
- * Interatell (SRV) não é comprado: vai direto em OS, então não tem parte.
+ * Parte da compra: uma OC por natureza do fornecedor (hardware, software,
+ * licença, serviço de terceiro), como as OS da venda, que já saem uma por
+ * natureza. É a regra que o time segue à mão na lista #35 ("OC LIC", "OC SVT").
+ * Serviço Interatell (SRV) não é comprado: vai direto em OS, então não tem parte.
  */
-export type ParteOc = 'HW' | 'SV'
+export type ParteOc = 'HW' | 'SW' | 'LC' | 'ST'
+
+/** Ordem das OCs de um fornecedor: hardware primeiro, que leva o frete. */
+const PARTES: ParteOc[] = ['HW', 'SW', 'LC', 'ST']
 
 export function parteDaNatureza(raw: unknown): ParteOc | null {
   const n = naturezaInterna(raw)
-  if (n === 'SRV') return null
-  return n === 'HW' ? 'HW' : 'SV'
+  return n === 'SRV' ? null : n
 }
 
-/** Partes que o fornecedor tem, na ordem HW e depois SV. */
+/** Partes que o fornecedor tem, na ordem de PARTES. */
 export function partesDoGrupo(group: any): ParteOc[] {
   const tem = new Set((group?.products ?? []).map((p: any) => parteDaNatureza(p?.nature)).filter(Boolean))
-  return (['HW', 'SV'] as ParteOc[]).filter(p => tem.has(p))
+  return PARTES.filter(p => tem.has(p))
 }
 
-/** Fornecedor com hardware e com software/licença/serviço: vira duas OCs. */
+/** Fornecedor com mais de uma natureza: vira uma OC por natureza. */
 export function grupoMisto(group: any): boolean {
   return partesDoGrupo(group).length > 1
 }
@@ -87,23 +89,39 @@ export function produtosDaParte(group: any, parte: ParteOc): any[] {
 }
 
 /**
- * Sufixo do código de integração da OC. Só a parte SV de um fornecedor misto
- * muda (OC-12-G0-SV); fornecedor de uma parte só fica com o código de sempre,
- * para os negócios já enviados continuarem casando com a OC que existe.
+ * Sufixo do código de integração da OC. A primeira parte do fornecedor fica com
+ * o código de sempre (OC-12-G0), para os negócios já enviados continuarem
+ * casando com a OC que existe; as outras levam a natureza (OC-12-G0-LC).
  */
-export function sufixoDaParte(group: any, parte: ParteOc): '' | '-SV' {
-  return parte === 'SV' && grupoMisto(group) ? '-SV' : ''
+export function sufixoDaParte(group: any, parte: ParteOc): string {
+  return parte === partesDoGrupo(group)[0] ? '' : `-${parte}`
 }
 
 /**
- * Número da lista #35 de uma parte. A primeira OC do fornecedor usa `ocNumber`;
- * a de serviço de um fornecedor misto, `ocNumberServico`. Sem ele (negócio de
- * antes da separação), vale o `ocNumber`.
+ * Campos do grupo que guardam o número da lista #35 de uma parte. A primeira
+ * parte usa `ocNumber`, como os negócios de antes da separação; as outras,
+ * `ocNumber{parte}` (ocNumberLC, ocNumberST, ...).
+ */
+export function camposDaParte(group: any, parte: ParteOc): { numero: string; elemento: string } {
+  return parte === partesDoGrupo(group)[0]
+    ? { numero: 'ocNumber', elemento: 'ocElementId' }
+    : { numero: `ocNumber${parte}`, elemento: `ocElementId${parte}` }
+}
+
+/** Todos os campos de número de OC que um grupo pode ter. Hardware é sempre a primeira parte. */
+export const CAMPOS_NUMERO_OC: { numero: string; elemento: string }[] = [
+  { numero: 'ocNumber', elemento: 'ocElementId' },
+  ...PARTES.filter(p => p !== 'HW').map(p => ({ numero: `ocNumber${p}`, elemento: `ocElementId${p}` })),
+]
+
+/**
+ * Número da lista #35 de uma parte. Sem ele (negócio de antes da separação, com
+ * o fornecedor inteiro numa OC), vale o `ocNumber`.
  */
 export function numeroDaParte(group: any, parte: ParteOc | null): string {
   const principal = String(group?.ocNumber ?? '').trim()
-  if (parte === 'SV' && grupoMisto(group)) return String(group?.ocNumberServico ?? '').trim() || principal
-  return principal
+  if (!parte || !group) return principal
+  return String(group[camposDaParte(group, parte).numero] ?? '').trim() || principal
 }
 
 /** Observação do item da lista, no padrão que o time já cadastrava: "OC HW - ESPIRITO SANTO". */
@@ -131,19 +149,16 @@ export function preservaNumerosOc(novo: any, antigo: any): void {
   for (const chave of ['supplierGroups', 'serviceCustomers'] as const) {
     const anteriores = new Map<string, any>()
     for (const x of antigo?.[chave] ?? []) {
-      if (x?.localId && (String(x?.ocNumber ?? '').trim() || String(x?.ocNumberServico ?? '').trim())) anteriores.set(x.localId, x)
+      if (x?.localId && CAMPOS_NUMERO_OC.some(c => String(x?.[c.numero] ?? '').trim())) anteriores.set(x.localId, x)
     }
     for (const x of novo?.[chave] ?? []) {
       const a = anteriores.get(x?.localId)
       if (!a) continue
-      if (!String(x?.ocNumber ?? '').trim()) {
-        x.ocNumber = a.ocNumber
-        if (a.ocElementId != null) x.ocElementId = a.ocElementId
-      }
-      // Segunda OC do fornecedor misto (software, licença e serviço).
-      if (!String(x?.ocNumberServico ?? '').trim() && String(a?.ocNumberServico ?? '').trim()) {
-        x.ocNumberServico = a.ocNumberServico
-        if (a.ocElementIdServico != null) x.ocElementIdServico = a.ocElementIdServico
+      // Um número por OC do fornecedor: a primeira em ocNumber, as outras em ocNumber{parte}.
+      for (const c of CAMPOS_NUMERO_OC) {
+        if (String(x?.[c.numero] ?? '').trim() || !String(a?.[c.numero] ?? '').trim()) continue
+        x[c.numero] = a[c.numero]
+        if (a[c.elemento] != null) x[c.elemento] = a[c.elemento]
       }
     }
   }
@@ -238,13 +253,13 @@ export function camposFinanceirosCard(values: any, resumo: any): CamposFinanceir
   const ordemServico: string[] = []
 
   for (const oc of resumo?.oc ?? []) {
-    const cod = /-G(\d+)(-SV)?/.exec(String(oc?.codigoIntegracao ?? ''))
+    const cod = /-G(\d+)(?:-(HW|SW|LC|ST))?/.exec(String(oc?.codigoIntegracao ?? ''))
     const idx = oc?.grupoIdx ?? cod?.[1]
     const g = grupos[Number(idx)]
     if (!g) continue
-    // Parte da OC: HW ou SV. OC sem parte é de antes da separação e leva o
-    // fornecedor inteiro. Serviço Interatell nunca entra: vai direto em OS.
-    const parte: ParteOc | undefined = oc?.parte ?? (cod?.[2] ? 'SV' : undefined)
+    // Parte da OC: a natureza dela. OC sem parte é de antes da separação e leva
+    // o fornecedor inteiro. Serviço Interatell nunca entra: vai direto em OS.
+    const parte: ParteOc | undefined = oc?.parte ?? (cod?.[2] as ParteOc | undefined)
     const produtos = parte ? produtosDaParte(g, parte) : (g.products ?? [])
     const nats = produtos.map((p: any) => p?.nature)
       .filter((n: unknown) => naturezaInterna(n) !== 'SRV')

@@ -1,13 +1,13 @@
 import { BitrixService } from './bitrix-service'
-import { clientesDoGrupo, grupoMisto, observacaoOc, OBSERVACAO_OS_SERVICO } from './oc-numbers'
+import { camposDaParte, clientesDoGrupo, grupoMisto, observacaoOc, OBSERVACAO_OS_SERVICO, partesDoGrupo } from './oc-numbers'
 
 /**
  * Garante um Número de Ordem de Compra (lista #35 do Bitrix) em cada OC e em cada
  * OS de serviço Interatell do negócio. Os já gerados na aba "Nº Ordem de Compra"
  * — ou digitados — ficam como estão. Muta `values`.
  *
- * Fornecedor com hardware e com software/licença/serviço vira duas OCs, e cada
- * uma tem o seu número: `ocNumber` na de hardware e `ocNumberServico` na outra.
+ * Fornecedor com mais de uma natureza vira uma OC por natureza, e cada uma tem o
+ * seu número: `ocNumber` na primeira e `ocNumber{parte}` nas outras (camposDaParte).
  * `semSeparar` lista os fornecedores (localId) que já foram ao Omie numa OC só,
  * antes da separação: esses continuam com um número.
  *
@@ -39,14 +39,14 @@ export async function garanteNumerosOc(
     }
   }
   const PRINCIPAL = { numero: 'ocNumber', elemento: 'ocElementId' }
-  const SERVICO = { numero: 'ocNumberServico', elemento: 'ocElementIdServico' }
 
   for (const g of values?.supplierGroups ?? []) {
     if (!(g?.products ?? []).length) continue
     const cliente = clientesDoGrupo(values, g)
     if (grupoMisto(g) && !opts.semSeparar?.has(String(g?.localId ?? ''))) {
-      await cria(g, PRINCIPAL, { cliente, observacao: observacaoOc(g, 'HW') })
-      await cria(g, SERVICO, { cliente, observacao: observacaoOc(g, 'SV') })
+      for (const parte of partesDoGrupo(g)) {
+        await cria(g, camposDaParte(g, parte), { cliente, observacao: observacaoOc(g, parte) })
+      }
     } else {
       await cria(g, PRINCIPAL, { cliente, observacao: observacaoOc(g) })
     }

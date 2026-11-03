@@ -7,7 +7,7 @@ import { Hash, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { generateOcNumbersAction } from "@/lib/actions"
-import { grupoMisto, observacaoOc, OBSERVACAO_OS_SERVICO } from "@/lib/oc-numbers"
+import { CAMPOS_NUMERO_OC, camposDaParte, grupoMisto, observacaoOc, OBSERVACAO_OS_SERVICO, partesDoGrupo } from "@/lib/oc-numbers"
 
 interface OcNumbersTabProps {
   form: UseFormReturn<any>
@@ -25,8 +25,8 @@ export function OcNumbersTab({ form }: OcNumbersTabProps) {
   const grupos: any[] = form.watch("supplierGroups") || []
   const servicos: any[] = form.watch("serviceCustomers") || []
 
-  // Fornecedor com hardware e com software/licença/serviço tem duas OCs, cada
-  // uma com o seu número: a de hardware em ocNumber, a outra em ocNumberServico.
+  // Fornecedor com mais de uma natureza tem uma OC por natureza, cada uma com o
+  // seu número: a primeira em ocNumber, as outras em ocNumber{parte}.
   const linhas = [
     ...grupos.flatMap((g, i) => {
       const titulo = g?.supplier?.name || `Fornecedor ${i + 1}`
@@ -35,12 +35,11 @@ export function OcNumbersTab({ form }: OcNumbersTabProps) {
         return [{ key: `g${i}`, path: `supplierGroups.${i}`, campo: "ocNumber", elemento: "ocElementId",
           titulo, observacao: observacaoOc(g), numero: String(g?.ocNumber ?? ""), semItens }]
       }
-      return [
-        { key: `g${i}`, path: `supplierGroups.${i}`, campo: "ocNumber", elemento: "ocElementId",
-          titulo, observacao: observacaoOc(g, "HW"), numero: String(g?.ocNumber ?? ""), semItens },
-        { key: `g${i}sv`, path: `supplierGroups.${i}`, campo: "ocNumberServico", elemento: "ocElementIdServico",
-          titulo, observacao: observacaoOc(g, "SV"), numero: String(g?.ocNumberServico ?? ""), semItens },
-      ]
+      return partesDoGrupo(g).map(parte => {
+        const { numero: campo, elemento } = camposDaParte(g, parte)
+        return { key: `g${i}${parte}`, path: `supplierGroups.${i}`, campo, elemento,
+          titulo, observacao: observacaoOc(g, parte), numero: String(g?.[campo] ?? ""), semItens }
+      })
     }),
     ...servicos.map((s, i) => ({
       key: `s${i}`, path: `serviceCustomers.${i}`, campo: "ocNumber", elemento: "ocElementId",
@@ -54,7 +53,7 @@ export function OcNumbersTab({ form }: OcNumbersTabProps) {
 
   const aplica = (prefixo: "supplierGroups" | "serviceCustomers", lista: any[] | undefined) => {
     lista?.forEach((item, i) => {
-      for (const [campo, elemento] of [["ocNumber", "ocElementId"], ["ocNumberServico", "ocElementIdServico"]]) {
+      for (const { numero: campo, elemento } of CAMPOS_NUMERO_OC) {
         if (!item?.[campo] || item[campo] === form.getValues(`${prefixo}.${i}.${campo}`)) continue
         form.setValue(`${prefixo}.${i}.${campo}`, item[campo], { shouldDirty: true })
         form.setValue(`${prefixo}.${i}.${elemento}`, item[elemento], { shouldDirty: true })
@@ -89,9 +88,9 @@ export function OcNumbersTab({ form }: OcNumbersTabProps) {
         <h2 className="text-2xl font-bold">Número de Ordem de Compra</h2>
         <p className="text-sm text-gray-500 mt-1">
           Um número por Ordem de Compra e por OS de serviço Interatell, criado na lista de
-          Números de Ordem de Compra do Bitrix. Fornecedor com hardware e com software,
-          licença ou serviço tem duas OCs: uma de hardware e outra do resto. O que ficar em
-          branco é criado automaticamente no envio ao Omie.
+          Números de Ordem de Compra do Bitrix. Fornecedor com mais de uma natureza
+          (hardware, software, licença, serviço de terceiro) tem uma OC por natureza. O que
+          ficar em branco é criado automaticamente no envio ao Omie.
         </p>
       </div>
 

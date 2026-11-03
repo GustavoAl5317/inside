@@ -549,9 +549,9 @@ export async function generateOcExcelFiles(values: any, dealId?: number | null):
   }
   const arquivos: Arquivo[] = []
 
-  // Um arquivo por OC. O fornecedor com hardware e com software/licença/serviço
-  // tem duas OCs (regra do time; ver partesDoGrupo), então dois arquivos. O
-  // serviço Interatell vendido junto, que não entra em OC, vai no primeiro.
+  // Um arquivo por OC. O fornecedor com mais de uma natureza tem uma OC por
+  // natureza (regra do time; ver partesDoGrupo), então um arquivo por natureza.
+  // O serviço Interatell vendido junto, que não entra em OC, vai no primeiro.
   for (const group of (values?.supplierGroups ?? [])) {
     const partes = partesDoGrupo(group)
     const misto = partes.length > 1

@@ -1061,7 +1061,7 @@ export function CustomersTab({ form }: CustomersTabProps) {
 
   // Resumo: OC e OV
   const uniqueSuppliers = supplierGroups.length
-  // Hardware numa OC; software, licença e serviço de terceiro noutra.
+  // Uma OC por natureza do fornecedor (hardware, software, licença, serviço de terceiro).
   const totalOCs = supplierGroups.reduce((soma: number, g: any) => soma + Math.max(1, partesDoGrupo(g).length), 0)
   const uniqueCustomers = customerFields.length
 
