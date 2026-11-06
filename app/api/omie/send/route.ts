@@ -352,6 +352,8 @@ type RunCtx = {
   buscarPedidos: boolean
   /** Maior sufixo -Rn já usado nos códigos de integração deste negócio. */
   retryMax: number
+  /** Lista #61 do Bitrix, lida uma vez por envio: ver fornecedorCompleto. */
+  listaFornecedores?: Promise<Awaited<ReturnType<typeof BitrixService.getSuppliers>>>
 }
 const runStore = new AsyncLocalStorage<RunCtx>()
 const newRunCtx = (runId: string | null): RunCtx => ({
@@ -439,8 +441,38 @@ async function ensureCliente(interatellCnpj: string, company: any, dealId: numbe
   return codigo
 }
 
-async function ensureFornecedor(interatellCnpj: string, supplier: any, dealId: number): Promise<number> {
+/**
+ * Fornecedor com os dados que o Omie exige para cadastrar.
+ *
+ * O card guarda uma cópia do fornecedor de quando ele foi escolhido. Se o
+ * cadastro na lista #61 foi completado depois (endereço, bairro, CEP...), a
+ * cópia continua sem esses campos e o Omie recusa. Aqui, campo vazio no card
+ * é completado com o da lista, achada pelo CNPJ.
+ */
+async function fornecedorCompleto(supplier: any): Promise<any> {
   const cnpj = digits(supplier?.cnpj ?? '')
+  const c = ctx()
+  c.listaFornecedores ??= BitrixService.getSuppliers().catch(() => [])
+  const daLista = (await c.listaFornecedores).find(s => digits(s.cnpj) === cnpj)
+  const out = { ...supplier }
+  if (daLista) {
+    const daListaPorCampo: Record<string, string> = {
+      name: daLista.name, email: daLista.email, phone: daLista.telefone1,
+      address: daLista.endereco, number: daLista.numero, complement: daLista.complemento,
+      neighborhood: daLista.bairro, city: daLista.cidade, state: daLista.estado, zipCode: daLista.cep,
+    }
+    for (const [campo, valor] of Object.entries(daListaPorCampo)) {
+      if (!String(out[campo] ?? '').trim() && String(valor ?? '').trim()) out[campo] = valor
+    }
+  }
+  // CEP e número vêm de campo numérico da lista, que perde o zero da frente.
+  const cep = digits(out.zipCode ?? '')
+  out.zipCode = cep && cep.length < 8 ? cep.padStart(8, '0') : cep
+  return out
+}
+
+async function ensureFornecedor(interatellCnpj: string, supplierDoCard: any, dealId: number): Promise<number> {
+  const cnpj = digits(supplierDoCard?.cnpj ?? '')
   const key  = `${digits(interatellCnpj)}:${cnpj}`
   const cache = ctx().fornecedorCache
   if (cache.has(key)) return cache.get(key)!
@@ -459,13 +491,23 @@ async function ensureFornecedor(interatellCnpj: string, supplier: any, dealId: n
   if (check?.clientes_cadastro?.length) {
     codigo = check.clientes_cadastro[0].codigo_cliente_omie
   } else {
+    const supplier = await fornecedorCompleto(supplierDoCard)
     await avisaCadastroNovo(dealId, 'checkFornecedor', 'Fornecedor', supplier?.name, cnpj, interatellCnpj)
+    // O Omie só diz "É obrigatório o preenchimento do endereço" sem apontar o
+    // campo. Conferir antes deixa a mensagem dizer o que falta e onde corrigir.
+    const faltando = ([
+      ['address', 'Endereço'], ['neighborhood', 'Bairro'], ['city', 'Cidade'],
+      ['state', 'UF'], ['zipCode', 'CEP'], ['email', 'E-mail'],
+    ] as const).filter(([campo]) => !String(supplier?.[campo] ?? '').trim()).map(([, nome]) => nome)
+    if (faltando.length) {
+      throw new Error(`Fornecedor "${supplier?.name ?? cnpj}" (CNPJ ${cnpj}) não existe no Omie e falta ${faltando.join(', ')} para cadastrar. Complete o cadastro na aba Fornecedores e reenvie.`)
+    }
     const created = await omieCall(interatellCnpj, OMIE_URL.CLIENTES, 'IncluirCliente', {
       // Obrigatório no IncluirCliente; o CNPJ garante um código estável e único.
       codigo_cliente_integracao: `FORN-${cnpj}`,
       cnpj_cpf: cnpj, razao_social: supplier.name, nome_fantasia: supplier.name,
       email: supplier.email ?? '', endereco: supplier.address ?? '',
-      endereco_numero: supplier.number ?? 'S/N', bairro: supplier.neighborhood ?? '',
+      endereco_numero: String(supplier.number ?? '').trim() || 'S/N', bairro: supplier.neighborhood ?? '',
       cidade: supplier.city ?? '', estado: supplier.state ?? '',
       cep: digits(supplier.zipCode ?? ''),
       telefone1_ddd: digits(supplier.phone ?? '').slice(0, 2),
