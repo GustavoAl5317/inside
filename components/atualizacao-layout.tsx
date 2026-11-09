@@ -8,19 +8,22 @@ import type { HistoryDeal } from './omie-stage-sidebar'
 import {
   RefreshCw, CheckCircle2, XCircle, Building2, Package,
   Pencil, Send, X, ShoppingCart, TrendingUp, Wrench,
-  FileEdit, Hash,
+  FileEdit, Hash, Clock,
 } from 'lucide-react'
 import { Loader2 } from 'lucide-react'
 import { casaBusca, termoPrincipal } from '@/lib/busca'
 
 type AtualizacaoView = 'deal' | 'pedido-omie'
 
-// Só deal que já foi ao Omie se atualiza aqui; rascunho e aprovado se enviam pelo card.
-const ATUALIZAVEIS = ['sent', 'failed']
+// Rascunho se envia pelo card. Aprovado entra aqui: a Atualização grava 'approved'
+// antes de reenviar, e um envio interrompido (restart do servidor, erro antes da
+// rota) deixava o deal nesse status, fora desta tela e do card, sem lugar nenhum.
+const ATUALIZAVEIS = ['sent', 'failed', 'approved']
 
 const STATUS_CFG: Record<string, { label: string; dot: string; badge: string; icon: typeof CheckCircle2 }> = {
   sent:    { label: 'Enviado', dot: 'bg-emerald-400', badge: 'bg-emerald-50 text-emerald-700 ring-emerald-200', icon: CheckCircle2 },
   failed:  { label: 'Falhou',  dot: 'bg-red-400',     badge: 'bg-red-50 text-red-700 ring-red-200',             icon: XCircle      },
+  approved: { label: 'Envio não concluído', dot: 'bg-amber-400', badge: 'bg-amber-50 text-amber-700 ring-amber-200', icon: Clock },
 }
 
 function fmtDateTime(s?: string) {
@@ -238,7 +241,7 @@ export function AtualizacaoLayout() {
                 onChange={e => setSearch(e.target.value)}
                 className="w-full text-xs px-3 py-1.5 rounded-lg border border-gray-200 bg-gray-50 text-gray-700 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-emerald-300 focus:border-emerald-300"
               />
-              <p className="text-[10px] text-gray-400 px-0.5">Deals enviados ou com falha — reenvio completo ao Omie</p>
+              <p className="text-[10px] text-gray-400 px-0.5">Deals enviados, com falha ou com envio não concluído — reenvio completo ao Omie</p>
             </>
           )}
         </div>
@@ -250,7 +253,7 @@ export function AtualizacaoLayout() {
               {naoEnviados.slice(0, 5).map(d => (
                 <p key={d.id} className="text-[11px] text-amber-800">
                   <span className="font-semibold">{d.proposal ?? `#${d.id}`}</span>
-                  {' '}está como {d.status === 'approved' ? 'Aprovado' : 'Rascunho'} e ainda não foi enviado ao Omie.
+                  {' '}está como Rascunho e ainda não foi enviado ao Omie.
                   {' '}Envie pelo card no Bitrix.
                 </p>
               ))}
