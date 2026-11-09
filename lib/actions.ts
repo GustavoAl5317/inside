@@ -2013,14 +2013,28 @@ export async function moveDealToFinancialApprovalAction(dealId: string) {
   }
 }
 
-export async function getDealsHistoryAction(limit = 40, offset = 0) {
+export async function getDealsHistoryAction(
+  limit = 40,
+  offset = 0,
+  filtro: { statuses?: string[]; busca?: string } = {},
+) {
   try {
-    const [countRow] = await sql`SELECT COUNT(*)::int AS total FROM deals`
+    // O filtro vai no SQL: filtrado no cliente, o LIMIT era gasto com rascunhos e
+    // um deal enviado mais antigo que os 200 últimos sumia da Atualização.
+    const statuses = filtro.statuses?.length ? filtro.statuses : null
+    const busca = filtro.busca?.trim() ? `%${filtro.busca.trim()}%` : null
+    const [countRow] = await sql`
+      SELECT COUNT(*)::int AS total FROM deals
+      WHERE (${statuses}::text[] IS NULL OR status = ANY(${statuses}::text[]))
+        AND (${busca}::text IS NULL OR payload::text ILIKE ${busca} OR bitrix_deal_id::text ILIKE ${busca})
+    `
     const total: number = countRow?.total ?? 0
 
     const rows = await sql`
       SELECT id, status, bitrix_deal_id, payload, omie_response, created_at, updated_at
       FROM deals
+      WHERE (${statuses}::text[] IS NULL OR status = ANY(${statuses}::text[]))
+        AND (${busca}::text IS NULL OR payload::text ILIKE ${busca} OR bitrix_deal_id::text ILIKE ${busca})
       ORDER BY updated_at DESC
       LIMIT ${limit} OFFSET ${offset}
     `

@@ -11,9 +11,12 @@ import {
   FileEdit, Hash,
 } from 'lucide-react'
 import { Loader2 } from 'lucide-react'
-import { casaBusca } from '@/lib/busca'
+import { casaBusca, termoPrincipal } from '@/lib/busca'
 
 type AtualizacaoView = 'deal' | 'pedido-omie'
+
+// Só deal que já foi ao Omie se atualiza aqui; rascunho e aprovado se enviam pelo card.
+const ATUALIZAVEIS = ['sent', 'failed']
 
 const STATUS_CFG: Record<string, { label: string; dot: string; badge: string; icon: typeof CheckCircle2 }> = {
   sent:    { label: 'Enviado', dot: 'bg-emerald-400', badge: 'bg-emerald-50 text-emerald-700 ring-emerald-200', icon: CheckCircle2 },
@@ -123,13 +126,8 @@ export function AtualizacaoLayout() {
     setSpinning(true)
     setLoading(true)
     try {
-      const res = await getDealsHistoryAction(200)
-      if (res.success) {
-        const updatable = (res.deals as HistoryDeal[]).filter(
-          d => d.status === 'sent' || d.status === 'failed'
-        )
-        setDeals(updatable)
-      }
+      const res = await getDealsHistoryAction(200, 0, { statuses: ATUALIZAVEIS })
+      if (res.success) setDeals(res.deals as HistoryDeal[])
     } finally {
       setLoading(false)
       setSpinning(false)
@@ -138,9 +136,27 @@ export function AtualizacaoLayout() {
 
   useEffect(() => { loadDeals() }, [])
 
-  const filtered = deals.filter(d =>
-    casaBusca(search, d.businessName, d.proposal, d.supplierName, d.customerName),
-  )
+  // A lista carrega só os 200 mais recentes; a busca também vai ao banco, para
+  // achar deal mais antigo e avisar quando o deal existe mas não foi enviado.
+  const [doBanco, setDoBanco] = useState<HistoryDeal[]>([])
+  useEffect(() => {
+    const termo = termoPrincipal(search)
+    if (termo.length < 3) { setDoBanco([]); return }
+    let vivo = true
+    const t = setTimeout(async () => {
+      const res = await getDealsHistoryAction(50, 0, { busca: termo })
+      if (vivo && res.success) setDoBanco(res.deals as HistoryDeal[])
+    }, 400)
+    return () => { vivo = false; clearTimeout(t) }
+  }, [search])
+
+  const casa = (d: HistoryDeal) =>
+    casaBusca(search, d.businessName, d.proposal, d.supplierName, d.customerName, d.bitrixDealId)
+  const filtered = [
+    ...deals,
+    ...doBanco.filter(d => ATUALIZAVEIS.includes(d.status) && !deals.some(x => x.id === d.id)),
+  ].filter(casa)
+  const naoEnviados = doBanco.filter(d => !ATUALIZAVEIS.includes(d.status) && casa(d))
 
   const existingDeal = useMemo(
     () => (selected ? { id: selected.id, payload: selected.payload } : null),
@@ -229,6 +245,17 @@ export function AtualizacaoLayout() {
 
         {view === 'deal' && (
         <div className="flex-1 overflow-y-auto px-3 py-3">
+          {naoEnviados.length > 0 && (
+            <div className="mb-3 p-2.5 rounded-lg border border-amber-200 bg-amber-50 space-y-1">
+              {naoEnviados.slice(0, 5).map(d => (
+                <p key={d.id} className="text-[11px] text-amber-800">
+                  <span className="font-semibold">{d.proposal ?? `#${d.id}`}</span>
+                  {' '}está como {d.status === 'approved' ? 'Aprovado' : 'Rascunho'} e ainda não foi enviado ao Omie.
+                  {' '}Envie pelo card no Bitrix.
+                </p>
+              ))}
+            </div>
+          )}
           {loading ? <Skeleton /> :
            filtered.length === 0 ? (
              <div className="flex flex-col items-center justify-center h-44 text-center select-none">
