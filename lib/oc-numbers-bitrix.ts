@@ -1,5 +1,5 @@
 import { BitrixService } from './bitrix-service'
-import { camposDaParte, clientesDoGrupo, grupoMisto, observacaoOc, OBSERVACAO_OS_SERVICO, partesDoGrupo } from './oc-numbers'
+import { camposDaParte, clientesDoGrupo, grupoMisto, observacaoOc, observacaoOsServico, partesDoGrupo } from './oc-numbers'
 
 /**
  * Garante um Número de Ordem de Compra (lista #35 do Bitrix) em cada OC e em cada
@@ -53,7 +53,7 @@ export async function garanteNumerosOc(
   }
   for (const sc of values?.serviceCustomers ?? []) {
     if (!(sc?.items ?? []).length) continue
-    await cria(sc, PRINCIPAL, { cliente: String(sc?.customer?.name ?? '').trim(), observacao: OBSERVACAO_OS_SERVICO })
+    await cria(sc, PRINCIPAL, { cliente: String(sc?.customer?.name ?? '').trim(), observacao: observacaoOsServico(sc) })
   }
   return { criados, erros }
 }

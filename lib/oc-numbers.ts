@@ -133,8 +133,10 @@ export function observacaoOc(group: any, parte?: ParteOc): string {
     .filter(Boolean).join(' ')
 }
 
-/** Serviço Interatell é sempre faturado por Barueri. */
-export const OBSERVACAO_OS_SERVICO = 'OS SVI - BARUERI'
+/** Observação do serviço Interatell, na filial escolhida no cliente de serviço: "OS SVI - BARUERI". */
+export function observacaoOsServico(servico: any): string {
+  return `OS SVI - ${filialNome(servico?.branch)}`
+}
 
 /**
  * Mantém os Números de Ordem de Compra já gravados quando o formulário
@@ -284,9 +286,9 @@ export function camposFinanceirosCard(values: any, resumo: any): CamposFinanceir
     }
     const nat = naturezaInterna(os?.nat)
     if (nat === 'SRV') {
-      // Serviço Interatell vendido junto com produto: sempre faturado por
-      // Barueri, venha de onde vier a compra — a filial não filtra a origem.
-      ordemServico.push(linha(numerosDaOrigem(os?.clienteIdx, undefined, n => n === 'SRV'), os?.numero, ROTULO.SRV))
+      // Serviço Interatell vendido junto com produto: sai na filial do
+      // fornecedor, como os demais itens.
+      ordemServico.push(linha(numerosDaOrigem(os?.clienteIdx, os?.filial, n => n === 'SRV'), os?.numero, ROTULO.SRV))
     } else {
       venda.push(linha(numerosDaOrigem(os?.clienteIdx, os?.filial, n => n === nat), os?.numero, ROTULO[nat]))
     }

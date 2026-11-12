@@ -6,7 +6,7 @@ import { formatCNPJ, formatZipCode } from './utils'
 import { BitrixService } from './bitrix-service'
 import { parteDaNatureza, partesDoGrupo, rotuloNaturezas, produtosDaParte, type ParteOc } from './oc-numbers'
 import {
-  buildOmiePlan, resolvePaymentCodeForOmie,
+  buildOmiePlan, filialDoServico, resolvePaymentCodeForOmie,
   type OmiePlan,
 } from './omie-order-plan'
 
@@ -332,13 +332,13 @@ function itensDoPar(group: any, customer: any) {
 
 /**
  * Servico Interatell nao tem fornecedor: e da Interatell para o cliente. Na
- * planilha o bloco do fornecedor sai com a propria Interatell Barueri, que e por
- * onde esse servico e sempre faturado.
+ * planilha o bloco do fornecedor sai com a propria Interatell da filial que
+ * fatura o servico (Barueri por padrao, ES quando escolhido no cliente).
  */
-function grupoServicoInteratell() {
-  const itl = companyForBranch('barueri')
+function grupoServicoInteratell(filial: 'barueri' | 'es') {
+  const itl = companyForBranch(filial)
   return {
-    branch: 'barueri',
+    branch: filial,
     supplier: {
       name: itl.label, cnpj: formatCNPJ(itl.cnpj), stateRegistration: itl.stateRegistration,
       zipCode: formatZipCode(itl.zipCode), city: itl.city, state: itl.state,
@@ -348,7 +348,7 @@ function grupoServicoInteratell() {
   }
 }
 
-/** Codigo do servico Interatell no Omie (SERVICO_MAP em api/omie/send). */
+/** Codigo do servico Interatell no Omie, o mesmo nas duas filiais (servicoOmie em omie-order-plan). */
 const CODIGO_SERVICO_INTERATELL = 'SRV00001'
 /** Familia "Outros", a mesma que o formulario usa para servico (SRV_FAMILY_CODE). */
 const FAMILIA_SERVICO = '2164790403'
@@ -575,11 +575,10 @@ export async function generateOcExcelFiles(values: any, dealId?: number | null):
     })
   }
 
-  const servico = grupoServicoInteratell()
   const abasServico: Aba[] = []
   for (const entry of (values?.serviceCustomers ?? [])) {
     const itens = itensDoServico(entry)
-    if (itens.length) abasServico.push({ group: servico, entry, itens })
+    if (itens.length) abasServico.push({ group: grupoServicoInteratell(filialDoServico(entry)), entry, itens })
   }
   if (abasServico.length) arquivos.push({ fornecedor: 'SERVIÇO INTERATELL', abas: abasServico, servico: true })
 

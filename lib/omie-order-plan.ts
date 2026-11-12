@@ -33,9 +33,24 @@ export const CC_ES        = '5097263320'
 export const CNPJ_ES      = '03969530000211'
 export const CNPJ_BARUERI = '03969530000130'
 
-/** Código do serviço no Omie por natureza. HW não vira OS. */
-export const SERVICO_MAP: Record<Natureza, string> = {
-  SW: 'SRV00007', LC: 'SRV00007', ST: 'SRV00016', SRV: 'SRV00001', HW: '',
+/**
+ * Código do serviço no Omie por filial e natureza. HW não vira OS. Cada filial
+ * tem o seu cadastro de serviços, com outros códigos: o SRV00016 de Barueri não
+ * existe no ES, e o SRV00007 do ES é um serviço de teste sem dados fiscais. A OS
+ * sem o serviço do cadastro cai com "É obrigatório o Código do Serviço Municipal".
+ */
+const SERVICO_POR_FILIAL: Record<Filial, Record<Natureza, string>> = {
+  barueri: { SW: 'SRV00007', LC: 'SRV00007', ST: 'SRV00016', SRV: 'SRV00001', HW: '' },
+  es:      { SW: 'SRV00002', LC: 'SRV00002', ST: 'SRV00008', SRV: 'SRV00001', HW: '' },
+}
+
+export function servicoOmie(nat: Natureza, filial: Filial): string {
+  return SERVICO_POR_FILIAL[filial === 'es' ? 'es' : 'barueri'][nat]
+}
+
+/** Filial que fatura o serviço Interatell de um cliente de serviço. Barueri por padrão. */
+export function filialDoServico(entry: any): Filial {
+  return entry?.branch === 'es' ? 'es' : 'barueri'
 }
 
 export const digits = (v: any) => String(v ?? '').replace(/\D/g, '')
@@ -114,14 +129,8 @@ export function itensPorFilial(entry: any, supplierGroups: any[]): Map<Filial, a
 
 export function branchesDoCliente(entry: any, supplierGroups: any[]): Filial[] {
   const porFilial = itensPorFilial(entry, supplierGroups)
+  // SRV segue a filial do fornecedor, como os demais itens.
   const filiais = new Set<Filial>(porFilial.keys())
-
-  // SRV é sempre faturado por Barueri. Se o cliente tem item SRV comprado só
-  // por ES, ele precisa existir também no Omie de Barueri — senão a OS de
-  // serviço não encontra o cliente e some sem erro.
-  for (const [, lista] of porFilial) {
-    if (lista.some(i => normalizeNatureza(i.nature) === 'SRV')) { filiais.add('barueri'); break }
-  }
 
   // Sem alocação ainda: mantém o comportamento antigo para não quebrar o cadastro.
   if (!filiais.size) filiais.add(entry?.branch === 'es' ? 'es' : 'barueri')
@@ -254,7 +263,8 @@ function itemDeProduto(e: any, seq: number, valor: number, ncmZeradoParaServico:
  *
  * Espelha processDeal em app/api/omie/send/route.ts: 1 OC por grupo de
  * fornecedor, 1 OV por cliente × filial de compra, 1 OS por cliente × natureza
- * (SW | LC | ST), e SRV sempre por Barueri. `dealId` é o id do processo; sem ele
+ * (SW | LC | ST | SRV), na filial do fornecedor, e o serviço Interatell na filial
+ * do cliente de serviço. `dealId` é o id do processo; sem ele
  * os códigos de integração saem com "?" no lugar do número.
  *
  * `escopo` recorta o plano, que é como a planilha usa: cada arquivo é de um
@@ -391,21 +401,9 @@ export function buildOmiePlan(
       valorFrete: 0,
     }
 
-    // SRV sai do agrupamento por filial: é sempre faturado por Barueri.
-    // todosSRV é o documento como ele existe no Omie; itensSRV é o recorte deste
-    // arquivo. A previsão sai do primeiro, os itens exibidos do segundo.
-    const todosSRV: any[] = []
-    const itensSRV: any[] = []
-    for (const [, lista] of porFilial) {
-      for (const item of lista) {
-        if (normalizeNatureza(item.nature) !== 'SRV') continue
-        todosSRV.push(item)
-        if (soDoGrupo([item]).length) itensSRV.push(item)
-      }
-    }
-
-    for (const [filial, itensDaFilial] of porFilial) {
-      const daFilial = itensDaFilial.filter(i => normalizeNatureza(i.nature) !== 'SRV')
+    // SRV entra no agrupamento por filial, como os demais: sai na filial do
+    // fornecedor de onde veio.
+    for (const [filial, daFilial] of porFilial) {
       const doFilial = soDoGrupo(daFilial)
       if (!doFilial.length) continue
       const sufixo = filial === 'es' ? 'ES' : 'BAR'
@@ -435,12 +433,12 @@ export function buildOmiePlan(
         })
       }
 
-      for (const nat of ['SW','LC','ST'] as Natureza[]) {
+      for (const nat of ['SW','LC','ST','SRV'] as Natureza[]) {
         const natItems = doFilial.filter(i => normalizeNatureza(i.nature) === nat)
         if (!natItems.length) continue
         const itens = natItems.map((e, i) => ({
           ...itemDeProduto(e, i + 1, Number(e.unitSale ?? 0), false),
-          codigo: SERVICO_MAP[nat] || codigoProduto(e),
+          codigo: servicoOmie(nat, filial) || codigoProduto(e),
         }))
         docs.push({
           tipo: 'OS', natureza: nat,
@@ -456,36 +454,20 @@ export function buildOmiePlan(
         })
       }
     }
-
-    if (itensSRV.length) {
-      const itens = itensSRV.map((e, i) => ({
-        ...itemDeProduto(e, i + 1, Number(e.unitSale ?? 0), false),
-        codigo: SERVICO_MAP.SRV,
-      }))
-      docs.push({
-        tipo: 'OS', natureza: 'SRV',
-        chamada: 'servicos/os → IncluirOS / AlterarOS',
-        codigoIntegracao: `OS-${id}-C${cIdx}-SRV-BAR`,
-        ...emissor('barueri'), ...parte,
-        etapa: '20',
-        dataPrevisao: prazoDosItens(todosSRV),
-        campoObsExterna: 'cDadosAdicNF', obsExterna,
-        campoObsInterna: 'cObsOS', obsInterna,
-        itens, total: soma(itens), recorte: '',
-      })
-    }
   })
 
-  // ── Serviço Interatell: sem fornecedor e sem OV, só OS por Barueri ─────────
+  // ── Serviço Interatell: sem fornecedor e sem OV, só OS, na filial escolhida
+  //    no cliente de serviço (Barueri por padrão) ──────────────────────────────
   // O índice continua de customers.length para não colidir com os códigos de
   // integração das OS dos clientes normais.
   serviceCustomers.forEach((entry, sIdx) => {
     const items = (entry.items ?? []).filter((i: any) => String(i.description ?? '').trim())
     if (!items.length) return
     const cliente = entry.customer ?? {}
+    const filial = filialDoServico(entry)
     const itens: OmiePlanItem[] = items.map((e: any, i: number) => ({
       seq: i + 1,
-      codigo: SERVICO_MAP.SRV,
+      codigo: servicoOmie('SRV', filial),
       descricao: String(e.description ?? ''),
       ncm: '', cfop: '', natureza: 'SRV' as Natureza, unidade: 'UN',
       quantidade: Number(e.quantity ?? 1),
@@ -495,8 +477,8 @@ export function buildOmiePlan(
     docs.push({
       tipo: 'OS', natureza: 'SRV',
       chamada: 'servicos/os → IncluirOS / AlterarOS',
-      codigoIntegracao: `OS-${id}-C${todosClientes.length + sIdx}-SRV-BAR`,
-      ...emissor('barueri'),
+      codigoIntegracao: `OS-${id}-C${todosClientes.length + sIdx}-SRV-${filial === 'es' ? 'ES' : 'BAR'}`,
+      ...emissor(filial),
       parteTipo: 'Cliente',
       parteNome: String(cliente.name ?? ''),
       parteCnpj: String(cliente.cnpj ?? ''),

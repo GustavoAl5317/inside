@@ -142,7 +142,7 @@ const customerEntrySchema = z.object({
 /**
  * Serviço Interatell (natureza SRV): não passa por fornecedor — é vendido direto
  * ao cliente. Por isso o item é digitado na hora, sem custo e sem grupo de compra.
- * O código do serviço no Omie é fixo por natureza (SERVICO_MAP: SRV → SRV00001).
+ * O código do serviço no Omie é fixo por natureza e filial (servicoOmie: SRV → SRV00001).
  */
 const serviceItemSchema = z.object({
   localId:     z.string(),
@@ -295,11 +295,14 @@ function pruneAllocations(values: any) {
   }
 }
 
-/** Filiais efetivamente usadas, a partir do "Faturamento via" de cada fornecedor. */
-function deriveBranches(groups: any[] | undefined): ('barueri' | 'es')[] {
+/**
+ * Filiais efetivamente usadas, a partir do "Faturamento via" de cada fornecedor
+ * e de cada cliente de serviço Interatell. Sem nenhum dos dois, Barueri.
+ */
+function deriveBranches(groups: any[] | undefined, servicos: any[] = []): ('barueri' | 'es')[] {
   const set = new Set<'barueri' | 'es'>()
-  for (const g of groups ?? []) set.add(g?.branch === 'es' ? 'es' : 'barueri')
-  return [...set]
+  for (const x of [...(groups ?? []), ...servicos]) set.add(x?.branch === 'es' ? 'es' : 'barueri')
+  return set.size ? [...set] : ['barueri']
 }
 
 /**
@@ -328,9 +331,10 @@ function payloadDosValores(values: any) {
   if (v.business?.onlyInteratellService) {
     v.supplierGroups = []
     v.customers = []
-    v.interatellBranches = ['barueri']
+    v.interatellBranches = deriveBranches([], v.serviceCustomers ?? [])
   } else {
-    v.interatellBranches = deriveBranches(v.supplierGroups)
+    v.interatellBranches = deriveBranches(v.supplierGroups,
+      v.business?.hasInteratellService ? (v.serviceCustomers ?? []) : [])
   }
   // Cliente Serviço pré-carregado fica para trás se o serviço for desmarcado.
   if (!v.business?.onlyInteratellService && !v.business?.hasInteratellService) v.serviceCustomers = []
@@ -902,12 +906,13 @@ export function MultiStepForm({
       if (values.business.onlyInteratellService) {
         // Só serviço: descarta fornecedor e cliente de produto que tenham ficado de
         // antes de marcar a opção — senão o envio ainda geraria OC e OV. Serviço
-        // Interatell é sempre faturado por Barueri.
+        // Interatell sai pela filial escolhida em cada cliente de serviço.
         values.supplierGroups = []
         values.customers = []
-        values.interatellBranches = ['barueri']
+        values.interatellBranches = deriveBranches([], values.serviceCustomers ?? [])
       } else {
-        values.interatellBranches = deriveBranches(values.supplierGroups)
+        values.interatellBranches = deriveBranches(values.supplierGroups,
+          values.business.hasInteratellService ? (values.serviceCustomers ?? []) : [])
       }
       // Cliente Serviço pré-carregado fica para trás se o serviço for desmarcado:
       // sem isto o envio ainda cadastraria o cliente na filial de Barueri.

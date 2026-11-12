@@ -19,6 +19,7 @@ import { camposFinanceirosCard, grupoMisto, naturezaInterna, partesDoGrupo, prod
 import { garanteNumerosOc } from '@/lib/oc-numbers-bitrix'
 import { aguardaFreio, freioDepois } from '@/lib/omie-freio'
 import { companyForBranch } from '@/lib/interatell-companies'
+import { filialDoServico, servicoOmie } from '@/lib/omie-order-plan'
 import {
   paymentConditionMatches,
   resolveDefaultOmiePaymentCode,
@@ -107,14 +108,8 @@ function itensPorFilial(entry: any, supplierGroups: any[]): Map<Filial, any[]> {
 
 function branchesDoCliente(entry: any, supplierGroups: any[]): Filial[] {
   const porFilial = itensPorFilial(entry, supplierGroups)
+  // SRV segue a filial do fornecedor, como os demais itens.
   const filiais = new Set<Filial>(porFilial.keys())
-
-  // SRV e sempre faturado por Barueri. Se o cliente tem item SRV comprado so
-  // por ES, ele precisa existir tambem no Omie de Barueri — senao a OS de
-  // servico nao encontra o cliente e some sem erro.
-  for (const [, lista] of porFilial) {
-    if (lista.some(i => normalizeNatureza(i.nature) === 'SRV')) { filiais.add('barueri'); break }
-  }
 
   // Sem alocacao ainda: mantem o comportamento antigo para nao quebrar o cadastro.
   if (!filiais.size) filiais.add(entry?.branch === 'es' ? 'es' : 'barueri')
@@ -1045,7 +1040,6 @@ async function upsertOS(
   if (!items.length || !codCliente) return null
   // Numero do pedido do cliente = numero do negocio (ex.: 2026.12345).
   const pedidoCliente = String(business?.commercialProposal ?? '').trim()
-  const SERVICO_MAP: Record<Natureza, string> = { SW:'SRV00007', LC:'SRV00007', ST:'SRV00016', SRV:'SRV00001', HW:'' }
   // A externa ja vai em cDadosAdicNF (sai na NF), entao cObsOS fica so com a
   // interna e o link. Antes cObsOS levava tudo junto e o texto externo aparecia
   // duplicado, misturado com o interno.
@@ -1086,7 +1080,8 @@ async function upsertOS(
     const out: Record<string, unknown>[] = []
     for (let i = 0; i < items.length; i++) {
       const e = items[i]
-      const codigoServ = SERVICO_MAP[nat] || String(e.partnumber ?? '')
+      // Cada filial tem o seu cadastro de serviços, com outros códigos.
+      const codigoServ = servicoOmie(nat, filial) || String(e.partnumber ?? '')
       const info = codigoServ ? await ensureServico(interatellCnpj, codigoServ, dealId) : null
       const existing = existingLines[i]
       out.push({
@@ -1412,10 +1407,10 @@ async function processDeal(body: any, dealId: number) {
       }
     }
 
-    // 1c) Serviço Interatell (SRV) é sempre faturado por Barueri, independente
-    // de onde a compra aconteceu.
+    // 1c) Serviço Interatell (SRV): faturado pela filial escolhida no cliente de
+    // serviço, Barueri por padrão.
     for (const entry of serviceCustomers) {
-      await ensureCliente(CNPJ_BARUERI, entry.customer, dealId)
+      await ensureCliente(getBranchCnpj(filialDoServico(entry), fallbackCnpj), entry.customer, dealId)
     }
 
     // 2) Garantir produtos no Omie (por grupo de fornecedor, na filial correta).
@@ -1480,39 +1475,24 @@ async function processDeal(body: any, dealId: number) {
       const saleCodParc = await codigoVenda(entry)
       const porFilial = itensPorFilial(entry, supplierGroups)
 
-      // SRV e sempre faturado por Barueri, venha de onde vier a compra. Sai do
-      // agrupamento por filial e e tratado uma vez so, no fim.
-      const itensSRV: any[] = []
-      for (const [, lista] of porFilial) {
-        for (const item of lista) {
-          if (normalizeNatureza(item.nature) === 'SRV') itensSRV.push(item)
-        }
-      }
-
+      // SRV sai na filial do fornecedor de onde veio, como os demais itens.
       for (const [filial, itensDaFilial] of porFilial) {
         const itens = itensDaFilial.filter(i => normalizeNatureza(i.nature) !== 'SRV')
-        if (!itens.length) continue
 
         const branchCnpj = getBranchCnpj(filial, fallbackCnpj)
         const codCliente = ctx().clienteCache.get(`${branchCnpj}:${digits(entry.customer?.cnpj)}`)
         if (!codCliente) continue
 
-        const ov = await upsertOV(branchCnpj, codCliente, itens, business, prazoDosItens(itens, supplierGroups, business), obs, dealId, cIdx, upsertOpts, saleCodParc, filial)
-        if (ov) ovResults.push({ ...ov, _customer: entry.customer?.name, _filial: filial, _clienteIdx: cIdx })
+        if (itens.length) {
+          const ov = await upsertOV(branchCnpj, codCliente, itens, business, prazoDosItens(itens, supplierGroups, business), obs, dealId, cIdx, upsertOpts, saleCodParc, filial)
+          if (ov) ovResults.push({ ...ov, _customer: entry.customer?.name, _filial: filial, _clienteIdx: cIdx })
+        }
 
-        for (const nat of ['SW','LC','ST'] as Natureza[]) {
-          const natItems = itens.filter(i => normalizeNatureza(i.nature) === nat)
+        for (const nat of ['SW','LC','ST','SRV'] as Natureza[]) {
+          const natItems = itensDaFilial.filter(i => normalizeNatureza(i.nature) === nat)
           if (!natItems.length) continue
           const os = await upsertOS(branchCnpj, codCliente, entry.customer, natItems, nat, prazoDosItens(natItems, supplierGroups, business), business, obs, dealId, cIdx, upsertOpts, saleCodParc, filial)
           if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: nat, _filial: filial, _clienteIdx: cIdx })
-        }
-      }
-
-      if (itensSRV.length) {
-        const codCliente = ctx().clienteCache.get(`${CNPJ_BARUERI}:${digits(entry.customer?.cnpj)}`)
-        if (codCliente) {
-          const os = await upsertOS(CNPJ_BARUERI, codCliente, entry.customer, itensSRV, 'SRV', prazoDosItens(itensSRV, supplierGroups, business), business, obs, dealId, cIdx, upsertOpts, saleCodParc, 'barueri')
-          if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: 'SRV', _filial: 'barueri', _clienteIdx: cIdx })
         }
       }
     }
@@ -1525,17 +1505,19 @@ async function processDeal(body: any, dealId: number) {
       const items = (entry.items ?? []).filter((i: any) => String(i.description ?? '').trim())
       if (!items.length) continue
 
-      // Servico Interatell e sempre faturado por Barueri.
-      const codCliente = ctx().clienteCache.get(`${CNPJ_BARUERI}:${digits(entry.customer?.cnpj)}`)
+      // Filial escolhida no cliente de serviço; Barueri por padrão.
+      const filial = filialDoServico(entry)
+      const branchCnpj = getBranchCnpj(filial, fallbackCnpj)
+      const codCliente = ctx().clienteCache.get(`${branchCnpj}:${digits(entry.customer?.cnpj)}`)
       if (!codCliente) continue
 
       // Serviço Interatell não tem fornecedor: sem prazo de compra, vale a
       // previsão de faturamento do negócio.
       const os = await upsertOS(
-        CNPJ_BARUERI, codCliente, entry.customer, items, 'SRV', '',
-        business, obs, dealId, customers.length + sIdx, upsertOpts, await codigoVenda(entry), 'barueri',
+        branchCnpj, codCliente, entry.customer, items, 'SRV', '',
+        business, obs, dealId, customers.length + sIdx, upsertOpts, await codigoVenda(entry), filial,
       )
-      if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: 'SRV', _interatellService: true, _filial: 'barueri', _servicoIdx: sIdx })
+      if (os) osResults.push({ ...os, _customer: entry.customer?.name, _nat: 'SRV', _interatellService: true, _filial: filial, _servicoIdx: sIdx })
     }
 
     // 5) Resumo com números dos pedidos

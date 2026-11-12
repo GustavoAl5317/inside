@@ -7,7 +7,7 @@ import { Hash, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { generateOcNumbersAction } from "@/lib/actions"
-import { CAMPOS_NUMERO_OC, camposDaParte, grupoMisto, observacaoOc, OBSERVACAO_OS_SERVICO, partesDoGrupo } from "@/lib/oc-numbers"
+import { CAMPOS_NUMERO_OC, camposDaParte, grupoMisto, observacaoOc, observacaoOsServico, partesDoGrupo } from "@/lib/oc-numbers"
 
 interface OcNumbersTabProps {
   form: UseFormReturn<any>
@@ -44,7 +44,7 @@ export function OcNumbersTab({ form }: OcNumbersTabProps) {
     ...servicos.map((s, i) => ({
       key: `s${i}`, path: `serviceCustomers.${i}`, campo: "ocNumber", elemento: "ocElementId",
       titulo: s?.customer?.name || `Cliente de serviço ${i + 1}`,
-      observacao: OBSERVACAO_OS_SERVICO,
+      observacao: observacaoOsServico(s),
       numero: String(s?.ocNumber ?? ""),
       semItens: !(s?.items ?? []).length,
     })),

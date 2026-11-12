@@ -5,6 +5,7 @@ import { useFieldArray, type UseFormReturn } from "react-hook-form"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { CurrencyInput } from "@/components/ui/currency-input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { Trash2, Plus, Wrench, Building2, Eye, ExternalLink, RefreshCw } from "lucide-react"
 import { PaymentConditionSelect } from "@/components/payment-condition-select"
@@ -27,7 +28,8 @@ const newLocalId = () => `srv-${Date.now()}-${Math.random().toString(36).slice(2
  * Diferente dos demais steps, aqui não existe fornecedor: o serviço é próprio,
  * vendido direto ao cliente. Por isso os itens são digitados na hora (descrição,
  * quantidade e valor de venda) — não há custo nem alocação vinda de grupo de compra.
- * O código do serviço no Omie é fixo pela natureza (SRV → SRV00001).
+ * O código do serviço no Omie é fixo pela natureza (SRV → SRV00001). A OS sai
+ * pela filial escolhida em cada cliente (Barueri por padrão).
  */
 export function ServiceCustomersTab({ form }: ServiceCustomersTabProps) {
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -224,6 +226,23 @@ export function ServiceCustomersTab({ form }: ServiceCustomersTabProps) {
                     <Trash2 className="w-4 h-4" />
                   </Button>
                 </div>
+              </div>
+
+              {/* Filial que fatura a OS deste cliente. Barueri por padrão. */}
+              <div className="flex items-center gap-3 mt-2">
+                <label className="text-[11px] font-semibold uppercase shrink-0 text-gray-500">
+                  Faturamento via
+                </label>
+                <Select
+                  value={entry.branch === "es" ? "es" : "barueri"}
+                  onValueChange={v => form.setValue(`serviceCustomers.${idx}.branch`, v, { shouldDirty: true })}
+                >
+                  <SelectTrigger className="h-7 text-xs max-w-xs bg-white"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="barueri" className="text-xs">Interatell Barueri / SP</SelectItem>
+                    <SelectItem value="es" className="text-xs">Interatell Espírito Santo / ES</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               {/* Condição de pagamento da venda deste cliente de serviço. */}
