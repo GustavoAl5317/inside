@@ -48,6 +48,15 @@ export function servicoOmie(nat: Natureza, filial: Filial): string {
   return SERVICO_POR_FILIAL[filial === 'es' ? 'es' : 'barueri'][nat]
 }
 
+/**
+ * Item que entra num pedido de venda do Omie (OV ou OS): quantidade e valor de
+ * venda acima de zero. O Omie recusa valor unitário zerado ("O preenchimento da
+ * tag [valor_unitario] é obrigatório"); item sem venda fica só no app.
+ */
+export function temVenda(item: any): boolean {
+  return Number(item?.quantity) > 0 && Number(item?.unitSale) > 0
+}
+
 /** Filial que fatura o serviço Interatell de um cliente de serviço. Barueri por padrão. */
 export function filialDoServico(entry: any): Filial {
   return entry?.branch === 'es' ? 'es' : 'barueri'
@@ -104,11 +113,13 @@ export function contaCorrente(interatellCnpj: string) {
  * Regra do negócio: a venda segue a compra. Comprou por ES, vende por ES. Um
  * mesmo cliente pode receber itens comprados nas duas filiais (ex.: importados
  * por ES e nacionais por Barueri) — nesse caso saem duas OVs, uma por empresa.
+ *
+ * Item sem valor de venda fica só no app: não vai para OV nem OS. Ver temVenda.
  */
 export function itensPorFilial(entry: any, supplierGroups: any[]): Map<Filial, any[]> {
   const porFilial = new Map<Filial, any[]>()
   for (const alloc of (entry?.productAllocations ?? [])) {
-    if (!(Number(alloc.quantity) > 0)) continue
+    if (!temVenda(alloc)) continue
     const group = supplierGroups.find((g: any) => g.localId === alloc.groupLocalId)
     if (!group) continue
     const product = group.products?.[alloc.productIndex]
@@ -133,7 +144,9 @@ export function branchesDoCliente(entry: any, supplierGroups: any[]): Filial[] {
   const filiais = new Set<Filial>(porFilial.keys())
 
   // Sem alocação ainda: mantém o comportamento antigo para não quebrar o cadastro.
-  if (!filiais.size) filiais.add(entry?.branch === 'es' ? 'es' : 'barueri')
+  // Cliente que só recebe item sem venda não vai ao Omie: não tem pedido lá.
+  const temAlocacao = (entry?.productAllocations ?? []).some((a: any) => Number(a?.quantity) > 0)
+  if (!filiais.size && !temAlocacao) filiais.add(entry?.branch === 'es' ? 'es' : 'barueri')
   return [...filiais]
 }
 
@@ -461,7 +474,8 @@ export function buildOmiePlan(
   // O índice continua de customers.length para não colidir com os códigos de
   // integração das OS dos clientes normais.
   serviceCustomers.forEach((entry, sIdx) => {
-    const items = (entry.items ?? []).filter((i: any) => String(i.description ?? '').trim())
+    // Serviço sem valor de venda fica só no app (ver temVenda).
+    const items = (entry.items ?? []).filter((i: any) => String(i.description ?? '').trim() && temVenda(i))
     if (!items.length) return
     const cliente = entry.customer ?? {}
     const filial = filialDoServico(entry)

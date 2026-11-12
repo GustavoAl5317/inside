@@ -19,7 +19,7 @@ import { camposFinanceirosCard, grupoMisto, naturezaInterna, partesDoGrupo, prod
 import { garanteNumerosOc } from '@/lib/oc-numbers-bitrix'
 import { aguardaFreio, freioDepois } from '@/lib/omie-freio'
 import { companyForBranch } from '@/lib/interatell-companies'
-import { filialDoServico, servicoOmie } from '@/lib/omie-order-plan'
+import { filialDoServico, servicoOmie, temVenda } from '@/lib/omie-order-plan'
 import {
   paymentConditionMatches,
   resolveDefaultOmiePaymentCode,
@@ -88,11 +88,14 @@ function filialDoGrupo(group: any): Filial {
  * Regra do negocio: a venda segue a compra. Comprou por ES, vende por ES. Um
  * mesmo cliente pode receber itens comprados nas duas filiais (ex.: importados
  * por ES e nacionais por Barueri) — nesse caso saem duas OVs, uma por empresa.
+ *
+ * Item sem valor de venda fica só no app: não vai para OV nem OS, que o Omie
+ * recusa com valor unitário zerado. Ver temVenda.
  */
 function itensPorFilial(entry: any, supplierGroups: any[]): Map<Filial, any[]> {
   const porFilial = new Map<Filial, any[]>()
   for (const alloc of (entry?.productAllocations ?? [])) {
-    if (!(Number(alloc.quantity) > 0)) continue
+    if (!temVenda(alloc)) continue
     const group = supplierGroups.find((g: any) => g.localId === alloc.groupLocalId)
     if (!group) continue
     const product = group.products?.[alloc.productIndex]
@@ -112,7 +115,9 @@ function branchesDoCliente(entry: any, supplierGroups: any[]): Filial[] {
   const filiais = new Set<Filial>(porFilial.keys())
 
   // Sem alocacao ainda: mantem o comportamento antigo para nao quebrar o cadastro.
-  if (!filiais.size) filiais.add(entry?.branch === 'es' ? 'es' : 'barueri')
+  // Cliente que so recebe item sem venda nao vai ao Omie: nao tem pedido la.
+  const temAlocacao = (entry?.productAllocations ?? []).some((a: any) => Number(a?.quantity) > 0)
+  if (!filiais.size && !temAlocacao) filiais.add(entry?.branch === 'es' ? 'es' : 'barueri')
   return [...filiais]
 }
 
@@ -1410,6 +1415,8 @@ async function processDeal(body: any, dealId: number) {
     // 1c) Serviço Interatell (SRV): faturado pela filial escolhida no cliente de
     // serviço, Barueri por padrão.
     for (const entry of serviceCustomers) {
+      // Sem serviço com valor de venda, não há OS: o cliente não precisa ir ao Omie.
+      if (!(entry.items ?? []).some((i: any) => temVenda(i))) continue
       await ensureCliente(getBranchCnpj(filialDoServico(entry), fallbackCnpj), entry.customer, dealId)
     }
 
@@ -1475,6 +1482,17 @@ async function processDeal(body: any, dealId: number) {
       const saleCodParc = await codigoVenda(entry)
       const porFilial = itensPorFilial(entry, supplierGroups)
 
+      // Item sem valor de venda fica só no app: avisa no log para ninguém
+      // procurar no Omie um pedido que não foi criado.
+      const semVenda = (entry.productAllocations ?? []).filter((a: any) => Number(a?.quantity) > 0 && !temVenda(a))
+      if (semVenda.length) {
+        await addOmieRawLog({
+          transactionId: dealId, step: 'createOVResult', level: 'warning', runId: ctx().runId,
+          message: `createOVResult: ${semVenda.length} item(ns) de "${entry.customer?.name ?? ''}" sem valor de venda ficam só no app, sem OV/OS no Omie: ${semVenda.map((a: any) => a.partnumber).filter(Boolean).join(', ')}`,
+          raw: { endpoint: '', httpStatus: 0, requestBodyRaw: '', responseBodyRaw: '' },
+        }).catch(() => {})
+      }
+
       // SRV sai na filial do fornecedor de onde veio, como os demais itens.
       for (const [filial, itensDaFilial] of porFilial) {
         const itens = itensDaFilial.filter(i => normalizeNatureza(i.nature) !== 'SRV')
@@ -1502,7 +1520,8 @@ async function processDeal(body: any, dealId: number) {
     // integração das OS dos clientes normais (OS-{deal}-C{idx}-{nat}).
     for (let sIdx = 0; sIdx < serviceCustomers.length; sIdx++) {
       const entry = serviceCustomers[sIdx]
-      const items = (entry.items ?? []).filter((i: any) => String(i.description ?? '').trim())
+      // Serviço sem valor de venda fica só no app (ver temVenda).
+      const items = (entry.items ?? []).filter((i: any) => String(i.description ?? '').trim() && temVenda(i))
       if (!items.length) continue
 
       // Filial escolhida no cliente de serviço; Barueri por padrão.
